@@ -661,6 +661,7 @@ export const PgfChartRenderer: React.FC<PgfChartRendererProps> = ({
               transform={`translate(${legX}, ${legY})`}
               className="cursor-grab active:cursor-grabbing group/legend"
               onPointerDown={(e) => {
+                if (!selected) return;
                 startPartDrag(e, 'legend', lx, ly);
               }}
               onPointerMove={handlePartMove}

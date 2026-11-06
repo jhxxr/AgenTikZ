@@ -155,6 +155,12 @@ export function patchEdgeElement(
     newStmt = `\\draw[${optStr}] (${fromRef}) ${conn}${labelSegment}(${toRef});`;
   }
 
+  // Preserve original indentation instead of hardcoding 2 spaces
+  const originalIndent = source.slice(
+    source.lastIndexOf('\n', edge.span.start - 1) + 1,
+    edge.span.start
+  ).match(/^[ \t]*/)?.[0] ?? '  ';
+
   let replaceStart = edge.span.start;
   while (
     replaceStart > 0 &&
@@ -164,7 +170,7 @@ export function patchEdgeElement(
   }
 
   return (
-    source.slice(0, replaceStart) + `  ${newStmt}` + source.slice(edge.span.end)
+    source.slice(0, replaceStart) + `${originalIndent}${newStmt}` + source.slice(edge.span.end)
   );
 }
 

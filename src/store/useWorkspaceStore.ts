@@ -268,7 +268,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       tikzCode: nextCode,
       parsedDoc: nextDoc,
       highlightedLineRange: computeLineRangeForSelection(nextDoc, selectedIds),
-      undoStack: [...undoStack, tikzCode],
+      undoStack: [...undoStack.slice(-39), tikzCode],
       redoStack: redoStack.slice(1),
     });
   },

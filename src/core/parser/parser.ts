@@ -13,6 +13,99 @@ import {
   TikzNodeElement,
 } from '../../types/tikz-ast';
 
+// ── Depth-aware scanning utilities ──────────────────────────────────────
+// These replace naive non-greedy regex matches that would break on nested
+// braces (`{...{...}...}`), brackets (`[...{...[...]...}...]`), or
+// semicolons inside brace groups (`$p(x;\theta)$`).
+
+/**
+ * Starting at `from` (which should point at the opening char), find the
+ * matching closing char respecting nested brace depth.
+ * Works for `{}`, `[]`, and `()` pairs.
+ */
+function findMatchingClose(
+  source: string,
+  from: number,
+  openCh: string,
+  closeCh: string
+): number {
+  let depth = 0;
+  for (let i = from; i < source.length; i++) {
+    if (source[i] === openCh) depth++;
+    else if (source[i] === closeCh) {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Find the end of a `\node ...;` or `\draw ...;` statement, where `;`
+ * only terminates the statement when brace-depth is 0.
+ * Returns the index one past the semicolon (exclusive end), or -1.
+ */
+function findStatementEnd(source: string, start: number): number {
+  let depth = 0;
+  for (let i = start; i < source.length; i++) {
+    if (source[i] === '{') depth++;
+    else if (source[i] === '}') depth = Math.max(0, depth - 1);
+    else if (source[i] === ';' && depth === 0) return i + 1;
+  }
+  return -1;
+}
+
+/**
+ * Extract the content between `[...]` starting at the `[` at position `openIdx`,
+ * correctly handling nested `{...}` and `[...]` groups.
+ * Returns `{ content, closeIdx }` where closeIdx is the position of `]`,
+ * or null if no matching `]` is found.
+ */
+function extractBracketContent(
+  source: string,
+  openIdx: number
+): { content: string; closeIdx: number } | null {
+  let depth = 0; // tracks [] depth
+  let braceDepth = 0; // tracks {} depth
+  for (let i = openIdx; i < source.length; i++) {
+    const ch = source[i];
+    if (ch === '{') braceDepth++;
+    else if (ch === '}') braceDepth = Math.max(0, braceDepth - 1);
+    else if (braceDepth === 0) {
+      if (ch === '[') depth++;
+      else if (ch === ']') {
+        depth--;
+        if (depth === 0) {
+          return {
+            content: source.slice(openIdx + 1, i),
+            closeIdx: i,
+          };
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Extract the content of `\caption{...}` starting from the `{` after `\caption`,
+ * correctly handling nested braces.
+ * Returns the inner text or null.
+ */
+function extractBraceContent(
+  source: string,
+  openBraceIdx: number
+): { content: string; closeIdx: number } | null {
+  const closeIdx = findMatchingClose(source, openBraceIdx, '{', '}');
+  if (closeIdx === -1) return null;
+  return {
+    content: source.slice(openBraceIdx + 1, closeIdx),
+    closeIdx,
+  };
+}
+
+// ── End depth-aware utilities ───────────────────────────────────────────
+
 function offsetToLine(source: string, offset: number): number {
   let line = 1;
   for (let i = 0; i < offset && i < source.length; i++) {
@@ -178,15 +271,23 @@ function parsePreambleStyles(source: string): Record<string, Record<string, stri
     },
   };
 
-  const tikzsetRegex = /\\tikzset\s*\{([\s\S]*?)\n\s*\}/g;
+  const tikzsetRegex = /\\tikzset\s*\{/g;
   let match: RegExpExecArray | null;
   while ((match = tikzsetRegex.exec(source)) !== null) {
-    const body = match[1];
-    const styleDefRegex = /([a-zA-Z0-9_-]+)\s*\/\.style\s*=\s*\{([\s\S]*?)\}/g;
+    const outerBraceIdx = match.index + match[0].length - 1;
+    const outerClose = findMatchingClose(source, outerBraceIdx, '{', '}');
+    if (outerClose === -1) continue;
+    const body = source.slice(outerBraceIdx + 1, outerClose);
+
+    // Scan for `styleName/.style={...}` with depth-aware body extraction
+    const styleKeyRegex = /([a-zA-Z0-9_-]+)\s*\/\.style\s*=\s*\{/g;
     let sMatch: RegExpExecArray | null;
-    while ((sMatch = styleDefRegex.exec(body)) !== null) {
+    while ((sMatch = styleKeyRegex.exec(body)) !== null) {
       const styleName = sMatch[1].trim();
-      const styleBody = sMatch[2].trim();
+      const bodyOpenIdx = sMatch.index + sMatch[0].length - 1;
+      const bodyCloseIdx = findMatchingClose(body, bodyOpenIdx, '{', '}');
+      if (bodyCloseIdx === -1) continue;
+      const styleBody = body.slice(bodyOpenIdx + 1, bodyCloseIdx).trim();
       styles[styleName] = {
         ...(styles[styleName] || {}),
         ...parseTikzOptionString(styleBody),
@@ -259,15 +360,22 @@ function parseSingleNodeStatement(
   const rawStmt = source.slice(stmtStart, stmtEnd);
   if (!rawStmt.trimStart().startsWith('\\node')) return null;
 
-  // Locate [options] if present before `at` or `(` or `{`
+  // Locate [options] if present, using depth-aware bracket matching
+  // so that nested brackets inside braces (e.g. `label={[above]X}`) work.
   let optionsSpan: SourceSpan | undefined;
   let rawOptions: Record<string, string> = {};
-  const optMatch = /\\node\s*\[([\s\S]*?)\]/.exec(rawStmt);
-  if (optMatch) {
-    const contentStart = stmtStart + optMatch.index + optMatch[0].indexOf('[') + 1;
-    const contentEnd = stmtStart + optMatch.index + optMatch[0].lastIndexOf(']');
-    optionsSpan = makeSpan(source, contentStart, contentEnd);
-    rawOptions = parseTikzOptionString(optMatch[1]);
+  const nodePrefix = /^\\node\s*/.exec(rawStmt);
+  if (nodePrefix) {
+    const afterNode = nodePrefix[0].length;
+    if (rawStmt[afterNode] === '[') {
+      const extracted = extractBracketContent(rawStmt, afterNode);
+      if (extracted) {
+        const contentStart = stmtStart + afterNode + 1;
+        const contentEnd = stmtStart + extracted.closeIdx;
+        optionsSpan = makeSpan(source, contentStart, contentEnd);
+        rawOptions = parseTikzOptionString(extracted.content);
+      }
+    }
   }
 
   // Locate node ID `(id)` before `at` or `{`
@@ -280,12 +388,24 @@ function parseSingleNodeStatement(
     namedInSource = true;
   }
 
-  // Locate `at (x, y)` coordinate and its exact inner span
+  // Locate `at (x, y)` coordinate and its exact inner span.
+  // Only search the portion of the statement BEFORE the label `{...}` to avoid
+  // matching `at (x, y)` that appears inside node text content.
   let x = 0;
   let y = 0;
   let coordSpan: SourceSpan | undefined;
+  const labelBraceIdx = (() => {
+    // Find the first `{` that is NOT inside [options]
+    const searchFrom = nodePrefix
+      ? (rawStmt[nodePrefix[0].length] === '['
+        ? (extractBracketContent(rawStmt, nodePrefix[0].length)?.closeIdx ?? -1) + 1
+        : nodePrefix[0].length)
+      : 0;
+    return rawStmt.indexOf('{', searchFrom);
+  })();
+  const atSearchRegion = labelBraceIdx !== -1 ? rawStmt.slice(0, labelBraceIdx) : rawStmt;
   const atMatch = /\bat\s*\(\s*([-+]?[0-9]*\.?[0-9]+)(?:cm)?\s*,\s*([-+]?[0-9]*\.?[0-9]+)(?:cm)?\s*\)/.exec(
-    rawStmt
+    atSearchRegion
   );
   if (atMatch) {
     x = parseFloat(atMatch[1]);
@@ -428,12 +548,18 @@ function parseSingleDrawStatement(
 
   let optionsSpan: SourceSpan | undefined;
   let rawOptions: Record<string, string> = {};
-  const optMatch = /\\draw\s*\[([\s\S]*?)\]/.exec(rawStmt);
-  if (optMatch) {
-    const contentStart = stmtStart + optMatch.index + optMatch[0].indexOf('[') + 1;
-    const contentEnd = stmtStart + optMatch.index + optMatch[0].lastIndexOf(']');
-    optionsSpan = makeSpan(source, contentStart, contentEnd);
-    rawOptions = parseTikzOptionString(optMatch[1]);
+  const drawPrefix = /^\\draw\s*/.exec(rawStmt);
+  if (drawPrefix) {
+    const afterDraw = drawPrefix[0].length;
+    if (rawStmt[afterDraw] === '[') {
+      const extracted = extractBracketContent(rawStmt, afterDraw);
+      if (extracted) {
+        const contentStart = stmtStart + afterDraw + 1;
+        const contentEnd = stmtStart + extracted.closeIdx;
+        optionsSpan = makeSpan(source, contentStart, contentEnd);
+        rawOptions = parseTikzOptionString(extracted.content);
+      }
+    }
   }
 
   let styleClass: string | undefined;
@@ -447,9 +573,18 @@ function parseSingleDrawStatement(
   mergedOpts = { ...mergedOpts, ...rawOptions };
 
   // Find endpoint references `(nodeA.anchor)` or `(nodeA)`
-  const bodyAfterOpt = optMatch
-    ? rawStmt.slice(optMatch.index + optMatch[0].length)
-    : rawStmt.replace(/^\\draw\s*/, '');
+  const bodyAfterOpt = (() => {
+    if (drawPrefix) {
+      const afterDraw = drawPrefix[0].length;
+      if (rawStmt[afterDraw] === '[') {
+        const extracted = extractBracketContent(rawStmt, afterDraw);
+        if (extracted) {
+          return rawStmt.slice(extracted.closeIdx + 1);
+        }
+      }
+    }
+    return rawStmt.replace(/^\\draw\s*/, '');
+  })();
 
   // Check for residual skip connection: `(a.east) -- ++(1.4, 0) |- (b.east)`
   const residualMatch =
@@ -775,9 +910,15 @@ export function parseTikzDocument(source: string): ParsedTikzDocument {
   let figureCaption =
     'Overview of the proposed architecture and experimental scaling analysis.';
   let figureLabel = 'fig:architecture_overview';
-  const capMatch = /(?:%\s*)?\\caption\{([\s\S]*?)\}\s*(?:\n|$)/.exec(source);
-  if (capMatch) {
-    figureCaption = capMatch[1].trim();
+  // Extract caption using depth-aware brace matching
+  const capSearchRegex = /(?:%\s*)?\\caption\{/g;
+  const capStartMatch = capSearchRegex.exec(source);
+  if (capStartMatch) {
+    const openBraceIdx = capStartMatch.index + capStartMatch[0].length - 1;
+    const extracted = extractBraceContent(source, openBraceIdx);
+    if (extracted) {
+      figureCaption = extracted.content.trim();
+    }
   }
   const lblMatch = /(?:%\s*)?\\label\{([^}]+)\}/.exec(source);
   if (lblMatch) {
@@ -802,16 +943,19 @@ export function parseTikzDocument(source: string): ParsedTikzDocument {
   const isInsideAxis = (offset: number) =>
     axisRanges.some((r) => offset >= r.start && offset < r.end);
 
-  // Scan top-level `\node ...;` and `\draw ...;` statements
-  const stmtRegex = /\\(node|draw)\b[\s\S]*?;/g;
+  // Scan top-level `\node ...;` and `\draw ...;` statements using depth-aware
+  // semicolon detection so that `;` inside brace groups (e.g. $p(x;\theta)$)
+  // does not truncate the match.
+  const stmtStartRegex = /\\(node|draw)\b/g;
   let sMatch: RegExpExecArray | null;
   let nodeIdx = 1;
   let edgeIdx = 1;
 
-  while ((sMatch = stmtRegex.exec(source)) !== null) {
+  while ((sMatch = stmtStartRegex.exec(source)) !== null) {
     const start = sMatch.index;
-    const end = start + sMatch[0].length;
     if (isInsideAxis(start)) continue;
+    const end = findStatementEnd(source, start);
+    if (end === -1) continue;
 
     // Check if commented out on its starting line
     const lineStart = source.lastIndexOf('\n', start) + 1;

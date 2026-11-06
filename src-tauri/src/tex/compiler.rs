@@ -1,6 +1,6 @@
 use serde::Serialize;
 use std::fs;
-use std::process::Command;
+use tokio::process::Command;
 
 #[derive(Debug, Serialize)]
 pub struct TexCompileResult {
@@ -9,11 +9,20 @@ pub struct TexCompileResult {
     pub message: String,
 }
 
-/// Compiles standalone TikZ/PGFPlots code using local TeX Live (`pdflatex` + `dvisvgm`)
+/// Compiles standalone TikZ/PGFPlots code using local TeX Live (`latex` + `dvisvgm`)
 /// when available on the user's machine.
+///
+/// Each compilation uses a unique temp subdirectory (based on timestamp) to avoid
+/// race conditions when multiple compilations run concurrently.
+/// Uses `tokio::process::Command` to avoid blocking the async runtime.
 #[tauri::command]
 pub async fn tex_compile_preview(tex_source: String) -> TexCompileResult {
-    let temp_dir = std::env::temp_dir().join("agenttikz_build");
+    let build_id = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let temp_dir = std::env::temp_dir().join(format!("agenttikz_build_{}", build_id));
+
     if let Err(e) = fs::create_dir_all(&temp_dir) {
         return TexCompileResult {
             ok: false,
@@ -27,6 +36,7 @@ pub async fn tex_compile_preview(tex_source: String) -> TexCompileResult {
     let svg_path = temp_dir.join("figure.svg");
 
     if let Err(e) = fs::write(&tex_path, tex_source.as_bytes()) {
+        let _ = fs::remove_dir_all(&temp_dir);
         return TexCompileResult {
             ok: false,
             svg: None,
@@ -34,7 +44,7 @@ pub async fn tex_compile_preview(tex_source: String) -> TexCompileResult {
         };
     }
 
-    // Attempt `latex -interaction=nonstopmode -output-format=dvi figure.tex` + `dvisvgm`
+    // Use async tokio::process::Command to avoid blocking the Tokio runtime
     let latex_out = Command::new("latex")
         .args([
             "-interaction=nonstopmode",
@@ -42,32 +52,62 @@ pub async fn tex_compile_preview(tex_source: String) -> TexCompileResult {
             "figure.tex",
         ])
         .current_dir(&temp_dir)
-        .output();
+        .output()
+        .await;
 
-    if let Ok(output) = latex_out {
+    let result = if let Ok(output) = latex_out {
         if output.status.success() && dvi_path.exists() {
             let dvisvgm_out = Command::new("dvisvgm")
                 .args(["--no-fonts", "figure.dvi", "-o", "figure.svg"])
                 .current_dir(&temp_dir)
-                .output();
+                .output()
+                .await;
 
             if let Ok(svg_res) = dvisvgm_out {
                 if svg_res.status.success() && svg_path.exists() {
                     if let Ok(svg_content) = fs::read_to_string(&svg_path) {
-                        return TexCompileResult {
+                        TexCompileResult {
                             ok: true,
                             svg: Some(svg_content),
                             message: "本地 TeX Live (latex + dvisvgm) 编译成功".into(),
-                        };
+                        }
+                    } else {
+                        TexCompileResult {
+                            ok: false,
+                            svg: None,
+                            message: "dvisvgm 输出的 SVG 文件无法读取".into(),
+                        }
+                    }
+                } else {
+                    TexCompileResult {
+                        ok: false,
+                        svg: None,
+                        message: "dvisvgm 转换失败".into(),
                     }
                 }
+            } else {
+                TexCompileResult {
+                    ok: false,
+                    svg: None,
+                    message: "未检测到本地 dvisvgm 命令".into(),
+                }
+            }
+        } else {
+            TexCompileResult {
+                ok: false,
+                svg: None,
+                message: "latex 编译失败，请检查 TikZ 源码".into(),
             }
         }
-    }
+    } else {
+        TexCompileResult {
+            ok: false,
+            svg: None,
+            message: "未检测到本地 latex/dvisvgm 命令，已使用内置高保真 SVG+KaTeX 矢量渲染引擎".into(),
+        }
+    };
 
-    TexCompileResult {
-        ok: false,
-        svg: None,
-        message: "未检测到本地 latex/dvisvgm 命令，已使用内置高保真 SVG+KaTeX 矢量渲染引擎".into(),
-    }
+    // Clean up temp directory
+    let _ = fs::remove_dir_all(&temp_dir);
+    result
 }

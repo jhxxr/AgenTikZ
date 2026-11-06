@@ -367,14 +367,9 @@ export const InteractiveCanvas: React.FC = () => {
       return;
     }
 
+    // Left-click on empty canvas: just deselect, don't start panning.
+    // Panning is reserved for middle-click / alt-click (handled above).
     setSelectedIds([]);
-    setDragState({
-      mode: 'pan',
-      startClientX: e.clientX,
-      startClientY: e.clientY,
-      initialPan: { ...pan },
-      initialPositions: [],
-    });
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
@@ -1174,9 +1169,9 @@ export const InteractiveCanvas: React.FC = () => {
           </defs>
 
           <rect width="100%" height="100%" fill="#FFFFFF" />
-          {showGrid && <rect width="100%" height="100%" fill="url(#tikz-grid)" />}
 
           <g transform={`scale(${zoom})`}>
+            {showGrid && <rect width={9999} height={9999} fill="url(#tikz-grid)" />}
             {showGrid && (
               <g opacity={0.45} pointerEvents="none">
                 <line
@@ -1311,7 +1306,11 @@ export const InteractiveCanvas: React.FC = () => {
             {compiledSvg ? (
               <div
                 className="bg-white p-4 rounded border border-slate-200 shadow-xs"
-                dangerouslySetInnerHTML={{ __html: compiledSvg }}
+                dangerouslySetInnerHTML={{
+                  __html: compiledSvg
+                    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+                    .replace(/\bon\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, ''),
+                }}
               />
             ) : (
               <div className="text-xs text-slate-500 text-center max-w-sm bg-slate-50/80 border border-slate-200 rounded-lg p-4">

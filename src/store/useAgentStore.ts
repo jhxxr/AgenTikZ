@@ -8,6 +8,7 @@ import {
 } from '../types/acp';
 import { useWorkspaceStore } from './useWorkspaceStore';
 import { insertTikzStatement, patchNodeOptions } from '../core/parser/patcher';
+import { parseTikzDocument } from '../core/parser/parser';
 import { FULL_FIGURE_TEMPLATES } from '../core/templates/dl-templates';
 
 const DEFAULT_ACP_PROVIDERS: AcpAgentProvider[] = [
@@ -133,7 +134,8 @@ function synthesizeCanvasAwareResponse(
     lower.includes('特征图') ||
     lower.includes('cvpr')
   ) {
-    const tpl = FULL_FIGURE_TEMPLATES.find((t) => t.id === 'tpl_cvpr_3d_pyramid')!;
+    const tpl = FULL_FIGURE_TEMPLATES.find((t) => t.id === 'tpl_cvpr_3d_pyramid');
+    if (!tpl) return { thought: '', mcpCalls: [], reply: '未找到 CVPR 3D 金字塔模板，请检查模板配置。' };
     return {
       thought:
         '读取 @canvas 上下文 -> 用户请求构建 CVPR 风格多尺度 3D 视觉特征金字塔 -> 调用 MCP 工具 `propose_tikz_patch` 生成带语义 `feature_cube` 与 `conv_block` 宏的干净 TikZ 代码。',
@@ -213,7 +215,8 @@ function synthesizeCanvasAwareResponse(
       };
     }
 
-    const tpl = FULL_FIGURE_TEMPLATES.find((t) => t.id === 'tpl_nature_dashboard')!;
+    const tpl = FULL_FIGURE_TEMPLATES.find((t) => t.id === 'tpl_nature_dashboard');
+    if (!tpl) return { thought: '', mcpCalls: [], reply: '未找到 Nature 图表模板，请检查模板配置。' };
     return {
       thought:
         '用户请求科研数据图表展示 -> 调用 `propose_tikz_patch` 生成符合 Nature (NPG) 0.55pt 极简规范的折线误差带 + 分组柱状图双联实验图。',
@@ -297,8 +300,9 @@ function synthesizeCanvasAwareResponse(
       }
       let patched = tikzCode;
       for (const n of selectedNodes) {
-        const latestDoc = useWorkspaceStore.getState().parsedDoc;
-        const currNode = latestDoc.nodes.find((item) => item.id === n.id) || n;
+        // Re-parse after each patch so span offsets stay valid
+        const freshDoc = parseTikzDocument(patched);
+        const currNode = freshDoc.nodes.find((item) => item.id === n.id) || n;
         patched = patchNodeOptions(patched, currNode, {
           fill: targetFill,
           draw: targetDraw,
@@ -498,6 +502,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
       ),
     }));
 
+    try {
     // Try Tauri ACP bridge first if in Tauri desktop and user has real ACP CLI configured
     let handledByNativeAcp = false;
     try {
@@ -576,6 +581,10 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
             : s
         ),
       }));
+    }
+    } finally {
+      // Guarantee isStreaming is reset even if synthesis throws
+      set({ isStreaming: false });
     }
   },
 

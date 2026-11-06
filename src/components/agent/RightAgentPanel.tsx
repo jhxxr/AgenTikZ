@@ -48,6 +48,19 @@ export const RightAgentPanel: React.FC = () => {
   const [showAgentConfig, setShowAgentConfig] = useState(false);
   const [expandedCodeIds, setExpandedCodeIds] = useState<Record<string, boolean>>({});
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const historyDropdownRef = useRef<HTMLDivElement | null>(null);
+
+  // Close history dropdown on outside click
+  useEffect(() => {
+    if (!showHistoryDropdown) return;
+    const handler = (e: MouseEvent) => {
+      if (historyDropdownRef.current && !historyDropdownRef.current.contains(e.target as Node)) {
+        setShowHistoryDropdown(false);
+      }
+    };
+    document.addEventListener('pointerdown', handler);
+    return () => document.removeEventListener('pointerdown', handler);
+  }, [showHistoryDropdown]);
 
   const activeSession =
     sessions.find((s) => s.id === activeSessionId) || sessions[0];
@@ -77,12 +90,12 @@ export const RightAgentPanel: React.FC = () => {
   ];
 
   return (
-    <aside className="w-[360px] h-full bg-white border-l border-slate-200 flex flex-col shrink-0 select-none">
+    <aside className="w-[360px] h-full bg-sidebar-gradient border-l border-slate-200/80 flex flex-col shrink-0 select-none">
       {/* 1. Top Agent Header & BYOA / ACP Switcher */}
-      <div className="px-3 py-2.5 border-b border-slate-200 bg-slate-50/70 space-y-2">
+      <div className="px-3 py-2.5 border-b border-slate-200/80 bg-white/70 space-y-2">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1.5">
-            <div className="w-6 h-6 rounded-md bg-blue-600 text-white flex items-center justify-center shadow-2xs">
+            <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 text-white flex items-center justify-center shadow-sm">
               <Bot className="w-3.5 h-3.5" />
             </div>
             <div>
@@ -105,7 +118,7 @@ export const RightAgentPanel: React.FC = () => {
             >
               <Plus className="w-3.5 h-3.5" />
             </button>
-            <div className="relative">
+            <div className="relative" ref={historyDropdownRef}>
               <button
                 onClick={() => setShowHistoryDropdown(!showHistoryDropdown)}
                 className="p-1.5 text-slate-600 hover:text-blue-600 hover:bg-white rounded-md border border-transparent hover:border-slate-200 transition-colors"
@@ -376,8 +389,8 @@ export const RightAgentPanel: React.FC = () => {
         ))}
 
         {isStreaming && (
-          <div className="flex items-center gap-2 text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 w-fit">
-            <span className="w-2 h-2 rounded-full bg-blue-600 animate-ping" />
+          <div className="flex items-center gap-2 text-xs text-slate-500 bg-white/80 border border-slate-200/70 rounded-2xl px-3 py-2 w-fit animate-shimmer">
+            <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse-dot" />
             <span>{activeProvider.name} 正在通过 ACP 生成结构化 TikZ...</span>
           </div>
         )}
@@ -386,14 +399,15 @@ export const RightAgentPanel: React.FC = () => {
       </div>
 
       {/* 3. Quick Prompt Chips + Bottom Context & Chat Input Area */}
-      <div className="border-t border-slate-200 bg-slate-50/50 p-2.5 space-y-2">
+      <div className="border-t border-slate-200/80 bg-white/60 p-2.5 space-y-2">
         {/* Quick Suggestion Chips */}
         <div className="flex gap-1.5 overflow-x-auto pb-0.5 no-scrollbar">
           {quickPrompts.map((qp, i) => (
             <button
               key={i}
               onClick={() => sendPromptToAgent(qp)}
-              className="text-[10.5px] px-2 py-1 rounded-full bg-white border border-slate-200 text-slate-600 hover:border-blue-400 hover:text-blue-700 shrink-0 transition-colors cursor-pointer"
+              disabled={isStreaming}
+              className="text-[10.5px] px-2 py-1 rounded-full bg-white border border-slate-200 text-slate-600 hover:border-blue-400 hover:text-blue-700 shrink-0 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {qp}
             </button>
@@ -429,7 +443,7 @@ export const RightAgentPanel: React.FC = () => {
         </div>
 
         {/* Multi-line Prompt Input Box */}
-        <div className="relative bg-white border border-slate-200 rounded-xl focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100 transition-all">
+        <div className="relative bg-white border border-slate-200/80 rounded-2xl focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-100/60 shadow-sm transition-all">
           <textarea
             rows={2}
             value={inputText}
@@ -450,7 +464,7 @@ export const RightAgentPanel: React.FC = () => {
             <button
               onClick={handleSend}
               disabled={!inputText.trim() || isStreaming}
-              className="px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:bg-slate-200 text-white text-[11px] font-medium flex items-center gap-1 transition-colors cursor-pointer"
+              className="px-2.5 py-1 rounded-xl bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-500 hover:to-blue-600 disabled:from-slate-200 disabled:to-slate-200 text-white text-[11px] font-medium flex items-center gap-1 transition-all cursor-pointer shadow-sm"
             >
               <span>发送</span>
               <Send className="w-3 h-3" />

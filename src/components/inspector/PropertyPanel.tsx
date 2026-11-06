@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useWorkspaceStore } from '../../store/useWorkspaceStore';
 import { JOURNAL_THEMES } from '../../core/themes/journal-presets';
 import { EdgeRouteType, PgfChartType } from '../../types/tikz-ast';
@@ -30,6 +30,11 @@ export const PropertyPanel: React.FC = () => {
 
   const [activeSeriesIdx, setActiveSeriesIdx] = useState(0);
 
+  // Reset series tab index when selection changes
+  useEffect(() => {
+    setActiveSeriesIdx(0);
+  }, [selectedIds[0]]);
+
   if (selectedIds.length === 0) return null;
 
   const firstId = selectedIds[0];
@@ -40,7 +45,7 @@ export const PropertyPanel: React.FC = () => {
 
   return (
     <div
-      className="absolute top-3 right-3 w-80 bg-white/98 border border-slate-200/95 rounded-xl shadow-md p-3 z-20 text-xs space-y-2.5 max-h-[calc(100%-68px)] overflow-y-auto"
+      className="absolute top-3 right-3 w-80 glass border border-slate-200/70 rounded-2xl shadow-lg p-3 z-20 text-xs space-y-2.5 max-h-[calc(100%-68px)] overflow-y-auto"
       onPointerDown={(e) => e.stopPropagation()}
     >
       {/* Header */}

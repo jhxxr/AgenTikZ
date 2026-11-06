@@ -125,12 +125,6 @@ export const LiveCodeSyncBanner: React.FC<{
 
   const lines = useMemo(() => tikzCode.split('\n'), [tikzCode]);
 
-  const activeRange = lastChangeInfo?.lineRange || highlightedLineRange;
-  if (!activeRange) return null;
-
-  const startLine = Math.max(1, activeRange.startLine);
-  const endLine = Math.min(lines.length, activeRange.endLine);
-
   // Compute line start offsets so we can highlight `valueSpan` inside the snippet
   const lineOffsets = useMemo(() => {
     const offs: number[] = [0];
@@ -139,6 +133,12 @@ export const LiveCodeSyncBanner: React.FC<{
     }
     return offs;
   }, [lines]);
+
+  const activeRange = lastChangeInfo?.lineRange || highlightedLineRange;
+  if (!activeRange) return null;
+
+  const startLine = Math.max(1, activeRange.startLine);
+  const endLine = Math.min(lines.length, activeRange.endLine);
 
   const vSpan = lastChangeInfo?.valueSpan;
 
