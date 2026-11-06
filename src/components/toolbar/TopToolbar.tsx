@@ -116,7 +116,7 @@ export const TopToolbar: React.FC = () => {
           return;
         }
       }
-      const svgEl = document.getElementById('agenttikz-canvas-svg');
+      const svgEl = document.getElementById('agentikz-canvas-svg');
       if (svgEl) setCompiledSvg(svgEl.outerHTML, '内置高保真矢量引擎渲染');
       setPreviewMode(previewMode === 'tex_split' ? 'interactive' : 'tex_split');
     } catch {
@@ -127,9 +127,9 @@ export const TopToolbar: React.FC = () => {
   };
 
   const handleExportSvg = () => {
-    const svgEl = document.getElementById('agenttikz-canvas-svg');
+    const svgEl = document.getElementById('agentikz-canvas-svg');
     if (!svgEl) return;
-    triggerFileDownload('agenttikz-figure.svg', new XMLSerializer().serializeToString(svgEl), 'image/svg+xml;charset=utf-8');
+    triggerFileDownload('agentikz-figure.svg', new XMLSerializer().serializeToString(svgEl), 'image/svg+xml;charset=utf-8');
     setShowExportMenu(false);
   };
 
@@ -138,11 +138,13 @@ export const TopToolbar: React.FC = () => {
       {/* Left: Brand + Undo/Redo */}
       <div className="flex items-center gap-2.5">
         <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-slate-800 to-slate-950 text-white flex items-center justify-center font-serif font-bold text-sm shadow-sm">
-            T
-          </div>
+          <img
+            src="/icon.svg"
+            alt="AgenTikZ"
+            className="w-7 h-7 rounded-lg shadow-xs select-none"
+          />
           <div className="leading-none">
-            <span className="font-bold text-[13px] tracking-tight text-slate-900">AgentTikZ</span>
+            <span className="font-bold text-[13px] tracking-tight text-slate-900">AgenTikZ</span>
             <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-gradient-to-r from-blue-50 to-indigo-50 text-blue-600 border border-blue-200/60 font-medium">
               Studio
             </span>

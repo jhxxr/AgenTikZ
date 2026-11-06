@@ -242,7 +242,7 @@ export const RightAgentPanel: React.FC = () => {
               <span className="text-[10px] font-semibold text-slate-500">
                 {msg.role === 'user'
                   ? '你 (Researcher)'
-                  : msg.role === 'system' ? 'AgentTikZ 状态'
+                  : msg.role === 'system' ? 'AgenTikZ 状态'
                   : providers.find((p) => p.id === msg.agentId)?.name ||
                     'ACP Agent'}
               </span>
@@ -302,7 +302,7 @@ export const RightAgentPanel: React.FC = () => {
                       <span className="flex items-center gap-1 truncate">
                         <Wrench className="w-3 h-3 text-blue-600 shrink-0" />
                         <strong className="text-slate-800">
-                          {tc.toolName.replace('mcp__agenttikz__', '')}
+                          {tc.toolName.replace(/^mcp__agen?tikz__/, '')}
                         </strong>
                         <span className="text-slate-400 truncate">
                           ({tc.argsSummary})

@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" fill="none">
+  <defs>
+    <clipPath id="squircleClip">
+      <rect x="0" y="0" width="1024" height="1024" rx="224" />
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#squircleClip)">
+    <!-- Full-Bleed Warm Academic Alabaster Squircle -->
+    <rect x="0" y="0" width="1024" height="1024" rx="224" fill="#F5F6F1" />
+
+    <!-- Two-Tone Pen Base (Oxford Navy Left / Royal Cobalt Right) -->
+    <path d="M 358 730 L 326 1024 H 512 V 730 Z" fill="#132B6B" />
+    <path d="M 512 730 V 1024 H 698 L 666 730 Z" fill="#1760E8" />
+
+    <!-- Horizontal Pen Collar -->
+    <rect x="336" y="664" width="352" height="46" rx="23" fill="#132B6B" />
+
+    <!-- Geometric Fountain Pen Nib Outer Silhouette -->
+    <path
+      d="M 376 668 C 376 596 330 554 292 526 C 368 418 446 304 512 184 C 578 304 656 418 732 526 C 694 554 648 596 648 668"
+      stroke="#132B6B"
+      stroke-width="38"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    />
+
+    <!-- Nib Slit & Apex Node -->
+    <circle cx="512" cy="184" r="36" fill="#132B6B" />
+    <line
+      x1="512"
+      y1="196"
+      x2="512"
+      y2="446"
+      stroke="#132B6B"
+      stroke-width="26"
+      stroke-linecap="round"
+    />
+
+    <!-- Inner 4-Node Neural Diamond Graph -->
+    <path
+      d="M 512 446 L 408 536 L 512 622 L 616 536 Z"
+      stroke="#132B6B"
+      stroke-width="24"
+      stroke-linejoin="round"
+    />
+    <circle cx="408" cy="536" r="34" fill="#132B6B" />
+    <circle cx="616" cy="536" r="34" fill="#132B6B" />
+    <circle cx="512" cy="622" r="34" fill="#132B6B" />
+
+    <!-- Focal Nature-NPG Vermilion Node -->
+    <circle cx="512" cy="446" r="48" fill="#E0462E" />
+
+    <!-- Top-Right 4-Point AI Sparkle Star -->
+    <path
+      d="M 698 180 C 705 234 720 249 774 256 C 720 263 705 278 698 332 C 691 278 676 263 622 256 C 676 249 691 234 698 180 Z"
+      fill="#132B6B"
+    />
+  </g>
+</svg>

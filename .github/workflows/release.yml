@@ -1,0 +1,304 @@
+name: release
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - "v[0-9]*.[0-9]*.[0-9]*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Optional version tag to publish (e.g. v0.1.0). Defaults to v<package.json version>.
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      should_release: ${{ steps.meta.outputs.should_release }}
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+      commit: ${{ steps.meta.outputs.commit }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate version alignment & check if release already exists
+        id: meta
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          pkg_ver="$(jq -r '.version' package.json)"
+          tauri_ver="$(jq -r '.version' src-tauri/tauri.conf.json)"
+          cargo_ver="$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml | head -n 1)"
+
+          if [ "$pkg_ver" != "$tauri_ver" ] || [ "$pkg_ver" != "$cargo_ver" ]; then
+            echo "::error::Version mismatch across package.json ($pkg_ver), tauri.conf.json ($tauri_ver), and Cargo.toml ($cargo_ver)."
+            exit 1
+          fi
+
+          if [ -n "$INPUT_TAG" ]; then
+            tag="$INPUT_TAG"
+          elif [ "$REF_TYPE" = "tag" ]; then
+            tag="$REF_NAME"
+          else
+            tag="v${pkg_ver}"
+          fi
+
+          expected_tag="v${pkg_ver}"
+          if [ "$tag" != "$expected_tag" ]; then
+            echo "::error::Tag ($tag) does not match package.json version ($expected_tag)."
+            exit 1
+          fi
+
+          commit="$(git rev-parse HEAD)"
+          if [[ "$pkg_ver" == *-* ]]; then
+            prerelease=true
+          else
+            prerelease=false
+          fi
+
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${pkg_ver}" >> "$GITHUB_OUTPUT"
+          echo "commit=${commit}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
+
+          # Check if a published (non-draft) GitHub Release for this tag already exists
+          if existing_draft="$(gh release view "$tag" --json isDraft --jq '.isDraft' 2>/dev/null)"; then
+            if [ "$existing_draft" != "true" ]; then
+              if [ "$REF_TYPE" = "branch" ] && [ -z "$INPUT_TAG" ]; then
+                echo "Release ${tag} is already published. Skipping automatic branch release."
+                echo "should_release=false" >> "$GITHUB_OUTPUT"
+                exit 0
+              else
+                echo "::error::Release ${tag} is already published; refusing to overwrite."
+                exit 1
+              fi
+            fi
+          fi
+
+          echo "should_release=true" >> "$GITHUB_OUTPUT"
+
+  verify:
+    needs: prepare
+    if: needs.prepare.outputs.should_release == 'true'
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ needs.prepare.outputs.commit }}
+    permissions:
+      contents: read
+
+  build-desktop:
+    needs: [prepare, verify]
+    if: needs.prepare.outputs.should_release == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            os_name: windows-x64
+            args: ""
+          - platform: ubuntu-22.04
+            os_name: linux-x64
+            args: ""
+          - platform: macos-latest
+            os_name: macos-universal
+            args: "--target universal-apple-darwin"
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact verified commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+          persist-credentials: false
+
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libfuse2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Cache Rust cargo target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> target"
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Sync Tauri bundle icons from public/icon.svg
+        run: npx tauri icon public/icon.svg || true
+
+      - name: Build Tauri desktop bundles
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+          CI: "true"
+        run: npx tauri build ${{ matrix.args }}
+
+      - name: Collect desktop installer artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          find src-tauri/target -path "*/bundle/*" -type f \( \
+            -name "*.msi" -o \
+            -name "*-setup.exe" -o \
+            -name "*.dmg" -o \
+            -name "*.app.tar.gz" -o \
+            -name "*.deb" -o \
+            -name "*.rpm" -o \
+            -name "*.AppImage" \
+          \) ! -path "*/bundle/appimage/*.AppDir/*" -exec cp -v {} release-assets/ \;
+          ls -la release-assets/
+
+      - name: Upload platform installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.os_name }}
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 7
+
+  build-web:
+    needs: [prepare, verify]
+    if: needs.prepare.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact verified commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies & build Web Studio dist
+        run: |
+          npm ci
+          npm run build
+
+      - name: Archive Web Studio static bundle
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          mkdir -p release-web
+          tar -czf "release-web/AgenTikZ-v${VERSION}-web-dist.tar.gz" -C dist .
+
+      - name: Upload Web Studio bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: release-web/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [prepare, build-desktop, build-web]
+    if: needs.prepare.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download all verified release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS & publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          EXPECTED_COMMIT: ${{ needs.prepare.outputs.commit }}
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd artifacts
+          shopt -s nullglob
+          files=(*)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::No release artifacts found to publish."
+            exit 1
+          fi
+
+          sha256sum "${files[@]}" > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+          # Create tag pointing to EXPECTED_COMMIT if it does not exist yet on remote
+          if ! gh api "repos/${GH_REPO}/git/ref/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh api "repos/${GH_REPO}/git/refs" \
+              -f ref="refs/tags/${RELEASE_TAG}" \
+              -f sha="${EXPECTED_COMMIT}"
+          fi
+
+          flags=(--target "$EXPECTED_COMMIT" --generate-notes)
+          if [ "$PRERELEASE" = "true" ]; then
+            flags+=(--prerelease)
+          fi
+
+          if existing="$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft' 2>/dev/null)"; then
+            if [ "$existing" != "true" ]; then
+              echo "::error::A published release ${RELEASE_TAG} already exists; refusing to overwrite."
+              exit 1
+            fi
+          else
+            gh release create "$RELEASE_TAG" --draft --title "AgenTikZ ${RELEASE_TAG}" "${flags[@]}"
+          fi
+
+          gh release upload "$RELEASE_TAG" ./* --clobber
+          gh release edit "$RELEASE_TAG" --draft=false --prerelease="$PRERELEASE"

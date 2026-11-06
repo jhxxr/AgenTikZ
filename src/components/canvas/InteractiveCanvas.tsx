@@ -1100,7 +1100,7 @@ export const InteractiveCanvas: React.FC = () => {
       {/* Main Interactive Vector Canvas (Pure White #FFFFFF) */}
       <div className="relative flex-1 w-full h-full flex">
         <svg
-          id="agenttikz-canvas-svg"
+          id="agentikz-canvas-svg"
           ref={svgRef}
           onPointerDown={handleCanvasPointerDown}
           onPointerMove={handlePointerMove}

@@ -8,7 +8,7 @@ pub struct McpToolSpec {
     pub input_schema: Value,
 }
 
-/// Exposes AgentTikZ's built-in MCP Server tools for external & local ACP agents
+/// Exposes AgenTikZ's built-in MCP Server tools for external & local ACP agents
 #[tauri::command]
 pub fn mcp_get_manifest() -> Vec<McpToolSpec> {
     vec![

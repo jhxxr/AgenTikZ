@@ -144,7 +144,7 @@ export const PRIMITIVE_LIBRARY: PrimitiveLibraryItem[] = [
         `      legend style={at={(0.04, 0.94)}, anchor=north west, font=\\scriptsize, draw=gray!40, fill=white, fill opacity=0.9}`,
         `    ]`,
         `      \\addplot[color=#2B5B84, line width=0.85pt, mark=*] coordinates { (1, 73.2) +- (0, 1.1) (2, 78.9) +- (0, 0.9) (3, 83.4) +- (0, 0.7) (4, 86.8) +- (0, 0.6) };`,
-        `      \\addlegendentry{Ours (AgentTikZ)}`,
+        `      \\addlegendentry{Ours (AgenTikZ)}`,
         `      \\addplot[color=#D97706, line width=0.85pt, mark=square*, dashed] coordinates { (1, 69.5) +- (0, 1.4) (2, 74.1) +- (0, 1.2) (3, 77.6) +- (0, 1.0) (4, 79.8) +- (0, 0.9) };`,
         `      \\addlegendentry{Baseline}`,
         `    \\end{axis}`,
@@ -246,7 +246,7 @@ export const FULL_FIGURE_TEMPLATES: FullFigureTemplate[] = [
     recommendedPan: { x: 75, y: 520 },
     recommendedZoom: 1,
     tikzCode: `% ============================================================================
-% AgentTikZ — NeurIPS / ICLR Joint Architecture & Scaling (Publication-Grade)
+% AgenTikZ — NeurIPS / ICLR Joint Architecture & Scaling (Publication-Grade)
 % Uniform 1.2cm vertical grid · Symmetric residual bypasses · Clean axis labels
 % ============================================================================
 \\begin{tikzpicture}[
@@ -340,7 +340,7 @@ export const FULL_FIGURE_TEMPLATES: FullFigureTemplate[] = [
     recommendedPan: { x: 90, y: 510 },
     recommendedZoom: 1,
     tikzCode: `% ============================================================================
-% AgentTikZ — Parallel Q-K-V Scaled Dot-Product Attention (Publication-Grade)
+% AgenTikZ — Parallel Q-K-V Scaled Dot-Product Attention (Publication-Grade)
 % Three-way equidistant layout · Operators centered · Clean flow
 % ============================================================================
 \\begin{tikzpicture}[
@@ -408,7 +408,7 @@ export const FULL_FIGURE_TEMPLATES: FullFigureTemplate[] = [
     recommendedPan: { x: 80, y: 480 },
     recommendedZoom: 1,
     tikzCode: `% ============================================================================
-% AgentTikZ — CVPR / ICCV Multi-Scale 3D Feature Pyramid (Publication-Grade)
+% AgenTikZ — CVPR / ICCV Multi-Scale 3D Feature Pyramid (Publication-Grade)
 % Backbone & FPN blocks share x-coordinates · Clear volume shrinkage
 % ============================================================================
 \\begin{tikzpicture}[
@@ -463,7 +463,7 @@ export const FULL_FIGURE_TEMPLATES: FullFigureTemplate[] = [
     recommendedPan: { x: 75, y: 500 },
     recommendedZoom: 1,
     tikzCode: `% ============================================================================
-% AgentTikZ — Vision-Language Contrastive Alignment (Publication-Grade)
+% AgenTikZ — Vision-Language Contrastive Alignment (Publication-Grade)
 % Strictly symmetric dual towers · Centered ⊗ operator · Clear separation
 % ============================================================================
 \\begin{tikzpicture}[
@@ -531,7 +531,7 @@ export const FULL_FIGURE_TEMPLATES: FullFigureTemplate[] = [
     recommendedPan: { x: 75, y: 485 },
     recommendedZoom: 1,
     tikzCode: `% ============================================================================
-% AgentTikZ — Conditional Latent Diffusion Transformer (Publication-Grade)
+% AgenTikZ — Conditional Latent Diffusion Transformer (Publication-Grade)
 % Equidistant horizontal pipeline · Clear top-down conditioning injection
 % ============================================================================
 \\begin{tikzpicture}[
@@ -584,7 +584,7 @@ export const FULL_FIGURE_TEMPLATES: FullFigureTemplate[] = [
     recommendedPan: { x: 75, y: 475 },
     recommendedZoom: 1,
     tikzCode: `% ============================================================================
-% AgentTikZ — Nature (NPG) Multi-Panel Experimental Figure (Publication-Grade)
+% AgenTikZ — Nature (NPG) Multi-Panel Experimental Figure (Publication-Grade)
 % Strictly equal panel sizes · NPG canonical palette · 0.55pt fine axis
 % ============================================================================
 \\begin{tikzpicture}[>=Latex]

@@ -318,7 +318,7 @@ fn build_tikz_prompt(
     selected_ids: &[String],
     history: &[ConversationMessage],
 ) -> String {
-    let mut parts = vec!["You are assisting in AgentTikZ, a TikZ & PGFPlots editor. Work from the supplied conversation and canvas, not local files. Return proposed changes for the user to review; do not execute commands or write files. Tool permission requests are denied by this client.".to_string()];
+    let mut parts = vec!["You are assisting in AgenTikZ, a TikZ & PGFPlots editor. Work from the supplied conversation and canvas, not local files. Return proposed changes for the user to review; do not execute commands or write files. Tool permission requests are denied by this client.".to_string()];
     if !history.is_empty() {
         // ACP processes are short-lived. Replay conversational text explicitly, not
         // hidden reasoning or simulated tools, so follow-ups retain their context.
@@ -485,7 +485,7 @@ mod tests {
         assert!(resolve_agent_command("not-an-agent", None).is_err());
         assert!(resolve_agent_command("custom-acp", None).is_err());
         assert!(
-            resolve_agent_command("custom-acp", Some("agenttikz-nonexistent-test-agent-9475"))
+            resolve_agent_command("custom-acp", Some("agentikz-nonexistent-test-agent-9475"))
                 .is_err()
         );
     }

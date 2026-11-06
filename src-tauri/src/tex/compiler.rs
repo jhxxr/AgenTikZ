@@ -21,7 +21,7 @@ pub async fn tex_compile_preview(tex_source: String) -> TexCompileResult {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    let temp_dir = std::env::temp_dir().join(format!("agenttikz_build_{}", build_id));
+    let temp_dir = std::env::temp_dir().join(format!("agentikz_build_{}", build_id));
 
     if let Err(e) = fs::create_dir_all(&temp_dir) {
         return TexCompileResult {

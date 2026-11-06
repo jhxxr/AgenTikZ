@@ -14,5 +14,5 @@ pub fn run() {
             tex::compiler::tex_compile_preview,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running AgentTikZ tauri application");
+        .expect("error while running AgenTikZ tauri application");
 }
