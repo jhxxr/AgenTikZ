@@ -4,14 +4,15 @@
   "version": "0.1.0",
   "identifier": "ai.agentikz.studio",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "npm run adapters:stage && npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run adapters:stage && npm run build",
     "frontendDist": "../dist"
   },
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "AgenTikZ — 科研级 TikZ 可视化编辑器 (BYOA / ACP)",
         "width": 1440,
         "height": 900,
@@ -27,6 +28,9 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": [
+      "adapters/**/*"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

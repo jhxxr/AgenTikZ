@@ -84,7 +84,9 @@
 
 @media print {
   header,
-  aside {
+  aside,
+  .no-print,
+  [data-export-ignore="true"] {
     display: none !important;
   }
   main {

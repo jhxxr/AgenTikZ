@@ -6,8 +6,14 @@ import {
   TikzNodeElement,
 } from '../../types/tikz-ast';
 import { formatTikzOptions } from './parser';
+import { useSettingsStore } from '../../store/useSettingsStore';
 
 export function formatCoordNum(val: number): string {
+  const precision = useSettingsStore.getState().coordPrecision;
+  if (precision === 1) {
+    const rounded = Math.round(val * 10) / 10;
+    return rounded.toFixed(1);
+  }
   const rounded = Math.round(val * 20) / 20; // Snap to 0.05cm precision
   if (Number.isInteger(rounded)) return `${rounded}.0`;
   return Number(rounded.toFixed(2)).toString();

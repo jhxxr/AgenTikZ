@@ -9,14 +9,23 @@ pub struct TexCompileResult {
     pub message: String,
 }
 
-/// Compiles standalone TikZ/PGFPlots code using local TeX Live (`latex` + `dvisvgm`)
+/// Compiles standalone TikZ/PGFPlots code using local TeX Live (`latex`/`pdflatex`/`xelatex` + `dvisvgm`)
 /// when available on the user's machine.
 ///
 /// Each compilation uses a unique temp subdirectory (based on timestamp) to avoid
 /// race conditions when multiple compilations run concurrently.
 /// Uses `tokio::process::Command` to avoid blocking the async runtime.
 #[tauri::command]
-pub async fn tex_compile_preview(tex_source: String) -> TexCompileResult {
+pub async fn tex_compile_preview(
+    tex_source: String,
+    tex_engine: Option<String>,
+) -> TexCompileResult {
+    let engine = match tex_engine.as_deref() {
+        Some("pdflatex") => "pdflatex",
+        Some("xelatex") => "xelatex",
+        _ => "latex",
+    };
+
     let build_id = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
@@ -32,7 +41,12 @@ pub async fn tex_compile_preview(tex_source: String) -> TexCompileResult {
     }
 
     let tex_path = temp_dir.join("figure.tex");
-    let dvi_path = temp_dir.join("figure.dvi");
+    let intermediate_file = match engine {
+        "pdflatex" => "figure.pdf",
+        "xelatex" => "figure.xdv",
+        _ => "figure.dvi",
+    };
+    let intermediate_path = temp_dir.join(intermediate_file);
     let svg_path = temp_dir.join("figure.svg");
 
     if let Err(e) = fs::write(&tex_path, tex_source.as_bytes()) {
@@ -44,21 +58,28 @@ pub async fn tex_compile_preview(tex_source: String) -> TexCompileResult {
         };
     }
 
-    // Use async tokio::process::Command to avoid blocking the Tokio runtime
-    let latex_out = Command::new("latex")
+    let mut latex_cmd = Command::new(engine);
+    if engine == "xelatex" {
+        latex_cmd.arg("-no-pdf");
+    }
+    latex_cmd
         .args([
             "-interaction=nonstopmode",
             "-halt-on-error",
             "figure.tex",
         ])
-        .current_dir(&temp_dir)
-        .output()
-        .await;
+        .current_dir(&temp_dir);
+
+    let latex_out = latex_cmd.output().await;
 
     let result = if let Ok(output) = latex_out {
-        if output.status.success() && dvi_path.exists() {
-            let dvisvgm_out = Command::new("dvisvgm")
-                .args(["--no-fonts", "figure.dvi", "-o", "figure.svg"])
+        if output.status.success() && intermediate_path.exists() {
+            let mut dvisvgm_cmd = Command::new("dvisvgm");
+            if engine == "pdflatex" {
+                dvisvgm_cmd.arg("--pdf");
+            }
+            let dvisvgm_out = dvisvgm_cmd
+                .args(["--no-fonts", intermediate_file, "-o", "figure.svg"])
                 .current_dir(&temp_dir)
                 .output()
                 .await;
@@ -69,7 +90,7 @@ pub async fn tex_compile_preview(tex_source: String) -> TexCompileResult {
                         TexCompileResult {
                             ok: true,
                             svg: Some(svg_content),
-                            message: "本地 TeX Live (latex + dvisvgm) 编译成功".into(),
+                            message: format!("本地 TeX Live ({} + dvisvgm) 编译成功", engine),
                         }
                     } else {
                         TexCompileResult {
@@ -96,14 +117,17 @@ pub async fn tex_compile_preview(tex_source: String) -> TexCompileResult {
             TexCompileResult {
                 ok: false,
                 svg: None,
-                message: "latex 编译失败，请检查 TikZ 源码".into(),
+                message: format!("{} 编译失败，请检查 TikZ 源码", engine),
             }
         }
     } else {
         TexCompileResult {
             ok: false,
             svg: None,
-            message: "未检测到本地 latex/dvisvgm 命令，已使用内置高保真 SVG+KaTeX 矢量渲染引擎".into(),
+            message: format!(
+                "未检测到本地 {}/dvisvgm 命令，已使用内置高保真 SVG+KaTeX 矢量渲染引擎",
+                engine
+            ),
         }
     };
 

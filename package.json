@@ -14,6 +14,7 @@
   },
   "type": "module",
   "scripts": {
+    "adapters:stage": "node scripts/prepare-adapters.mjs",
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",

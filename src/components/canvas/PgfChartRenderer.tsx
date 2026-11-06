@@ -199,16 +199,16 @@ export const PgfChartRenderer: React.FC<PgfChartRendererProps> = ({
       onPointerDown={(e) => onPointerDown(e, chart.id)}
       className="cursor-move"
     >
-      {/* White Paper Card Container for PGFPlots Axis */}
+      {/* Selection / Hover Frame for PGFPlots Axis (transparent background) */}
       <rect
+        data-export-ignore="true"
         x={-6}
         y={-6}
         width={totalW + 12}
         height={totalH + (chart.subcaption ? 34 : 12)}
         rx={4}
-        fill="#FFFFFF"
-        fillOpacity={0.96}
-        stroke={selected ? '#2563EB' : 'transparent'}
+        fill="none"
+        stroke={selected ? '#2563EB' : 'none'}
         strokeWidth={selected ? 1.6 : 1}
         strokeDasharray={selected ? '4 2' : undefined}
       />
@@ -235,19 +235,26 @@ export const PgfChartRenderer: React.FC<PgfChartRendererProps> = ({
             : 'cursor-move group/title'
         }
       >
-        <title>拖拽可调整图表标题位置 · 双击直接编辑标题文字</title>
+        <title data-export-ignore="true">拖拽可调整图表标题位置 · 双击直接编辑标题文字</title>
         <rect
+          data-export-ignore="true"
           x={padL}
           y={2}
           width={plotW}
           height={22}
           rx={2}
-          fill="transparent"
+          fill="none"
           className="group-hover/title:stroke-blue-400 group-hover/title:fill-blue-50/30"
           strokeWidth={1}
           strokeDasharray="2 2"
         />
-        <foreignObject x={padL} y={2} width={plotW} height={22}>
+        <foreignObject
+          x={padL}
+          y={-1}
+          width={plotW}
+          height={26}
+          style={{ overflow: 'visible' }}
+        >
           <LatexLabel
             text={chart.title}
             fontSize={11.5}
@@ -554,19 +561,26 @@ export const PgfChartRenderer: React.FC<PgfChartRendererProps> = ({
             : 'cursor-move group/xlabel'
         }
       >
-        <title>拖拽可调整 X 轴标签位置 · 双击直接编辑 X 轴文字/公式</title>
+        <title data-export-ignore="true">拖拽可调整 X 轴标签位置 · 双击直接编辑 X 轴文字/公式</title>
         <rect
+          data-export-ignore="true"
           x={padL}
           y={totalH - 19}
           width={plotW}
           height={18}
           rx={2}
-          fill="transparent"
+          fill="none"
           className="group-hover/xlabel:stroke-blue-400 group-hover/xlabel:fill-blue-50/30"
           strokeWidth={1}
           strokeDasharray="2 2"
         />
-        <foreignObject x={padL} y={totalH - 19} width={plotW} height={18}>
+        <foreignObject
+          x={padL}
+          y={totalH - 23}
+          width={plotW}
+          height={26}
+          style={{ overflow: 'visible' }}
+        >
           <LatexLabel text={chart.xlabel} fontSize={10.5} color="#334155" />
         </foreignObject>
       </g>
@@ -595,19 +609,26 @@ export const PgfChartRenderer: React.FC<PgfChartRendererProps> = ({
             : 'cursor-move group/ylabel'
         }
       >
-        <title>拖拽可调整 Y 轴标签位置 · 双击直接编辑 Y 轴文字/公式</title>
+        <title data-export-ignore="true">拖拽可调整 Y 轴标签位置 · 双击直接编辑 Y 轴文字/公式</title>
         <rect
+          data-export-ignore="true"
           x={-plotH / 2}
           y={-9}
           width={plotH}
           height={18}
           rx={2}
-          fill="transparent"
+          fill="none"
           className="group-hover/ylabel:stroke-blue-400 group-hover/ylabel:fill-blue-50/30"
           strokeWidth={1}
           strokeDasharray="2 2"
         />
-        <foreignObject x={-plotH / 2} y={-9} width={plotH} height={18}>
+        <foreignObject
+          x={-plotH / 2}
+          y={-13}
+          width={plotH}
+          height={26}
+          style={{ overflow: 'visible' }}
+        >
           <LatexLabel text={chart.ylabel} fontSize={10.5} color="#334155" />
         </foreignObject>
       </g>
@@ -625,16 +646,23 @@ export const PgfChartRenderer: React.FC<PgfChartRendererProps> = ({
           className="cursor-text group/subcap"
         >
           <rect
+            data-export-ignore="true"
             x={8}
             y={totalH + 2}
             width={totalW - 16}
             height={20}
             rx={2}
-            fill="transparent"
+            fill="none"
             className="group-hover/subcap:stroke-blue-400 group-hover/subcap:fill-blue-50/30"
             strokeDasharray="2 2"
           />
-          <foreignObject x={8} y={totalH + 2} width={totalW - 16} height={20}>
+          <foreignObject
+            x={8}
+            y={totalH - 1}
+            width={totalW - 16}
+            height={26}
+            style={{ overflow: 'visible' }}
+          >
             <LatexLabel
               text={chart.subcaption}
               fontSize={11.5}
@@ -667,7 +695,7 @@ export const PgfChartRenderer: React.FC<PgfChartRendererProps> = ({
               onPointerMove={handlePartMove}
               onPointerUp={handlePartUp}
             >
-              <title>
+              <title data-export-ignore="true">
                 拖拽自由移动图例位置 · 双击任意图例项可直接修改图例名称
               </title>
               <rect
@@ -717,7 +745,7 @@ export const PgfChartRenderer: React.FC<PgfChartRendererProps> = ({
 
       {/* Direct Canvas Resize Handles when Chart is Selected */}
       {selected && (
-        <g>
+        <g data-export-ignore="true">
           {/* Right width resize handle */}
           <rect
             x={totalW + 2}

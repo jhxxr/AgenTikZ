@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useAgentStore } from '../../store/useAgentStore';
 import { useWorkspaceStore } from '../../store/useWorkspaceStore';
+import { useSettingsStore } from '../../store/useSettingsStore';
 import { AcpAgentId } from '../../types/acp';
 import {
   Bot,
@@ -14,6 +15,7 @@ import {
   Plus,
   RotateCcw,
   Send,
+  Settings,
   Sparkles,
   Terminal,
   Wrench,
@@ -42,6 +44,7 @@ export const RightAgentPanel: React.FC = () => {
   } = useAgentStore();
 
   const { selectedIds, parsedDoc, setLeftTab } = useWorkspaceStore();
+  const { openSettings } = useSettingsStore();
 
   const [inputText, setInputText] = useState('');
   const [showHistoryDropdown, setShowHistoryDropdown] = useState(false);
@@ -112,6 +115,13 @@ export const RightAgentPanel: React.FC = () => {
 
           <div className="flex items-center gap-1">
             <button
+              onClick={() => openSettings('agent')}
+              className="p-1.5 text-slate-600 hover:text-blue-600 hover:bg-white rounded-md border border-transparent hover:border-slate-200 transition-colors cursor-pointer"
+              title="打开 Agent 设置 (适配器探测 / 握手测试 / 代理 / 提示词)"
+            >
+              <Settings className="w-3.5 h-3.5" />
+            </button>
+            <button
               onClick={createNewSession}
               className="p-1.5 text-slate-600 hover:text-blue-600 hover:bg-white rounded-md border border-transparent hover:border-slate-200 transition-colors"
               title="新建对话"
@@ -166,7 +176,7 @@ export const RightAgentPanel: React.FC = () => {
             >
               {providers.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.name}
+                  {p.name}{p.detected ? ' · 已就绪' : ''}
                 </option>
               ))}
             </select>
@@ -219,11 +229,24 @@ export const RightAgentPanel: React.FC = () => {
               </div>
             )}
             <p className="text-[10px] text-slate-500 leading-snug">
-              {activeProvider.detected ? '已找到本地程序（协议和登录状态在发送时检查）' : '未检测到本地 ACP 程序，请先安装适配器'}
+              {activeProvider.detected
+                ? `已就绪${activeProvider.version ? ` (${activeProvider.version})` : ''} — 发送时建立 ACP 会话`
+                : '未检测到本地 Agent CLI 或 ACP 适配器，请先安装并登录对应 CLI'}
             </p>
-            <p className="text-[10px] text-slate-500 leading-snug">
-              {activeProvider.description}。凭证由 Agent CLI 管理；附加上下文可能发送给该 Agent 配置的模型服务。当前权限请求默认拒绝，不会隐式下载程序。
-            </p>
+            <div className="pt-1 flex items-center justify-between border-t border-slate-100">
+              <span className="text-[10px] text-slate-400">
+                {activeProvider.resolvedPath
+                  ? `路径: ${activeProvider.resolvedPath}`
+                  : '支持双层检测与内置适配器'}
+              </span>
+              <button
+                type="button"
+                onClick={() => openSettings('agent')}
+                className="text-[10.5px] font-medium text-blue-600 hover:text-blue-700 cursor-pointer"
+              >
+                打开完整 Agent 设置 →
+              </button>
+            </div>
           </div>
         )}
       </div>

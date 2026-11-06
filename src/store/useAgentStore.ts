@@ -2,22 +2,28 @@ import { create } from 'zustand';
 import {
   AcpAgentId,
   AcpAgentProvider,
+  AcpHandshakeResult,
   AcpStreamEvent,
   AgentChatMessage,
   AgentSession,
 } from '../types/acp';
 import { useWorkspaceStore } from './useWorkspaceStore';
+import {
+  buildCustomAcpCommandSpec,
+  resolveEffectiveUserAgent,
+  useSettingsStore,
+} from './useSettingsStore';
 
 const DEFAULT_ACP_PROVIDERS: AcpAgentProvider[] = [
   { id: 'claude-code', name: 'Claude Code (ACP)', command: 'claude-agent-acp', args: [],
     protocol: 'ACP (JSON-RPC 2.0 / stdio)', detected: false,
-    description: '需要本地 claude-agent-acp 适配器与 CLI 登录', badgeColor: '#D97706' },
+    description: '内置 claude-agent-acp 适配器（或优先使用 PATH 适配器），驱动本地 claude CLI', badgeColor: '#D97706' },
   { id: 'opencode', name: 'OpenCode (ACP)', command: 'opencode', args: ['acp'],
     protocol: 'ACP (JSON-RPC 2.0 / stdio)', detected: false,
-    description: '连接本地 OpenCode ACP 程序', badgeColor: '#2563EB' },
+    description: '连接本地 OpenCode 原生 ACP 程序 (opencode acp)', badgeColor: '#2563EB' },
   { id: 'codex-cli', name: 'Codex CLI (ACP)', command: 'codex-acp', args: [],
     protocol: 'ACP (JSON-RPC 2.0 / stdio)', detected: false,
-    description: '需要本地 codex-acp 适配器与 CLI 登录', badgeColor: '#059669' },
+    description: '内置 codex-acp 适配器（或优先使用 PATH 适配器），驱动本地 codex CLI', badgeColor: '#059669' },
   { id: 'gemini-cli', name: 'Gemini CLI (ACP)', command: 'gemini', args: ['--acp'],
     protocol: 'ACP (JSON-RPC 2.0 / stdio)', detected: false,
     description: '连接本地 Gemini ACP 程序', badgeColor: '#7C3AED' },
@@ -50,16 +56,18 @@ interface AgentStoreState {
   createNewSession: () => void;
   switchSession: (sessionId: string) => void;
   probeLocalAgents: () => Promise<void>;
+  testAgentHandshake: (agentId: AcpAgentId) => Promise<AcpHandshakeResult>;
   sendPromptToAgent: (promptText: string) => Promise<void>;
   applyPatchProposal: (messageId: string) => void;
   revertPatchProposal: (messageId: string) => void;
 }
 
+const initialSettings = useSettingsStore.getState();
 const initialSessionId = 'session_1';
 const initialSession: AgentSession = {
-  id: initialSessionId, title: '新会话', agentId: 'claude-code', createdAt: '刚刚',
+  id: initialSessionId, title: '新会话', agentId: initialSettings.defaultAgentId, createdAt: '刚刚',
   messages: [{
-    id: 'msg_welcome', role: 'system', agentId: 'claude-code',
+    id: 'msg_welcome', role: 'system', agentId: initialSettings.defaultAgentId,
     timestamp: new Date().toTimeString().slice(0, 5),
     content: '尚未连接 Agent。发送时会启动本地已安装的 ACP 程序；请先安装对应适配器并完成 CLI 登录。不会下载程序或生成模拟回复。\n\n可附加画布与选中元素，生成的完整 TikZ 代码需要预览并确认后才会应用。',
   }],
@@ -67,31 +75,44 @@ const initialSession: AgentSession = {
 
 export const useAgentStore = create<AgentStoreState>((set, get) => ({
   providers: DEFAULT_ACP_PROVIDERS,
-  activeAgentId: 'claude-code',
-  customCommand: 'claude-agent-acp',
+  activeAgentId: initialSettings.defaultAgentId,
+  customCommand: buildCustomAcpCommandSpec(
+    initialSettings.customAcpCommand,
+    initialSettings.customAcpArgs,
+    initialSettings.customAcpEnvJson
+  ),
   mcpServerEnabled: false,
-  attachCanvasContext: true,
-  attachSelectionContext: true,
+  attachCanvasContext: initialSettings.defaultAttachCanvas,
+  attachSelectionContext: initialSettings.defaultAttachSelection,
   isStreaming: false,
   sessions: [initialSession],
   activeSessionId: initialSessionId,
 
   setActiveAgentId: (activeAgentId) => set({ activeAgentId }),
-  setCustomCommand: (customCommand) => set({ customCommand }),
+  setCustomCommand: (customCommand) => {
+    set({ customCommand });
+    useSettingsStore.getState().updateSettings({ customAcpCommand: customCommand });
+  },
   setMcpServerEnabled: (mcpServerEnabled) => set({ mcpServerEnabled }),
   setAttachCanvasContext: (attachCanvasContext) => set({ attachCanvasContext }),
   setAttachSelectionContext: (attachSelectionContext) => set({ attachSelectionContext }),
   createNewSession: () => {
     const { activeAgentId, sessions } = get();
+    const prefs = useSettingsStore.getState();
     const id = `session_${crypto.randomUUID()}`;
-    set({ sessions: [{
-      id, title: `会话 #${sessions.length + 1}`, agentId: activeAgentId, createdAt: '刚刚',
-      messages: [{
-        id: `msg_${id}`, role: 'system', agentId: activeAgentId,
-        timestamp: new Date().toTimeString().slice(0, 5),
-        content: '新对话已创建。发送后将尝试连接本地 ACP 程序。',
-      }],
-    }, ...sessions], activeSessionId: id });
+    set({
+      attachCanvasContext: prefs.defaultAttachCanvas,
+      attachSelectionContext: prefs.defaultAttachSelection,
+      sessions: [{
+        id, title: `会话 #${sessions.length + 1}`, agentId: activeAgentId, createdAt: '刚刚',
+        messages: [{
+          id: `msg_${id}`, role: 'system', agentId: activeAgentId,
+          timestamp: new Date().toTimeString().slice(0, 5),
+          content: '新对话已创建。发送后将尝试连接本地 ACP 程序。',
+        }],
+      }, ...sessions],
+      activeSessionId: id,
+    });
   },
   switchSession: (activeSessionId) => {
     const session = get().sessions.find((item) => item.id === activeSessionId);
@@ -101,15 +122,97 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
     try {
       if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
       const { invoke } = await import('@tauri-apps/api/core');
-      const results = await invoke<Array<{ id: string; detected: boolean; version?: string }>>(
-        'acp_probe_agents', { customCommand: get().customCommand },
-      );
-      set((state) => ({ providers: state.providers.map((provider) => {
-        const found = results.find((item) => item.id === provider.id);
-        return found ? { ...provider, detected: found.detected, version: found.version || undefined } : provider;
-      }) }));
+      const results = await invoke<Array<{
+        id: string;
+        detected: boolean;
+        version?: string;
+        binaryAvailable?: boolean;
+        resolvedPath?: string;
+        acpBundled?: boolean;
+        acpBundledVersion?: string;
+        installHint?: string;
+        diagnostic?: string;
+      }>>('acp_probe_agents', { customCommand: get().customCommand });
+      set((state) => ({
+        providers: state.providers.map((provider) => {
+          const found = results.find((item) => item.id === provider.id);
+          return found
+            ? {
+                ...provider,
+                detected: found.detected,
+                version: found.version || undefined,
+                binaryAvailable: found.binaryAvailable ?? found.detected,
+                resolvedPath: found.resolvedPath || undefined,
+                acpBundled: found.acpBundled ?? false,
+                acpBundledVersion: found.acpBundledVersion || undefined,
+                installHint: found.installHint || undefined,
+                diagnostic: found.diagnostic || undefined,
+              }
+            : provider;
+        }),
+      }));
     } catch {
-      set((state) => ({ providers: state.providers.map((provider) => ({ ...provider, detected: false })) }));
+      set((state) => ({
+        providers: state.providers.map((provider) => ({ ...provider, detected: false })),
+      }));
+    }
+  },
+  testAgentHandshake: async (agentId) => {
+    set((state) => ({
+      providers: state.providers.map((p) =>
+        p.id === agentId
+          ? { ...p, handshakeStatus: 'testing', handshakeMessage: '正在执行 ACP Initialize 握手探测...' }
+          : p
+      ),
+    }));
+    try {
+      if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
+        const res: AcpHandshakeResult = {
+          ok: false,
+          message: '浏览器预览模式不支持本地 ACP 进程握手，请在 Tauri 桌面端测试。',
+        };
+        set((state) => ({
+          providers: state.providers.map((p) =>
+            p.id === agentId ? { ...p, handshakeStatus: 'error', handshakeMessage: res.message } : p
+          ),
+        }));
+        return res;
+      }
+      const { invoke } = await import('@tauri-apps/api/core');
+      const settings = useSettingsStore.getState();
+      const proxyUrl = settings.proxyEnabled ? settings.proxyUrl : undefined;
+      const userAgent = resolveEffectiveUserAgent(settings.userAgentPreset, settings.customUserAgent);
+      const res = await invoke<AcpHandshakeResult>('acp_test_agent', {
+        agentId,
+        customCommand: get().customCommand,
+        proxyUrl,
+        userAgent,
+      });
+      set((state) => ({
+        providers: state.providers.map((p) =>
+          p.id === agentId
+            ? {
+                ...p,
+                detected: res.ok ? true : p.detected,
+                handshakeStatus: res.ok ? 'ok' : 'error',
+                handshakeMessage: res.message,
+                handshakeAgentName: res.agentName
+                  ? `${res.agentName}${res.agentVersion ? ` v${res.agentVersion}` : ''}`
+                  : undefined,
+              }
+            : p
+        ),
+      }));
+      return res;
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      const res: AcpHandshakeResult = { ok: false, message: msg };
+      set((state) => ({
+        providers: state.providers.map((p) =>
+          p.id === agentId ? { ...p, handshakeStatus: 'error', handshakeMessage: msg } : p
+        ),
+      }));
+      return res;
     }
   },
   sendPromptToAgent: async (promptText) => {
@@ -159,7 +262,10 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
     if (!message?.patchProposal || message.patchProposal.status === 'applied') return;
     const currentCode = useWorkspaceStore.getState().tikzCode;
     useWorkspaceStore.getState().setTikzCode(message.patchProposal.newTikzCode, true);
-    if (message.patchProposal.affectedElementIds.length > 0) {
+    if (
+      useSettingsStore.getState().autoSelectAffectedNodes &&
+      message.patchProposal.affectedElementIds.length > 0
+    ) {
       useWorkspaceStore.getState().setSelectedIds(message.patchProposal.affectedElementIds);
     }
     updateAgentMessage(activeSessionId, messageId, (item) => ({ ...item,
@@ -237,9 +343,24 @@ async function sendViaRealAcp(
           timestamp: new Date().toTimeString().slice(0, 5), content: '',
         }] }
       : session) }));
+    const settings = useSettingsStore.getState();
+    const proxyUrl = settings.proxyEnabled ? settings.proxyUrl : undefined;
+    const userAgent = resolveEffectiveUserAgent(settings.userAgentPreset, settings.customUserAgent);
     const response = await invoke<{
       usedNativeCli: boolean; thought?: string | null; reply?: string | null; proposedTikz?: string | null;
-    }>('acp_send_prompt', { requestId, agentId, prompt, canvasTikz, selectedIds, customCommand, history });
+    }>('acp_send_prompt', {
+      requestId,
+      agentId,
+      prompt,
+      canvasTikz,
+      selectedIds,
+      customCommand,
+      history,
+      proxyUrl,
+      userAgent,
+      responseLanguage: settings.responseLanguage,
+      personalPrompt: settings.personalPrompt || undefined,
+    });
     finished = true;
     if (!response?.usedNativeCli) throw new Error('本地 ACP Agent 未启动。请检查安装和 CLI 登录状态。');
     if (!response.reply?.trim()) throw new Error('ACP Agent 未返回文本。未生成画布修改。');

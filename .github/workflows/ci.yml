@@ -68,5 +68,8 @@ jobs:
       - name: Build frontend production bundle (TypeScript + Vite)
         run: npm run build
 
+      - name: Stage bundled ACP adapters
+        run: npm run adapters:stage
+
       - name: Run Tauri Rust backend unit tests
         run: cargo test --manifest-path src-tauri/Cargo.toml

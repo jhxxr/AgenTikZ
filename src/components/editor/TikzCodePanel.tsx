@@ -7,6 +7,7 @@ import {
 } from '@codemirror/view';
 import { StateEffect, StateField, Range } from '@codemirror/state';
 import { useWorkspaceStore } from '../../store/useWorkspaceStore';
+import { useSettingsStore } from '../../store/useSettingsStore';
 import { JOURNAL_THEMES } from '../../core/themes/journal-presets';
 import { FULL_FIGURE_TEMPLATES } from '../../core/templates/dl-templates';
 import {
@@ -25,7 +26,7 @@ export function buildStandaloneLatexDocument(
 ): string {
   const theme = JOURNAL_THEMES[themeId];
   return [
-    '\\documentclass[tikz,border=4pt]{standalone}',
+    '\\documentclass[border=4pt]{standalone}',
     '\\usepackage{tikz}',
     '\\usepackage{pgfplots}',
     '\\usepackage{amsmath,amssymb}',
@@ -34,6 +35,22 @@ export function buildStandaloneLatexDocument(
     '',
     '% --- Publication Theme Color Palette ---',
     theme.tikzPreambleColors,
+    '',
+    '% --- AgenTikZ Semantic Attribute Keys & Default Node Styles ---',
+    '\\tikzset{',
+    '  subtype/.code={},',
+    '  depth/.code={},',
+    '  channels/.code={},',
+    '  sublabel/.code={},',
+    '  module/.style={draw=cPrimaryBorder, fill=cPrimaryFill, rounded corners=2pt, minimum width=2.4cm, minimum height=0.85cm, align=center, font=\\small},',
+    '  attn/.style={module, draw=cSecondaryBorder, fill=cSecondaryFill},',
+    '  norm/.style={module, draw=cAccentBorder, fill=cAccentFill, minimum height=0.68cm},',
+    '  op/.style={circle, draw=cNeutralBorder, fill=cNeutralFill, inner sep=1pt, minimum size=0.52cm, font=\\small},',
+    '  io/.style={module, draw=cNeutralBorder, fill=cNeutralFill, minimum height=0.7cm},',
+    '  container/.style={draw=cNeutralBorder, fill=cNeutralFill, dashed, rounded corners=4pt},',
+    '  flow/.style={-{Stealth[length=2.2mm, width=1.6mm]}, draw=cEdge, semithick},',
+    '  res/.style={-{Stealth[length=2.2mm, width=1.6mm]}, draw=cResidual, semithick, rounded corners=3pt}',
+    '}',
     '',
     '\\begin{document}',
     tikzCode,
@@ -259,6 +276,7 @@ export const TikzCodePanel: React.FC = () => {
     setSelectedIds,
     loadTemplate,
   } = useWorkspaceStore();
+  const { codeFontSize, showLineNumbers } = useSettingsStore();
 
   const [copiedMode, setCopiedMode] = useState<'tikz' | 'standalone' | null>(
     null
@@ -390,7 +408,7 @@ export const TikzCodePanel: React.FC = () => {
             editorViewRef.current = view;
           }}
           basicSetup={{
-            lineNumbers: true,
+            lineNumbers: showLineNumbers,
             foldGutter: true,
             highlightActiveLine: true,
             bracketMatching: true,
@@ -401,7 +419,7 @@ export const TikzCodePanel: React.FC = () => {
             EditorView.theme({
               '&': {
                 backgroundColor: '#FFFFFF',
-                fontSize: '12px',
+                fontSize: `${codeFontSize}px`,
               },
               '.cm-content': {
                 fontFamily:

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { parseTikzDocument } from '../parser';
 import {
   duplicateElementsInSource,
+  formatCoordNum,
   patchChartElement,
   patchChartLegendPosition,
   patchEdgeElement,
@@ -11,6 +12,7 @@ import {
   patchNodeOptions,
 } from '../patcher';
 import { FULL_FIGURE_TEMPLATES } from '../../templates/dl-templates';
+import { useSettingsStore } from '../../../store/useSettingsStore';
 
 const SAMPLE_TIKZ = `% Header comment that must NEVER be lost
 \\begin{tikzpicture}[>=Stealth]
@@ -203,5 +205,15 @@ describe('Lossless TikZ CST/AST Parser & Surgical Patcher', () => {
       expect(doc.elements.length).toBeGreaterThan(0);
       expect(doc.diagnostics.length).toBe(0);
     }
+  });
+
+  it('respects coordPrecision setting (1 vs 2 decimals) in formatCoordNum', () => {
+    useSettingsStore.getState().updateSettings({ coordPrecision: 1 });
+    expect(formatCoordNum(2.46)).toBe('2.5');
+    expect(formatCoordNum(3)).toBe('3.0');
+
+    useSettingsStore.getState().updateSettings({ coordPrecision: 2 });
+    expect(formatCoordNum(2.46)).toBe('2.45');
+    expect(formatCoordNum(3)).toBe('3.0');
   });
 });

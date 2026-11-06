@@ -3,12 +3,17 @@ import {
   CanvasTool,
   useWorkspaceStore,
 } from '../../store/useWorkspaceStore';
+import { useSettingsStore } from '../../store/useSettingsStore';
 import { JOURNAL_THEMES } from '../../core/themes/journal-presets';
 import { JournalThemeId } from '../../types/theme';
 import {
   buildPaperFigureEnvironment,
   buildStandaloneLatexDocument,
 } from '../editor/TikzCodePanel';
+import {
+  exportCleanCanvasPng,
+  exportCleanCanvasSvg,
+} from '../../core/export/svg-exporter';
 import {
   AlignCenterHorizontal,
   AlignCenterVertical,
@@ -28,6 +33,7 @@ import {
   Palette,
   Play,
   Redo2,
+  Settings,
   Sigma,
   Square,
   Sparkles,
@@ -54,6 +60,7 @@ export const TopToolbar: React.FC = () => {
     setActiveTool, setActiveTheme, setPreviewMode, setCompiledSvg,
     setIsCompilingTex, undo, redo, alignSelectedNodes,
   } = useWorkspaceStore();
+  const { openSettings, texEngine } = useSettingsStore();
 
   const [showExportMenu, setShowExportMenu] = useState(false);
   const exportMenuRef = useRef<HTMLDivElement>(null);
@@ -108,7 +115,10 @@ export const TopToolbar: React.FC = () => {
       const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
       if (isTauri) {
         const { invoke } = await import('@tauri-apps/api/core');
-        const res = await invoke<{ ok: boolean; svg?: string; message: string }>('tex_compile_preview', { texSource: fullTex });
+        const res = await invoke<{ ok: boolean; svg?: string; message: string }>('tex_compile_preview', {
+          texSource: fullTex,
+          texEngine,
+        });
         if (res.ok && res.svg) {
           setCompiledSvg(res.svg, res.message);
           setPreviewMode('tex_split');
@@ -116,8 +126,8 @@ export const TopToolbar: React.FC = () => {
           return;
         }
       }
-      const svgEl = document.getElementById('agentikz-canvas-svg');
-      if (svgEl) setCompiledSvg(svgEl.outerHTML, '内置高保真矢量引擎渲染');
+      const svgEl = document.getElementById('agentikz-canvas-svg') as SVGSVGElement | null;
+      if (svgEl) setCompiledSvg(exportCleanCanvasSvg(svgEl), '内置高保真矢量引擎渲染 (无背景/纯矢量公式)');
       setPreviewMode(previewMode === 'tex_split' ? 'interactive' : 'tex_split');
     } catch {
       setPreviewMode(previewMode === 'tex_split' ? 'interactive' : 'tex_split');
@@ -127,10 +137,30 @@ export const TopToolbar: React.FC = () => {
   };
 
   const handleExportSvg = () => {
-    const svgEl = document.getElementById('agentikz-canvas-svg');
+    const svgEl = document.getElementById('agentikz-canvas-svg') as SVGSVGElement | null;
     if (!svgEl) return;
-    triggerFileDownload('agentikz-figure.svg', new XMLSerializer().serializeToString(svgEl), 'image/svg+xml;charset=utf-8');
+    const cleanSvg = exportCleanCanvasSvg(svgEl);
+    triggerFileDownload('agentikz-figure.svg', cleanSvg, 'image/svg+xml;charset=utf-8');
     setShowExportMenu(false);
+  };
+
+  const handleExportPng = async () => {
+    const svgEl = document.getElementById('agentikz-canvas-svg') as SVGSVGElement | null;
+    if (!svgEl) return;
+    setShowExportMenu(false);
+    try {
+      const pngBlob = await exportCleanCanvasPng(svgEl, 3);
+      const url = URL.createObjectURL(pngBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'agentikz-figure.png';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Failed to export PNG:', err);
+    }
   };
 
   return (
@@ -222,6 +252,15 @@ export const TopToolbar: React.FC = () => {
           <span>{previewMode !== 'interactive' ? '退出预览' : 'TeX'}</span>
         </button>
 
+        <button
+          onClick={() => openSettings('agent')}
+          title="打开设置中心 (Ctrl+,) — Agent (ACP) 与通用配置"
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-medium bg-white/70 text-slate-700 border border-slate-200/70 hover:bg-white shadow-sm transition-all cursor-pointer"
+        >
+          <Settings className="w-3.5 h-3.5 text-slate-500" />
+          <span>设置</span>
+        </button>
+
         <div className="relative" ref={exportMenuRef}>
           <button onClick={() => setShowExportMenu(!showExportMenu)}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold bg-gradient-to-r from-slate-800 to-slate-900 hover:from-slate-700 hover:to-slate-800 text-white shadow-sm transition-all cursor-pointer">
@@ -242,8 +281,10 @@ export const TopToolbar: React.FC = () => {
                   action: () => { triggerFileDownload('figure-env.tex', buildPaperFigureEnvironment(tikzCode, parsedDoc.figureCaption, parsedDoc.figureLabel), 'text/plain;charset=utf-8'); setShowExportMenu(false); } },
                 { icon: <FileText className="w-4 h-4 text-emerald-500" />, title: 'Standalone 文档 (.tex)', desc: '含导言区与色彩宏',
                   action: () => { triggerFileDownload('figure-standalone.tex', buildStandaloneLatexDocument(tikzCode, activeThemeId), 'text/plain;charset=utf-8'); setShowExportMenu(false); } },
-                { icon: <ImageIcon className="w-4 h-4 text-amber-500" />, title: '矢量图 (.svg)', desc: 'Illustrator / Keynote',
+                { icon: <ImageIcon className="w-4 h-4 text-amber-500" />, title: '矢量图 (.svg)', desc: '无网格透明背景 · 纯矢量公式',
                   action: handleExportSvg },
+                { icon: <ImageIcon className="w-4 h-4 text-rose-500" />, title: '高清位图 (.png)', desc: '300DPI 透明背景 · PPT/文档即插即用',
+                  action: handleExportPng },
                 { icon: <Download className="w-4 h-4 text-purple-500" />, title: '打印 PDF (.pdf)', desc: '高清论文插图',
                   action: () => { setShowExportMenu(false); window.print(); } },
               ].map((item, i) => (

@@ -24,6 +24,8 @@ import {
   FULL_FIGURE_TEMPLATES,
   PRIMITIVE_LIBRARY,
 } from '../core/templates/dl-templates';
+import { JOURNAL_THEMES } from '../core/themes/journal-presets';
+import { useSettingsStore } from './useSettingsStore';
 
 export type LeftSidebarTab = 'library' | 'code';
 
@@ -184,15 +186,19 @@ function computeLineRangeForSelection(
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   tikzCode: initialCode,
   parsedDoc: initialParsed,
-  activeThemeId: 'neurips',
+  activeThemeId: (
+    useSettingsStore.getState().defaultThemeId in JOURNAL_THEMES
+      ? useSettingsStore.getState().defaultThemeId
+      : 'neurips'
+  ) as JournalThemeId,
   activeTemplateId: FULL_FIGURE_TEMPLATES[0].id,
   leftTab: 'code',
   activeTool: 'select',
   selectedIds: ['mha'],
   highlightedLineRange: computeLineRangeForSelection(initialParsed, ['mha']),
   lastChangeInfo: null,
-  showGrid: true,
-  snapToGrid: true,
+  showGrid: useSettingsStore.getState().showGridByDefault,
+  snapToGrid: useSettingsStore.getState().snapToGridByDefault,
   zoom: 1,
   pan: FULL_FIGURE_TEMPLATES[0].recommendedPan || { x: 80, y: 495 },
   previewMode: 'interactive',

@@ -1,5 +1,6 @@
 import React, { useRef, useState } from 'react';
 import { useWorkspaceStore } from '../../store/useWorkspaceStore';
+import { useSettingsStore } from '../../store/useSettingsStore';
 import { TikzEdgeElement, TikzNodeElement } from '../../types/tikz-ast';
 import {
   JOURNAL_THEMES,
@@ -513,10 +514,10 @@ export const InteractiveCanvas: React.FC = () => {
     if (!fromNode || !toNode) return null;
 
     const isSelected = selectedIds.includes(edge.id);
-    const strokeHex = isSelected
-      ? '#2563EB'
-      : resolveTikzColor(edge.stroke, 'stroke', activeThemeId);
-    const strokeW = ptToPx(edge.lineWidth, 0.7) + (isSelected ? 0.8 : 0);
+    const origStrokeHex = resolveTikzColor(edge.stroke, 'stroke', activeThemeId);
+    const strokeHex = isSelected ? '#2563EB' : origStrokeHex;
+    const origStrokeW = ptToPx(edge.lineWidth, 0.7);
+    const strokeW = origStrokeW + (isSelected ? 0.8 : 0);
 
     let pathD = '';
     let labelPos = { x: 0, y: 0 };
@@ -630,13 +631,25 @@ export const InteractiveCanvas: React.FC = () => {
         }}
         className="cursor-pointer group"
       >
-        <title>点击选中连线 · 双击直接编辑连线文字/公式标注</title>
-        <path d={pathD} fill="none" stroke="transparent" strokeWidth={12} />
+        <title data-export-ignore="true">
+          点击选中连线 · 双击直接编辑连线文字/公式标注
+        </title>
+        <path
+          d={pathD}
+          fill="none"
+          stroke="none"
+          pointerEvents="stroke"
+          strokeWidth={12}
+          data-export-ignore="true"
+        />
         <path
           d={pathD}
           fill="none"
           stroke={strokeHex}
           strokeWidth={strokeW}
+          data-orig-stroke={origStrokeHex}
+          data-orig-stroke-width={origStrokeW}
+          data-orig-marker-end={edge.arrowEnd ? 'url(#tikz-arrow)' : ''}
           strokeLinejoin="round"
           strokeDasharray={edge.dashed ? '4 2.5' : undefined}
           markerEnd={
@@ -649,19 +662,21 @@ export const InteractiveCanvas: React.FC = () => {
         />
         {edge.label && (
           <g transform={`translate(${labelPos.x}, ${labelPos.y})`}>
-            <rect
-              x={-36}
-              y={-9}
-              width={72}
-              height={18}
-              rx={2}
-              fill="#FFFFFF"
-              fillOpacity={0.95}
-              stroke={isSelected ? '#93C5FD' : 'transparent'}
-              strokeWidth={0.8}
-            />
-            <foreignObject x={-52} y={-10} width={104} height={20}>
-              <LatexLabel text={edge.label} fontSize={10} color="#334155" />
+            <foreignObject
+              x={-90}
+              y={-15}
+              width={180}
+              height={30}
+              style={{ overflow: 'visible' }}
+            >
+              <div className="w-full h-full flex items-center justify-center">
+                <LatexLabel
+                  text={edge.label}
+                  fontSize={10}
+                  color="#334155"
+                  className="bg-white/95 px-1.5 py-0.5 rounded-xs"
+                />
+              </div>
             </foreignObject>
           </g>
         )}
@@ -675,6 +690,7 @@ export const InteractiveCanvas: React.FC = () => {
               transform={`translate(${labelPos.x}, ${labelPos.y})`}
               onPointerDown={(e) => handleStartEdgeRouteDrag(e, edge)}
               className="cursor-ew-resize"
+              data-export-ignore="true"
             >
               <title>左右拖拽直接调节残差跳线跨度 / 弧线弯曲度</title>
               <circle
@@ -737,10 +753,18 @@ export const InteractiveCanvas: React.FC = () => {
               fillOpacity={0.55}
               stroke={isSelected ? '#2563EB' : strokeHex}
               strokeWidth={isSelected ? 1.6 : strokeW}
+              data-orig-stroke={strokeHex}
+              data-orig-stroke-width={strokeW}
               strokeDasharray="5 3.5"
             />
-            <foreignObject x={left + 10} y={top - 11} width={w - 20} height={22}>
-              <div className="flex items-center justify-start">
+            <foreignObject
+              x={left + 10}
+              y={top - 14}
+              width={Math.max(w - 20, 260)}
+              height={28}
+              style={{ overflow: 'visible' }}
+            >
+              <div className="w-full h-full flex items-center justify-start">
                 <LatexLabel
                   text={node.label}
                   fontSize={10.5}
@@ -769,6 +793,8 @@ export const InteractiveCanvas: React.FC = () => {
                   fill={fillHex}
                   stroke={isSelected ? '#2563EB' : strokeHex}
                   strokeWidth={strokeW}
+                  data-orig-stroke={strokeHex}
+                  data-orig-stroke-width={strokeW}
                   strokeLinejoin="round"
                 />
                 <path
@@ -777,6 +803,8 @@ export const InteractiveCanvas: React.FC = () => {
                   fillOpacity={0.18}
                   stroke={isSelected ? '#2563EB' : strokeHex}
                   strokeWidth={strokeW}
+                  data-orig-stroke={strokeHex}
+                  data-orig-stroke-width={strokeW}
                   strokeLinejoin="round"
                 />
                 <rect
@@ -787,6 +815,8 @@ export const InteractiveCanvas: React.FC = () => {
                   fill={fillHex}
                   stroke={isSelected ? '#2563EB' : strokeHex}
                   strokeWidth={isSelected ? 1.7 : strokeW}
+                  data-orig-stroke={strokeHex}
+                  data-orig-stroke-width={strokeW}
                 />
                 <line
                   x1={left + w * 0.33}
@@ -806,23 +836,32 @@ export const InteractiveCanvas: React.FC = () => {
                   strokeOpacity={0.22}
                   strokeWidth={0.7}
                 />
-                <foreignObject x={left} y={top} width={w} height={h}>
+                <foreignObject
+                  x={left}
+                  y={top}
+                  width={w}
+                  height={h}
+                  style={{ overflow: 'visible' }}
+                >
                   <div className="w-full h-full flex items-center justify-center">
                     <LatexLabel text={node.label} fontSize={13} />
                   </div>
                 </foreignObject>
                 {node.channels && (
                   <foreignObject
-                    x={left - 28}
-                    y={top + h + 3}
-                    width={w + 56}
-                    height={20}
+                    x={cx - Math.max(w / 2 + 56, 96)}
+                    y={top + h + 2}
+                    width={Math.max(w + 112, 192)}
+                    height={26}
+                    style={{ overflow: 'visible' }}
                   >
-                    <LatexLabel
-                      text={`$${node.channels}$`}
-                      fontSize={9.5}
-                      color="#475569"
-                    />
+                    <div className="w-full h-full flex items-center justify-center">
+                      <LatexLabel
+                        text={`$${node.channels.replace(/^\$+|\$+$/g, '')}$`}
+                        fontSize={9.5}
+                        color="#475569"
+                      />
+                    </div>
                   </foreignObject>
                 )}
                 {/* Dedicated 3D Depth Handle when Cuboid is Selected */}
@@ -835,6 +874,7 @@ export const InteractiveCanvas: React.FC = () => {
                     stroke="#FFFFFF"
                     strokeWidth={1.5}
                     className="cursor-ew-resize"
+                    data-export-ignore="true"
                     onPointerDown={(e) =>
                       handleStartNodeResize(e, node, 'cuboid_depth')
                     }
@@ -856,8 +896,16 @@ export const InteractiveCanvas: React.FC = () => {
               fill={fillHex}
               stroke={isSelected ? '#2563EB' : strokeHex}
               strokeWidth={isSelected ? 1.8 : strokeW}
+              data-orig-stroke={strokeHex}
+              data-orig-stroke-width={strokeW}
             />
-            <foreignObject x={left} y={top} width={w} height={h}>
+            <foreignObject
+              x={left}
+              y={top}
+              width={w}
+              height={h}
+              style={{ overflow: 'visible' }}
+            >
               <div className="w-full h-full flex items-center justify-center">
                 <LatexLabel text={node.label} fontSize={14} />
               </div>
@@ -874,14 +922,20 @@ export const InteractiveCanvas: React.FC = () => {
               width={w}
               height={h}
               rx={3}
-              fill="#FFFFFF"
-              fillOpacity={0.9}
-              stroke={isSelected ? '#2563EB' : 'transparent'}
+              fill="none"
+              stroke={isSelected ? '#2563EB' : 'none'}
               strokeWidth={1.2}
               strokeDasharray="3 2"
               className="group-hover:stroke-blue-300"
+              data-export-ignore="true"
             />
-            <foreignObject x={left} y={top} width={w} height={h}>
+            <foreignObject
+              x={cx - Math.max(w / 2 + 40, 180)}
+              y={cy - Math.max(h / 2 + 10, 22)}
+              width={Math.max(w + 80, 360)}
+              height={Math.max(h + 20, 44)}
+              style={{ overflow: 'visible' }}
+            >
               <div
                 className="w-full h-full flex items-center justify-center px-2"
                 style={{ fontFamily: theme.fontFamily }}
@@ -906,14 +960,20 @@ export const InteractiveCanvas: React.FC = () => {
               width={w + 8}
               height={h + 4}
               rx={3}
-              fill="#FFFFFF"
-              fillOpacity={0.85}
-              stroke={isSelected ? '#2563EB' : 'transparent'}
+              fill="none"
+              stroke={isSelected ? '#2563EB' : 'none'}
               strokeWidth={1.2}
               strokeDasharray="3 2"
               className="group-hover:stroke-blue-300"
+              data-export-ignore="true"
             />
-            <foreignObject x={left - 20} y={top} width={w + 40} height={h}>
+            <foreignObject
+              x={cx - Math.max(w / 2 + 120, 220)}
+              y={cy - Math.max(h / 2 + 24, 40)}
+              width={Math.max(w + 240, 440)}
+              height={Math.max(h + 48, 80)}
+              style={{ overflow: 'visible' }}
+            >
               <div className="w-full h-full flex items-center justify-center">
                 <LatexLabel
                   text={node.label}
@@ -940,6 +1000,8 @@ export const InteractiveCanvas: React.FC = () => {
               fill={fillHex}
               stroke={isSelected ? '#2563EB' : strokeHex}
               strokeWidth={isSelected ? 1.8 : strokeW}
+              data-orig-stroke={strokeHex}
+              data-orig-stroke-width={strokeW}
               strokeDasharray={node.dashed ? '4 2.5' : undefined}
             />
             {node.subtype === 'mha' && (
@@ -955,7 +1017,13 @@ export const InteractiveCanvas: React.FC = () => {
                 strokeWidth={0.75}
               />
             )}
-            <foreignObject x={left + 4} y={top + 2} width={w - 8} height={h - 4}>
+            <foreignObject
+              x={left + 4}
+              y={top + 2}
+              width={w - 8}
+              height={h - 4}
+              style={{ overflow: 'visible' }}
+            >
               <div
                 className="w-full h-full flex items-center justify-center px-1"
                 style={{ fontFamily: theme.fontFamily }}
@@ -972,7 +1040,7 @@ export const InteractiveCanvas: React.FC = () => {
 
         {/* Selection Bounding Frame + 8-Way Resize Handles */}
         {isSelected && (
-          <g>
+          <g data-export-ignore="true">
             <rect
               x={left - 3}
               y={top - 3}
@@ -1043,8 +1111,11 @@ export const InteractiveCanvas: React.FC = () => {
           </g>
         )}
 
-        {/* 4 Interactive Connection Ports visible on hover */}
-        {node.subtype !== 'container' &&
+        {/* 4 Interactive Connection Ports visible only in edge/residual/connect modes */}
+        {(activeTool === 'edge' ||
+          activeTool === 'residual' ||
+          dragState?.mode === 'connect') &&
+          node.subtype !== 'container' &&
           node.subtype !== 'caption' &&
           [
             { key: 'north', px: cx, py: top },
@@ -1060,7 +1131,8 @@ export const InteractiveCanvas: React.FC = () => {
               fill="#FFFFFF"
               stroke="#2563EB"
               strokeWidth={1.5}
-              className="opacity-0 group-hover:opacity-100 hover:scale-125 transition-opacity cursor-crosshair"
+              data-export-ignore="true"
+              className="opacity-80 group-hover:opacity-100 hover:scale-125 transition-opacity cursor-crosshair"
               onPointerDown={(e) => handlePortPointerDown(e, node.id)}
             >
               <title>拖拽此锚点连线至其他节点</title>
@@ -1084,11 +1156,23 @@ export const InteractiveCanvas: React.FC = () => {
           e.preventDefault();
           if (e.shiftKey) redo();
           else undo();
+        } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+          e.preventDefault();
+          redo();
+        } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+          e.preventDefault();
+          setSelectedIds(parsedDoc.elements.map((el) => el.id));
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          setSelectedIds([]);
+          setActiveTool('select');
+          setInlineEditor(null);
         } else if (
           ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)
         ) {
           e.preventDefault();
-          const step = e.shiftKey ? 0.25 : 0.05;
+          const baseStep = useSettingsStore.getState().nudgeStepCm || 0.25;
+          const step = e.shiftKey ? baseStep * 2 : baseStep;
           if (e.key === 'ArrowUp') nudgeSelectedElements(0, step);
           if (e.key === 'ArrowDown') nudgeSelectedElements(0, -step);
           if (e.key === 'ArrowLeft') nudgeSelectedElements(-step, 0);
@@ -1121,6 +1205,7 @@ export const InteractiveCanvas: React.FC = () => {
               width={CM_TO_PX / 4}
               height={CM_TO_PX / 4}
               patternUnits="userSpaceOnUse"
+              data-export-ignore="true"
             >
               <circle cx={1} cy={1} r={0.65} fill="#E2E8F0" />
             </pattern>
@@ -1130,6 +1215,7 @@ export const InteractiveCanvas: React.FC = () => {
               height={CM_TO_PX}
               patternUnits="userSpaceOnUse"
               patternTransform={`translate(${originX % CM_TO_PX}, ${originY % CM_TO_PX})`}
+              data-export-ignore="true"
             >
               <rect
                 width={CM_TO_PX}
@@ -1163,17 +1249,34 @@ export const InteractiveCanvas: React.FC = () => {
               markerWidth="6.5"
               markerHeight="5.5"
               orient="auto-start-reverse"
+              data-export-ignore="true"
             >
               <path d="M 0 0.6 L 9.5 4 L 0 7.4 L 2.2 4 Z" fill="#2563EB" />
             </marker>
           </defs>
 
-          <rect width="100%" height="100%" fill="#FFFFFF" />
+          <rect
+            width="100%"
+            height="100%"
+            fill="#FFFFFF"
+            data-export-ignore="true"
+          />
 
-          <g transform={`scale(${zoom})`}>
-            {showGrid && <rect width={9999} height={9999} fill="url(#tikz-grid)" />}
+          <g id="agentikz-scene-root" transform={`scale(${zoom})`}>
             {showGrid && (
-              <g opacity={0.45} pointerEvents="none">
+              <rect
+                width={9999}
+                height={9999}
+                fill="url(#tikz-grid)"
+                data-export-ignore="true"
+              />
+            )}
+            {showGrid && (
+              <g
+                opacity={0.45}
+                pointerEvents="none"
+                data-export-ignore="true"
+              >
                 <line
                   x1={originX - 10}
                   y1={originY}
@@ -1211,6 +1314,7 @@ export const InteractiveCanvas: React.FC = () => {
                 stroke="#3B82F6"
                 strokeWidth={1}
                 strokeDasharray="4 3"
+                data-export-ignore="true"
               />
             )}
             {alignmentGuides.yCm !== undefined && (
@@ -1222,6 +1326,7 @@ export const InteractiveCanvas: React.FC = () => {
                 stroke="#3B82F6"
                 strokeWidth={1}
                 strokeDasharray="4 3"
+                data-export-ignore="true"
               />
             )}
 
@@ -1282,6 +1387,7 @@ export const InteractiveCanvas: React.FC = () => {
                     strokeWidth={1.6}
                     strokeDasharray="4 2"
                     markerEnd="url(#tikz-arrow-selected)"
+                    data-export-ignore="true"
                   />
                 );
               })()}
@@ -1322,7 +1428,7 @@ export const InteractiveCanvas: React.FC = () => {
       </div>
 
       {/* Publication Figure Caption Bar (`\caption{...}`) — Clickable to Edit */}
-      <div className="mx-auto mb-11 max-w-3xl w-[calc(100%-32px)] z-10 pointer-events-auto">
+      <div className="no-print mx-auto mb-11 max-w-3xl w-[calc(100%-32px)] z-10 pointer-events-auto">
         <div
           onClick={() =>
             setInlineEditor({
@@ -1633,7 +1739,7 @@ export const InteractiveCanvas: React.FC = () => {
       )}
 
       {/* Bottom Floating Status & Canvas Controls Bar */}
-      <div className="absolute bottom-2.5 left-3 right-3 flex items-center justify-between pointer-events-none">
+      <div className="no-print absolute bottom-2.5 left-3 right-3 flex items-center justify-between pointer-events-none">
         <div className="flex items-center gap-1.5 bg-white/95 border border-slate-200/90 shadow-xs rounded-lg px-2 py-1 pointer-events-auto">
           <button
             onClick={() => setZoom(zoom - 0.1)}

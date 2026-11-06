@@ -181,4 +181,24 @@ describe('real ACP frontend contract', () => {
     expect(response?.patchProposal?.newTikzCode).toBe('% real source from agent');
     expect(response?.patchProposal?.status).toBe('pending');
   });
+
+  it('persists customCommand to useSettingsStore and applies defaultAttachCanvas/Selection on createNewSession', async () => {
+    const { useSettingsStore, buildCustomAcpCommandSpec } = await import('../useSettingsStore');
+    const store = await freshStore();
+
+    const spec = buildCustomAcpCommandSpec('my-acp-bin', '--stdio --fast', '{"API_ENV":"prod"}');
+    expect(spec).toBe('{"command":"my-acp-bin","args":["--stdio","--fast"],"env":{"API_ENV":"prod"}}');
+
+    store.getState().setCustomCommand(spec);
+    expect(useSettingsStore.getState().customAcpCommand).toBe(spec);
+
+    useSettingsStore.getState().updateSettings({
+      defaultAttachCanvas: false,
+      defaultAttachSelection: false,
+    });
+    store.setState({ attachCanvasContext: true, attachSelectionContext: true });
+    store.getState().createNewSession();
+    expect(store.getState().attachCanvasContext).toBe(false);
+    expect(store.getState().attachSelectionContext).toBe(false);
+  });
 });

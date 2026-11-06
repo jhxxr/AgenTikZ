@@ -7,6 +7,8 @@ export type AcpAgentId =
   | 'kimi-code'
   | 'custom-acp';
 
+export type AcpHandshakeStatus = 'idle' | 'testing' | 'ok' | 'error';
+
 export interface AcpAgentProvider {
   id: AcpAgentId;
   name: string;
@@ -15,8 +17,43 @@ export interface AcpAgentProvider {
   protocol: 'ACP (JSON-RPC 2.0 / stdio)';
   detected: boolean;
   version?: string;
+  binaryAvailable?: boolean;
+  resolvedPath?: string;
+  acpBundled?: boolean;
+  acpBundledVersion?: string;
+  installHint?: string;
+  diagnostic?: string;
+  handshakeStatus?: AcpHandshakeStatus;
+  handshakeMessage?: string;
+  handshakeAgentName?: string;
   description: string;
   badgeColor: string;
+}
+
+export interface AcpHandshakeResult {
+  ok: boolean;
+  agentName?: string;
+  agentVersion?: string;
+  protocolVersion?: string;
+  resolvedSource?: string;
+  message: string;
+}
+
+export interface ToolDiagnostic {
+  id: string;
+  name: string;
+  available: boolean;
+  path?: string;
+  note: string;
+}
+
+export interface EnvironmentDiagnostics {
+  nodeAvailable: boolean;
+  nodeVersion?: string;
+  nodePath?: string;
+  adaptersStaged: boolean;
+  adaptersRoot?: string;
+  tools: ToolDiagnostic[];
 }
 
 /** Streamed from the Rust backend via Tauri event `acp:stream`. */
