@@ -23,14 +23,14 @@ export const RightAgentPanel: React.FC = () => {
   const {
     providers,
     activeAgentId,
-    mcpServerEnabled,
+    customCommand,
+    setCustomCommand,
     attachCanvasContext,
     attachSelectionContext,
     isStreaming,
     sessions,
     activeSessionId,
     setActiveAgentId,
-    setMcpServerEnabled,
     setAttachCanvasContext,
     setAttachSelectionContext,
     createNewSession,
@@ -178,13 +178,9 @@ export const RightAgentPanel: React.FC = () => {
           </div>
 
           <button
-            onClick={() => setMcpServerEnabled(!mcpServerEnabled)}
-            className={`px-2 py-1 rounded-md text-[10px] font-medium border flex items-center gap-1 shrink-0 ${
-              mcpServerEnabled
-                ? 'bg-blue-50 text-blue-700 border-blue-200'
-                : 'bg-white text-slate-500 border-slate-200'
-            }`}
-            title="内置 AgentTikZ MCP Server（暴露画布 AST 与局部修补工具）"
+            disabled
+            className="px-2 py-1 rounded-md text-[10px] font-medium border flex items-center gap-1 shrink-0 bg-white text-slate-400 border-slate-200 cursor-not-allowed"
+            title="MCP 画布工具服务尚未连接；当前通过提示词附加上下文"
           >
             <Cpu className="w-3 h-3" />
             <span>MCP</span>
@@ -208,11 +204,25 @@ export const RightAgentPanel: React.FC = () => {
                 {activeProvider.protocol}
               </span>
             </div>
-            <div className="px-2 py-1 rounded bg-slate-50 font-mono text-[10px] text-slate-700 border border-slate-100 truncate">
-              $ {activeProvider.command} {activeProvider.args.join(' ')}
-            </div>
+            {activeAgentId === 'custom-acp' ? (
+              <input
+                value={customCommand}
+                onChange={(event) => setCustomCommand(event.target.value)}
+                onBlur={() => void probeLocalAgents()}
+                aria-label="Custom ACP command"
+                placeholder={'Executable and args, or {"command":"...","args":[]}'}
+                className="w-full px-2 py-1 rounded bg-slate-50 font-mono text-[10px] text-slate-700 border border-slate-200"
+              />
+            ) : (
+              <div className="px-2 py-1 rounded bg-slate-50 font-mono text-[10px] text-slate-700 border border-slate-100 truncate">
+                $ {activeProvider.command} {activeProvider.args.join(' ')}
+              </div>
+            )}
             <p className="text-[10px] text-slate-500 leading-snug">
-              {activeProvider.description}。凭证由本地 Agent CLI 自身管理，上下文 100% 留在本地。
+              {activeProvider.detected ? '已找到本地程序（协议和登录状态在发送时检查）' : '未检测到本地 ACP 程序，请先安装适配器'}
+            </p>
+            <p className="text-[10px] text-slate-500 leading-snug">
+              {activeProvider.description}。凭证由 Agent CLI 管理；附加上下文可能发送给该 Agent 配置的模型服务。当前权限请求默认拒绝，不会隐式下载程序。
             </p>
           </div>
         )}
@@ -232,6 +242,7 @@ export const RightAgentPanel: React.FC = () => {
               <span className="text-[10px] font-semibold text-slate-500">
                 {msg.role === 'user'
                   ? '你 (Researcher)'
+                  : msg.role === 'system' ? 'AgentTikZ 状态'
                   : providers.find((p) => p.id === msg.agentId)?.name ||
                     'ACP Agent'}
               </span>
@@ -297,7 +308,13 @@ export const RightAgentPanel: React.FC = () => {
                           ({tc.argsSummary})
                         </span>
                       </span>
-                      <Check className="w-3 h-3 text-emerald-600 shrink-0 ml-1" />
+                      {tc.status === 'completed' ? (
+                        <Check className="w-3 h-3 text-emerald-600 shrink-0 ml-1" />
+                      ) : (
+                        <span className={tc.status === 'failed' ? 'text-red-600 shrink-0 ml-1' : 'text-slate-400 shrink-0 ml-1'}>
+                          {tc.status === 'failed' ? '失败' : '运行中'}
+                        </span>
+                      )}
                     </div>
                   ))}
                 </div>

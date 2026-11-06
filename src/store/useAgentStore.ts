@@ -2,71 +2,34 @@ import { create } from 'zustand';
 import {
   AcpAgentId,
   AcpAgentProvider,
+  AcpStreamEvent,
   AgentChatMessage,
   AgentSession,
-  TikzPatchProposal,
 } from '../types/acp';
 import { useWorkspaceStore } from './useWorkspaceStore';
-import { insertTikzStatement, patchNodeOptions } from '../core/parser/patcher';
-import { parseTikzDocument } from '../core/parser/parser';
-import { FULL_FIGURE_TEMPLATES } from '../core/templates/dl-templates';
 
 const DEFAULT_ACP_PROVIDERS: AcpAgentProvider[] = [
-  {
-    id: 'claude-code',
-    name: 'Claude Code (ACP)',
-    command: 'npx',
-    args: ['-y', '@agentclientprotocol/claude-agent-acp'],
-    protocol: 'ACP (JSON-RPC 2.0 / stdio)',
-    detected: true,
-    version: 'ACP v0.4 · BYOA',
-    description: '通过 claude-agent-acp 连接本地已认证的 Claude Code CLI，擅长精修顶刊 TikZ 排版',
-    badgeColor: '#D97706',
-  },
-  {
-    id: 'opencode',
-    name: 'OpenCode (opencode acp)',
-    command: 'opencode',
-    args: ['acp'],
-    protocol: 'ACP (JSON-RPC 2.0 / stdio)',
-    detected: true,
-    version: 'Native ACP · BYOA',
-    description: '原生支持 opencode acp 协议，支持本地 Ollama/vLLM 与自带密钥模型',
-    badgeColor: '#2563EB',
-  },
-  {
-    id: 'codex-cli',
-    name: 'Codex CLI (codex-acp)',
-    command: 'npx',
-    args: ['-y', '@zed-industries/codex-acp'],
-    protocol: 'ACP (JSON-RPC 2.0 / stdio)',
-    detected: true,
-    version: 'ACP v0.4 · BYOA',
-    description: '通过 codex-acp 适配器连接本地 OpenAI Codex CLI 进程',
-    badgeColor: '#059669',
-  },
-  {
-    id: 'gemini-cli',
-    name: 'Gemini CLI (--acp)',
-    command: 'gemini',
-    args: ['--acp'],
-    protocol: 'ACP (JSON-RPC 2.0 / stdio)',
-    detected: true,
-    version: 'Native --acp · BYOA',
-    description: '通过 gemini --acp 标准输入输出 JSON-RPC 驱动本地 Gemini Agent',
-    badgeColor: '#7C3AED',
-  },
-  {
-    id: 'custom-acp',
-    name: 'Custom Local ACP Agent',
-    command: 'custom-agent-acp',
-    args: ['--stdio'],
-    protocol: 'ACP (JSON-RPC 2.0 / stdio)',
-    detected: true,
-    version: 'Custom Stdio',
-    description: '自定义任何兼容 Agent Client Protocol (ACP) 的本地可执行文件',
-    badgeColor: '#475569',
-  },
+  { id: 'claude-code', name: 'Claude Code (ACP)', command: 'claude-agent-acp', args: [],
+    protocol: 'ACP (JSON-RPC 2.0 / stdio)', detected: false,
+    description: '需要本地 claude-agent-acp 适配器与 CLI 登录', badgeColor: '#D97706' },
+  { id: 'opencode', name: 'OpenCode (ACP)', command: 'opencode', args: ['acp'],
+    protocol: 'ACP (JSON-RPC 2.0 / stdio)', detected: false,
+    description: '连接本地 OpenCode ACP 程序', badgeColor: '#2563EB' },
+  { id: 'codex-cli', name: 'Codex CLI (ACP)', command: 'codex-acp', args: [],
+    protocol: 'ACP (JSON-RPC 2.0 / stdio)', detected: false,
+    description: '需要本地 codex-acp 适配器与 CLI 登录', badgeColor: '#059669' },
+  { id: 'gemini-cli', name: 'Gemini CLI (ACP)', command: 'gemini', args: ['--acp'],
+    protocol: 'ACP (JSON-RPC 2.0 / stdio)', detected: false,
+    description: '连接本地 Gemini ACP 程序', badgeColor: '#7C3AED' },
+  { id: 'cursor-agent', name: 'Cursor Agent (ACP)', command: 'cursor-agent', args: ['acp'],
+    protocol: 'ACP (JSON-RPC 2.0 / stdio)', detected: false,
+    description: '连接本地 Cursor Agent ACP 程序', badgeColor: '#F97316' },
+  { id: 'kimi-code', name: 'Kimi Code (ACP)', command: 'kimi', args: ['acp'],
+    protocol: 'ACP (JSON-RPC 2.0 / stdio)', detected: false,
+    description: '连接本地 Kimi ACP 程序', badgeColor: '#06B6D4' },
+  { id: 'custom-acp', name: '自定义 ACP Agent', command: 'custom-agent-acp', args: ['--stdio'],
+    protocol: 'ACP (JSON-RPC 2.0 / stdio)', detected: false,
+    description: '配置兼容 ACP 的本地可执行文件和参数', badgeColor: '#475569' },
 ];
 
 interface AgentStoreState {
@@ -79,8 +42,6 @@ interface AgentStoreState {
   isStreaming: boolean;
   sessions: AgentSession[];
   activeSessionId: string;
-
-  // Actions
   setActiveAgentId: (id: AcpAgentId) => void;
   setCustomCommand: (cmd: string) => void;
   setMcpServerEnabled: (enabled: boolean) => void;
@@ -95,314 +56,20 @@ interface AgentStoreState {
 }
 
 const initialSessionId = 'session_1';
-
 const initialSession: AgentSession = {
-  id: initialSessionId,
-  title: 'Transformer 架构与实验图精修',
-  agentId: 'claude-code',
-  createdAt: '刚刚',
-  messages: [
-    {
-      id: 'msg_welcome',
-      role: 'assistant',
-      agentId: 'claude-code',
-      timestamp: '08:00',
-      content:
-        '已通过 **ACP (Agent Client Protocol)** 准备就绪，并已挂载本地 **AgentTikZ MCP 工具链**。\n\n你可以直接用自然语言让我：\n- **生成整图**（如：“生成多尺度 3D 视觉特征金字塔”、“画一个对比实验柱状图”）\n- **针对选中节点局部修改**（在画布上框选节点后输入：“给选中模块加上残差连接”、“把选中块改成暖杏色 Multi-Head Attention”）\n- **优化顶刊排版**（自动对齐坐标并保持干净可读的 `\\tikzset` 代码，不破坏原有注释）',
-    },
-  ],
+  id: initialSessionId, title: '新会话', agentId: 'claude-code', createdAt: '刚刚',
+  messages: [{
+    id: 'msg_welcome', role: 'system', agentId: 'claude-code',
+    timestamp: new Date().toTimeString().slice(0, 5),
+    content: '尚未连接 Agent。发送时会启动本地已安装的 ACP 程序；请先安装对应适配器并完成 CLI 登录。不会下载程序或生成模拟回复。\n\n可附加画布与选中元素，生成的完整 TikZ 代码需要预览并确认后才会应用。',
+  }],
 };
-
-function synthesizeCanvasAwareResponse(
-  prompt: string,
-  agentId: AcpAgentId
-): {
-  thought: string;
-  reply: string;
-  mcpCalls: NonNullable<AgentChatMessage['mcpToolCalls']>;
-  proposal?: TikzPatchProposal;
-} {
-  const ws = useWorkspaceStore.getState();
-  const { tikzCode, parsedDoc, selectedIds } = ws;
-  const lower = prompt.toLowerCase();
-
-  // Case 1: User asks for 3D Feature Pyramid / CVPR vision diagram
-  if (
-    lower.includes('3d') ||
-    lower.includes('金字塔') ||
-    lower.includes('fpn') ||
-    lower.includes('特征图') ||
-    lower.includes('cvpr')
-  ) {
-    const tpl = FULL_FIGURE_TEMPLATES.find((t) => t.id === 'tpl_cvpr_3d_pyramid');
-    if (!tpl) return { thought: '', mcpCalls: [], reply: '未找到 CVPR 3D 金字塔模板，请检查模板配置。' };
-    return {
-      thought:
-        '读取 @canvas 上下文 -> 用户请求构建 CVPR 风格多尺度 3D 视觉特征金字塔 -> 调用 MCP 工具 `propose_tikz_patch` 生成带语义 `feature_cube` 与 `conv_block` 宏的干净 TikZ 代码。',
-      mcpCalls: [
-        {
-          toolName: 'mcp__agenttikz__get_canvas_ast',
-          argsSummary: `nodes=${parsedDoc.nodes.length}, edges=${parsedDoc.edges.length}`,
-          status: 'completed',
-        },
-        {
-          toolName: 'mcp__agenttikz__propose_tikz_patch',
-          argsSummary: 'template="CVPR 3D Feature Pyramid (C2-C5 + FPN)"',
-          status: 'completed',
-        },
-      ],
-      reply:
-        '已为你构建 **CVPR 风格多尺度 3D 视觉特征金字塔（$\\mathbf{C}_2 \\sim \\mathbf{C}_5$ + 自顶向下特征融合）**。\n\n所有 3D 张量块均采用语义化 `feature_cube` 节点描述（支持在画布上直接拖拽位置或通过属性栏调节通道厚度 `depth`），无硬编码零散坐标堆砌。',
-      proposal: {
-        id: `patch_${Date.now()}`,
-        summary: '生成 CVPR 多尺度 3D 特征金字塔与 FPN 融合架构',
-        rationale: '采用 cvpr_navy / cvpr_teal / cvpr_coral 顶刊配色与 0.75pt 线宽规范',
-        newTikzCode: tpl.tikzCode,
-        affectedElementIds: ['c2', 'c3', 'c4', 'c5', 'sppf', 'p4', 'p3'],
-        status: 'pending',
-      },
-    };
-  }
-
-  // Case 2: User asks for Nature data charts / bar chart / heatmap / boxplot
-  if (
-    lower.includes('nature') ||
-    lower.includes('柱状图') ||
-    lower.includes('热力图') ||
-    lower.includes('箱线图') ||
-    lower.includes('图表') ||
-    lower.includes('数据图')
-  ) {
-    if (lower.includes('热力') || lower.includes('heatmap') || lower.includes('注意力矩阵')) {
-      const snippet = [
-        `  % --- AI Added: Attention Weight Heatmap ---`,
-        `  \\begin{scope}[shift={(7.2, 2.0)}]`,
-        `    \\begin{axis}[`,
-        `      id=ai_heatmap,`,
-        `      chart_type=heatmap, colormap/viridis, width=4.8cm, height=4.0cm,`,
-        `      title={Cross-Attention Weights $\\mathbf{A}$},`,
-        `      xlabel={Key Tokens ($K$)},`,
-        `      ylabel={Query Tokens ($Q$)},`,
-        `      grid=none`,
-        `    ]`,
-        `      \\addplot[color=#2B5B84] coordinates { (1, 1) (2, 2) (3, 3) (4, 4) };`,
-        `      \\addlegendentry{Attn Score}`,
-        `      % heatmap_matrix: [[0.85,0.07,0.05,0.03],[0.06,0.79,0.10,0.05],[0.04,0.10,0.78,0.08],[0.02,0.04,0.08,0.86]]`,
-        `    \\end{axis}`,
-        `  \\end{scope}`,
-      ].join('\n');
-      const nextCode = insertTikzStatement(tikzCode, snippet);
-      return {
-        thought:
-          '分析当前画布布局 -> 在右侧空白区域 (7.2, 2.0) 插入基于 PGFPlots 的 Cross-Attention 注意力权重热力图，保留左侧全部原有节点与注释。',
-        mcpCalls: [
-          {
-            toolName: 'mcp__agenttikz__add_pgfplot_chart',
-            argsSummary: 'chartType="heatmap", pos=(7.2, 2.0)',
-            status: 'completed',
-          },
-        ],
-        reply:
-          '已在画布右侧为你添加 **Cross-Attention 注意力权重热力图（`pgfplots` matrix plot）**，完整保留了原有代码与注释。点击下方 **应用修改** 即可渲染到画布。',
-        proposal: {
-          id: `patch_${Date.now()}`,
-          summary: '新增 PGFPlots 注意力权重热力图 (ai_heatmap)',
-          rationale: '使用 \\begin{scope}[shift={(7.2, 2.0)}] 局部包裹，便于在画布中整体拖拽',
-          newTikzCode: nextCode,
-          affectedElementIds: ['ai_heatmap'],
-          status: 'pending',
-        },
-      };
-    }
-
-    const tpl = FULL_FIGURE_TEMPLATES.find((t) => t.id === 'tpl_nature_dashboard');
-    if (!tpl) return { thought: '', mcpCalls: [], reply: '未找到 Nature 图表模板，请检查模板配置。' };
-    return {
-      thought:
-        '用户请求科研数据图表展示 -> 调用 `propose_tikz_patch` 生成符合 Nature (NPG) 0.55pt 极简规范的折线误差带 + 分组柱状图双联实验图。',
-      mcpCalls: [
-        {
-          toolName: 'mcp__agenttikz__propose_tikz_patch',
-          argsSummary: 'template="Nature NPG Multi-Panel PGFPlots"',
-          status: 'completed',
-        },
-      ],
-      reply:
-        '已按照 **Nature Publishing Group (NPG)** 视觉规范生成双联实验数据图（含误差带收敛曲线 + 跨领域对比柱状图）。',
-      proposal: {
-        id: `patch_${Date.now()}`,
-        summary: '切换为 Nature (NPG) 双联 PGFPlots 实验图表',
-        rationale: '采用 NPG 经典绯红 #E64B35 / 翠青 #00A087 / 靛蓝 #3C5488 配色',
-        newTikzCode: tpl.tikzCode,
-        affectedElementIds: ['npg_line', 'npg_bar'],
-        status: 'pending',
-      },
-    };
-  }
-
-  // Case 3: Selection-specific edit (e.g., add residual connection, recolor, add layer above selected node)
-  const selectedNodes = parsedDoc.nodes.filter((n) => selectedIds.includes(n.id));
-  if (selectedNodes.length > 0) {
-    const first = selectedNodes[0];
-
-    if (lower.includes('残差') || lower.includes('residual') || lower.includes('跳线')) {
-      const second =
-        selectedNodes.length >= 2
-          ? selectedNodes[1]
-          : parsedDoc.nodes.find((n) => n.id !== first.id && n.y > first.y) ||
-            first;
-      const resStmt = `  % --- AI Added: Orthogonal Residual Skip Connection ---\n  \\draw[-Stealth, line width=0.75pt, draw=nips_sage!85!black] (${first.id}.east) -- ++(1.4, 0) |- node[midway, fill=white, inner sep=1.5pt, font=\\scriptsize] {Residual} (${second.id}.east);`;
-      const nextCode = insertTikzStatement(tikzCode, resStmt);
-      return {
-        thought: `检测到选中节点 @selection (${selectedNodes.map((n) => n.id).join(', ')}) -> 计算正交残差旁路偏移 ++(1.4, 0) |- -> 在不改动现有坐标与注释的前提下追加残差跳线语句。`,
-        mcpCalls: [
-          {
-            toolName: 'mcp__agenttikz__get_selected_elements',
-            argsSummary: `ids=[${selectedNodes.map((n) => `"${n.id}"`).join(', ')}]`,
-            status: 'completed',
-          },
-          {
-            toolName: 'mcp__agenttikz__apply_tikz_patch',
-            argsSummary: `add residual skip (${first.id}.east) -> (${second.id}.east)`,
-            status: 'completed',
-          },
-        ],
-        reply: `已针对你选中的节点 \`(${first.id})\` 至 \`(${second.id})\` 生成了 **正交残差跳线连接（\`-- ++(1.4, 0) |-\`）**，原有代码结构与注释 100% 保持不变。`,
-        proposal: {
-          id: `patch_${Date.now()}`,
-          summary: `为 (${first.id}) → (${second.id}) 添加正交残差跳线`,
-          rationale: '使用相对偏移 ++(1.4, 0) |- 语法，即使后续拖拽节点也能自动保持正交对齐',
-          newTikzCode: nextCode,
-          affectedElementIds: [first.id, second.id],
-          status: 'pending',
-        },
-      };
-    }
-
-    // Recolor or highlight selected nodes
-    if (
-      lower.includes('颜色') ||
-      lower.includes('配色') ||
-      lower.includes('橙') ||
-      lower.includes('紫') ||
-      lower.includes('绿') ||
-      lower.includes('强调') ||
-      lower.includes('样式')
-    ) {
-      let targetFill = 'nips_amber!18';
-      let targetDraw = 'nips_amber!85!black';
-      if (lower.includes('紫')) {
-        targetFill = 'nips_purple!16';
-        targetDraw = 'nips_purple!85!black';
-      } else if (lower.includes('绿')) {
-        targetFill = 'nips_sage!16';
-        targetDraw = 'nips_sage!85!black';
-      }
-      let patched = tikzCode;
-      for (const n of selectedNodes) {
-        // Re-parse after each patch so span offsets stay valid
-        const freshDoc = parseTikzDocument(patched);
-        const currNode = freshDoc.nodes.find((item) => item.id === n.id) || n;
-        patched = patchNodeOptions(patched, currNode, {
-          fill: targetFill,
-          draw: targetDraw,
-          'line width': '0.8pt',
-        });
-      }
-      return {
-        thought: `定位选中节点 (${selectedNodes.map((n) => n.id).join(', ')}) 的 optionsSpan 源码字节区间 -> 执行手术刀式局部键值更新 fill=${targetFill}, draw=${targetDraw}。`,
-        mcpCalls: [
-          {
-            toolName: 'mcp__agenttikz__get_selected_elements',
-            argsSummary: `ids=[${selectedNodes.map((n) => `"${n.id}"`).join(', ')}]`,
-            status: 'completed',
-          },
-          {
-            toolName: 'mcp__agenttikz__propose_tikz_patch',
-            argsSummary: `surgical option patch on ${selectedNodes.length} node(s)`,
-            status: 'completed',
-          },
-        ],
-        reply: `已对选中的 **${selectedNodes.length} 个节点**（\`${selectedNodes.map((n) => n.id).join(', ')}\`）执行局部样式修补（更新为 \`${targetFill}\` 顶刊强调色），未改动任何坐标与注释。`,
-        proposal: {
-          id: `patch_${Date.now()}`,
-          summary: `局部更新选中节点 (${selectedNodes.map((n) => n.id).join(', ')}) 为顶刊强调配色`,
-          rationale: '仅替换 \\node[...] 内的 fill 与 draw 键值，保留原文件全部注释',
-          newTikzCode: patched,
-          affectedElementIds: selectedNodes.map((n) => n.id),
-          status: 'pending',
-        },
-      };
-    }
-
-    // Default contextual enhancement on selected node: add Cross-Attention + Gate above it
-    const newId = `cross_attn_${parsedDoc.nodes.length + 1}`;
-    const newY = Number((first.y + 1.35).toFixed(2));
-    const snippet = [
-      `  % --- AI Added Module linked to (${first.id}) ---`,
-      `  \\node[mha_block, fill=nips_purple!15, draw=nips_purple!85!black, minimum width=3.2cm, minimum height=0.9cm] (${newId}) at (${(first.x + 3.8).toFixed(1)}, ${newY}) {Cross-Modal Attention \\\\ {\\scriptsize $\\text{Gate}(\\mathbf{Q}, \\mathbf{K}_v, \\mathbf{V}_v)$}};`,
-      `  \\draw[-Stealth, line width=0.7pt, draw=nips_purple!85!black, dashed] (${newId}.west) -- node[midway, fill=white, inner sep=1.5pt, font=\\scriptsize] { Conditioning } (${first.id}.east);`,
-    ].join('\n');
-    const nextCode = insertTikzStatement(tikzCode, snippet);
-
-    return {
-      thought: `读取选中节点 (${first.id}) 位置 (${first.x}, ${first.y}) -> 在其右侧协同位置生成跨模态注意力引导支路 (${newId}) 并建立虚线条件注入连接。`,
-      mcpCalls: [
-        {
-          toolName: 'mcp__agenttikz__get_selected_elements',
-          argsSummary: `selected="${first.id}" at (${first.x}, ${first.y})`,
-          status: 'completed',
-        },
-        {
-          toolName: 'mcp__agenttikz__add_dl_module',
-          argsSummary: `id="${newId}", linkTo="${first.id}"`,
-          status: 'completed',
-        },
-      ],
-      reply: `已结合你当前选中的节点 \`(${first.id})\`，在其右侧生成了 **跨模态条件注意力分支 \`(${newId})\`** 及条件注入虚线箭头。你可以预览下方代码改动并一键应用。`,
-      proposal: {
-        id: `patch_${Date.now()}`,
-        summary: `在选中节点 (${first.id}) 旁新增跨模态注意力条件分支`,
-        rationale: '采用命名节点与语义化 mha_block 宏，保持原有代码缩进与注释不变',
-        newTikzCode: nextCode,
-        affectedElementIds: [first.id, newId],
-        status: 'pending',
-      },
-    };
-  }
-
-  // Fallback general canvas optimization
-  const tpl = FULL_FIGURE_TEMPLATES[0];
-  return {
-    thought: `分析全图 AST (${parsedDoc.nodes.length} 个节点, ${parsedDoc.edges.length} 条连线) -> 规范化顶刊 \\tikzset 宏定义与对齐网格。`,
-    mcpCalls: [
-      {
-        toolName: 'mcp__agenttikz__get_canvas_ast',
-        argsSummary: `nodes=${parsedDoc.nodes.length}, charts=${parsedDoc.charts.length}`,
-        status: 'completed',
-      },
-    ],
-    reply:
-      '我已检查当前画布的 TikZ AST 结构。你可以先在画布上点击选中一个或多个模块（会显示在下方 `@选中` 胶囊中），或者直接告诉我你想添加的深度学习结构（如 `添加残差跳线`、`生成 3D 特征图金字塔`、`添加注意力热力图`）。',
-    proposal:
-      tikzCode !== tpl.tikzCode
-        ? {
-            id: `patch_${Date.now()}`,
-            summary: '恢复/优化为标准 NeurIPS Pre-LN Transformer + Scaling 联合图',
-            rationale: '统一节点水平中心坐标 x=2.8cm，规范化残差旁路偏移',
-            newTikzCode: tpl.tikzCode,
-            affectedElementIds: ['mha', 'ln1', 'ffn'],
-            status: 'pending',
-          }
-        : undefined,
-  };
-}
 
 export const useAgentStore = create<AgentStoreState>((set, get) => ({
   providers: DEFAULT_ACP_PROVIDERS,
   activeAgentId: 'claude-code',
-  customCommand: 'claude-agent-acp --stdio',
-  mcpServerEnabled: true,
+  customCommand: 'claude-agent-acp',
+  mcpServerEnabled: false,
   attachCanvasContext: true,
   attachSelectionContext: true,
   isStreaming: false,
@@ -413,249 +80,188 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
   setCustomCommand: (customCommand) => set({ customCommand }),
   setMcpServerEnabled: (mcpServerEnabled) => set({ mcpServerEnabled }),
   setAttachCanvasContext: (attachCanvasContext) => set({ attachCanvasContext }),
-  setAttachSelectionContext: (attachSelectionContext) =>
-    set({ attachSelectionContext }),
-
+  setAttachSelectionContext: (attachSelectionContext) => set({ attachSelectionContext }),
   createNewSession: () => {
     const { activeAgentId, sessions } = get();
-    const newId = `session_${Date.now()}`;
-    const newSession: AgentSession = {
-      id: newId,
-      title: `科研绘图会话 #${sessions.length + 1}`,
-      agentId: activeAgentId,
-      createdAt: '刚刚',
-      messages: [
-        {
-          id: `msg_${Date.now()}`,
-          role: 'assistant',
-          agentId: activeAgentId,
-          timestamp: new Date().toTimeString().slice(0, 5),
-          content:
-            '新 ACP 会话已就绪（上下文保留在本地）。选中画布图元或直接输入指令即可开始协作。',
-        },
-      ],
-    };
-    set({
-      sessions: [newSession, ...sessions],
-      activeSessionId: newId,
-    });
+    const id = `session_${crypto.randomUUID()}`;
+    set({ sessions: [{
+      id, title: `会话 #${sessions.length + 1}`, agentId: activeAgentId, createdAt: '刚刚',
+      messages: [{
+        id: `msg_${id}`, role: 'system', agentId: activeAgentId,
+        timestamp: new Date().toTimeString().slice(0, 5),
+        content: '新对话已创建。发送后将尝试连接本地 ACP 程序。',
+      }],
+    }, ...sessions], activeSessionId: id });
   },
-
-  switchSession: (activeSessionId) => set({ activeSessionId }),
-
+  switchSession: (activeSessionId) => {
+    const session = get().sessions.find((item) => item.id === activeSessionId);
+    if (session) set({ activeSessionId, activeAgentId: session.agentId });
+  },
   probeLocalAgents: async () => {
     try {
-      const isTauri =
-        typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
-      if (isTauri) {
-        const { invoke } = await import('@tauri-apps/api/core');
-        const detectedList = await invoke<
-          Array<{ id: string; detected: boolean; version?: string }>
-        >('acp_probe_agents');
-        set((state) => ({
-          providers: state.providers.map((p) => {
-            const found = detectedList.find((d) => d.id === p.id);
-            return found
-              ? { ...p, detected: found.detected, version: found.version || p.version }
-              : p;
-          }),
-        }));
-      }
+      if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return;
+      const { invoke } = await import('@tauri-apps/api/core');
+      const results = await invoke<Array<{ id: string; detected: boolean; version?: string }>>(
+        'acp_probe_agents', { customCommand: get().customCommand },
+      );
+      set((state) => ({ providers: state.providers.map((provider) => {
+        const found = results.find((item) => item.id === provider.id);
+        return found ? { ...provider, detected: found.detected, version: found.version || undefined } : provider;
+      }) }));
     } catch {
-      // Browser dev mode: keep default providers ready
+      set((state) => ({ providers: state.providers.map((provider) => ({ ...provider, detected: false })) }));
     }
   },
-
-  sendPromptToAgent: async (promptText: string) => {
+  sendPromptToAgent: async (promptText) => {
     if (!promptText.trim() || get().isStreaming) return;
-    const {
-      activeAgentId,
-      activeSessionId,
-      attachSelectionContext,
-      attachCanvasContext,
-    } = get();
-    const ws = useWorkspaceStore.getState();
-
-    const userMsg: AgentChatMessage = {
-      id: `user_${Date.now()}`,
-      role: 'user',
-      agentId: activeAgentId,
-      timestamp: new Date().toTimeString().slice(0, 5),
-      content: promptText.trim(),
-      contextSelectionIds: attachSelectionContext ? [...ws.selectedIds] : [],
+    const { activeAgentId, activeSessionId, attachSelectionContext, attachCanvasContext, customCommand, sessions } = get();
+    const workspace = useWorkspaceStore.getState();
+    const history = (sessions.find((session) => session.id === activeSessionId)?.messages || [])
+      .filter((message) => message.role !== 'system')
+      .map(({ role, content }) => ({ role, content }));
+    const userMessage: AgentChatMessage = {
+      id: `user_${crypto.randomUUID()}`, role: 'user', agentId: activeAgentId,
+      timestamp: new Date().toTimeString().slice(0, 5), content: promptText.trim(),
+      contextSelectionIds: attachSelectionContext ? [...workspace.selectedIds] : [],
       includeFullCanvas: attachCanvasContext,
     };
-
     set((state) => ({
       isStreaming: true,
-      sessions: state.sessions.map((s) =>
-        s.id === activeSessionId
-          ? {
-              ...s,
-              title:
-                s.messages.length <= 1
-                  ? promptText.trim().slice(0, 22)
-                  : s.title,
-              messages: [...s.messages, userMsg],
-            }
-          : s
-      ),
+      sessions: state.sessions.map((session) => session.id === activeSessionId
+        ? { ...session, agentId: activeAgentId,
+            title: session.messages.length <= 1 ? promptText.trim().slice(0, 22) : session.title,
+            messages: [...session.messages, userMessage] }
+        : session),
     }));
-
     try {
-    // Try Tauri ACP bridge first if in Tauri desktop and user has real ACP CLI configured
-    let handledByNativeAcp = false;
-    try {
-      const isTauri =
-        typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
-      if (isTauri) {
-        const { invoke } = await import('@tauri-apps/api/core');
-        const acpRes = await invoke<{
-          usedNativeCli: boolean;
-          thought?: string;
-          reply?: string;
-          proposedTikz?: string;
-        }>('acp_send_prompt', {
-          agentId: activeAgentId,
-          prompt: promptText,
-          canvasTikz: attachCanvasContext ? ws.tikzCode : '',
-          selectedIds: attachSelectionContext ? ws.selectedIds : [],
-        });
-
-        if (acpRes && acpRes.usedNativeCli && acpRes.reply) {
-          handledByNativeAcp = true;
-          const assistantMsg: AgentChatMessage = {
-            id: `asst_${Date.now()}`,
-            role: 'assistant',
-            agentId: activeAgentId,
-            timestamp: new Date().toTimeString().slice(0, 5),
-            thoughtProcess: acpRes.thought,
-            content: acpRes.reply,
-            patchProposal: acpRes.proposedTikz
-              ? {
-                  id: `patch_${Date.now()}`,
-                  summary: '来自本地 ACP Agent 的 TikZ 代码更新',
-                  rationale: '通过 ACP JSON-RPC 2.0 (stdio) 生成',
-                  newTikzCode: acpRes.proposedTikz,
-                  affectedElementIds: ws.selectedIds,
-                  status: 'pending',
-                }
-              : undefined,
-          };
-          set((state) => ({
-            isStreaming: false,
-            sessions: state.sessions.map((s) =>
-              s.id === activeSessionId
-                ? { ...s, messages: [...s.messages, assistantMsg] }
-                : s
-            ),
-          }));
-        }
+      if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
+        throw new Error('本地 ACP 需要 Tauri 桌面应用；浏览器模式不能连接本地 Agent，不会生成模拟回复。');
       }
-    } catch {
-      // Fall through to local canvas-aware synthesis
-    }
-
-    if (!handledByNativeAcp) {
-      await new Promise((r) => setTimeout(r, 420));
-      const synthesized = synthesizeCanvasAwareResponse(
-        promptText,
-        activeAgentId
-      );
-      const assistantMsg: AgentChatMessage = {
-        id: `asst_${Date.now()}`,
-        role: 'assistant',
-        agentId: activeAgentId,
-        timestamp: new Date().toTimeString().slice(0, 5),
-        thoughtProcess: synthesized.thought,
-        content: synthesized.reply,
-        mcpToolCalls: synthesized.mcpCalls,
-        patchProposal: synthesized.proposal,
-      };
-
-      set((state) => ({
-        isStreaming: false,
-        sessions: state.sessions.map((s) =>
-          s.id === activeSessionId
-            ? { ...s, messages: [...s.messages, assistantMsg] }
-            : s
-        ),
-      }));
-    }
+      await sendViaRealAcp(activeAgentId, promptText,
+        attachCanvasContext ? workspace.tikzCode : '',
+        attachSelectionContext ? [...workspace.selectedIds] : [],
+        activeSessionId, customCommand, history);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      set((state) => ({ sessions: state.sessions.map((session) => session.id === activeSessionId
+        ? { ...session, messages: [...session.messages, {
+            id: `error_${crypto.randomUUID()}`, role: 'system' as const, agentId: activeAgentId,
+            timestamp: new Date().toTimeString().slice(0, 5), content: `ACP 错误：${detail}`,
+          }] }
+        : session) }));
     } finally {
-      // Guarantee isStreaming is reset even if synthesis throws
       set({ isStreaming: false });
     }
   },
-
   applyPatchProposal: (messageId) => {
     const { sessions, activeSessionId } = get();
-    const session = sessions.find((s) => s.id === activeSessionId);
-    if (!session) return;
-    const msg = session.messages.find((m) => m.id === messageId);
-    if (!msg || !msg.patchProposal) return;
-
+    const message = sessions.find((session) => session.id === activeSessionId)?.messages.find((item) => item.id === messageId);
+    if (!message?.patchProposal || message.patchProposal.status === 'applied') return;
     const currentCode = useWorkspaceStore.getState().tikzCode;
-    useWorkspaceStore.getState().setTikzCode(msg.patchProposal.newTikzCode, true);
-    if (msg.patchProposal.affectedElementIds.length > 0) {
-      useWorkspaceStore
-        .getState()
-        .setSelectedIds(msg.patchProposal.affectedElementIds);
+    useWorkspaceStore.getState().setTikzCode(message.patchProposal.newTikzCode, true);
+    if (message.patchProposal.affectedElementIds.length > 0) {
+      useWorkspaceStore.getState().setSelectedIds(message.patchProposal.affectedElementIds);
     }
-
-    set((state) => ({
-      sessions: state.sessions.map((s) =>
-        s.id === activeSessionId
-          ? {
-              ...s,
-              messages: s.messages.map((m) =>
-                m.id === messageId && m.patchProposal
-                  ? {
-                      ...m,
-                      patchProposal: {
-                        ...m.patchProposal,
-                        status: 'applied',
-                        previousTikzCode: currentCode,
-                      },
-                    }
-                  : m
-              ),
-            }
-          : s
-      ),
+    updateAgentMessage(activeSessionId, messageId, (item) => ({ ...item,
+      patchProposal: item.patchProposal ? { ...item.patchProposal, status: 'applied', previousTikzCode: currentCode } : undefined,
     }));
   },
-
   revertPatchProposal: (messageId) => {
     const { sessions, activeSessionId } = get();
-    const session = sessions.find((s) => s.id === activeSessionId);
-    if (!session) return;
-    const msg = session.messages.find((m) => m.id === messageId);
-    if (!msg || !msg.patchProposal || !msg.patchProposal.previousTikzCode) return;
-
-    useWorkspaceStore
-      .getState()
-      .setTikzCode(msg.patchProposal.previousTikzCode, true);
-
-    set((state) => ({
-      sessions: state.sessions.map((s) =>
-        s.id === activeSessionId
-          ? {
-              ...s,
-              messages: s.messages.map((m) =>
-                m.id === messageId && m.patchProposal
-                  ? {
-                      ...m,
-                      patchProposal: {
-                        ...m.patchProposal,
-                        status: 'pending',
-                      },
-                    }
-                  : m
-              ),
-            }
-          : s
-      ),
+    const message = sessions.find((session) => session.id === activeSessionId)?.messages.find((item) => item.id === messageId);
+    if (!message?.patchProposal || message.patchProposal.previousTikzCode === undefined) return;
+    useWorkspaceStore.getState().setTikzCode(message.patchProposal.previousTikzCode, true);
+    updateAgentMessage(activeSessionId, messageId, (item) => ({ ...item,
+      patchProposal: item.patchProposal ? { ...item.patchProposal, status: 'pending' } : undefined,
     }));
   },
 }));
+
+/** Updates only the originating conversation/message, even after switching tabs. */
+function updateAgentMessage(sessionId: string, messageId: string, update: (message: AgentChatMessage) => AgentChatMessage) {
+  useAgentStore.setState((state) => ({
+    sessions: state.sessions.map((session) => session.id === sessionId
+      ? { ...session, messages: session.messages.map((message) => message.id === messageId ? update(message) : message) }
+      : session),
+  }));
+}
+
+async function sendViaRealAcp(
+  agentId: AcpAgentId, prompt: string, canvasTikz: string, selectedIds: string[],
+  activeSessionId: string, customCommand: string, history: Array<{ role: string; content: string }>,
+): Promise<void> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  const { listen } = await import('@tauri-apps/api/event');
+  const requestId = crypto.randomUUID();
+  const messageId = `asst_${requestId}`;
+  let finished = false;
+  let unlisten: (() => void) | undefined;
+  try {
+    // Establish delivery before creating a placeholder or invoking the backend.
+    unlisten = await listen<AcpStreamEvent>('acp:stream', ({ payload: event }) => {
+      if (finished || event.requestId !== requestId) return;
+      if (event.kind === 'permission_denied') {
+        const noticeId = `permission_${requestId}`;
+        useAgentStore.setState((state) => ({ sessions: state.sessions.map((session) =>
+          session.id === activeSessionId && !session.messages.some((message) => message.id === noticeId)
+            ? { ...session, messages: [...session.messages, {
+                id: noticeId, role: 'system' as const, agentId,
+                timestamp: new Date().toTimeString().slice(0, 5),
+                content: `ACP 权限请求已拒绝：${event.text}`,
+              }] }
+            : session) }));
+        return;
+      }
+      updateAgentMessage(activeSessionId, messageId, (message) => {
+        if (event.kind === 'message') return { ...message, content: message.content + event.text };
+        if (event.kind === 'thought') return { ...message, thoughtProcess: (message.thoughtProcess || '') + event.text };
+        if (event.kind === 'tool_call') {
+          const status = event.toolStatus === 'completed' || event.toolStatus === 'failed' ? event.toolStatus : 'running';
+          return { ...message, mcpToolCalls: [...(message.mcpToolCalls || []), {
+            toolName: event.toolName || event.text, argsSummary: event.toolCallId || '', status,
+          }] };
+        }
+        if (event.kind === 'tool_update') {
+          return { ...message, mcpToolCalls: (message.mcpToolCalls || []).map((call) => {
+            if (call.argsSummary !== event.toolCallId || !event.toolStatus) return call;
+            const status = event.toolStatus === 'completed' || event.toolStatus === 'failed' ? event.toolStatus : 'running';
+            return { ...call, status };
+          }) };
+        }
+        return message;
+      });
+    });
+    useAgentStore.setState((state) => ({ sessions: state.sessions.map((session) => session.id === activeSessionId
+      ? { ...session, messages: [...session.messages, {
+          id: messageId, role: 'assistant' as const, agentId,
+          timestamp: new Date().toTimeString().slice(0, 5), content: '',
+        }] }
+      : session) }));
+    const response = await invoke<{
+      usedNativeCli: boolean; thought?: string | null; reply?: string | null; proposedTikz?: string | null;
+    }>('acp_send_prompt', { requestId, agentId, prompt, canvasTikz, selectedIds, customCommand, history });
+    finished = true;
+    if (!response?.usedNativeCli) throw new Error('本地 ACP Agent 未启动。请检查安装和 CLI 登录状态。');
+    if (!response.reply?.trim()) throw new Error('ACP Agent 未返回文本。未生成画布修改。');
+    updateAgentMessage(activeSessionId, messageId, (message) => ({
+      ...message,
+      // The IPC response is authoritative, not an extra stream chunk.
+      content: response.reply!, thoughtProcess: response.thought ?? message.thoughtProcess,
+      patchProposal: response.proposedTikz ? {
+        id: `patch_${requestId}`, summary: '来自 ACP Agent 的 TikZ 代码更新',
+        rationale: '本地 ACP 返回的完整代码；请预览后应用。', newTikzCode: response.proposedTikz,
+        affectedElementIds: selectedIds, status: 'pending',
+      } : undefined,
+    }));
+  } catch (error) {
+    // Keep real partial output; remove only a completely empty placeholder.
+    useAgentStore.setState((state) => ({ sessions: state.sessions.map((session) => session.id === activeSessionId
+      ? { ...session, messages: session.messages.filter((message) =>
+          message.id !== messageId || message.content || message.thoughtProcess || message.mcpToolCalls?.length) }
+      : session) }));
+    throw error;
+  } finally {
+    finished = true;
+    unlisten?.();
+  }
+}

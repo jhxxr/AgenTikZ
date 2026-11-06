@@ -3,6 +3,8 @@ export type AcpAgentId =
   | 'codex-cli'
   | 'opencode'
   | 'gemini-cli'
+  | 'cursor-agent'
+  | 'kimi-code'
   | 'custom-acp';
 
 export interface AcpAgentProvider {
@@ -15,6 +17,16 @@ export interface AcpAgentProvider {
   version?: string;
   description: string;
   badgeColor: string;
+}
+
+/** Streamed from the Rust backend via Tauri event `acp:stream`. */
+export interface AcpStreamEvent {
+  requestId: string;
+  kind: 'message' | 'thought' | 'tool_call' | 'tool_update' | 'completed' | 'failed' | 'permission_denied';
+  text: string;
+  toolName?: string;
+  toolCallId?: string;
+  toolStatus?: 'pending' | 'in_progress' | 'completed' | 'failed';
 }
 
 export interface TikzPatchProposal {
@@ -40,7 +52,7 @@ export interface AgentChatMessage {
   mcpToolCalls?: Array<{
     toolName: string;
     argsSummary: string;
-    status: 'running' | 'completed';
+    status: 'running' | 'completed' | 'failed';
   }>;
 }
 
