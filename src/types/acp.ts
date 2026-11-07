@@ -66,6 +66,20 @@ export interface AcpStreamEvent {
   toolStatus?: 'pending' | 'in_progress' | 'completed' | 'failed';
 }
 
+export interface TikzSemanticDiffItem {
+  type: 'add' | 'modify' | 'remove';
+  category: 'node' | 'edge' | 'chart' | 'style';
+  id: string;
+  detail: string;
+}
+
+export interface TikzDiffLine {
+  type: 'context' | 'add' | 'remove' | 'header';
+  text: string;
+  oldLine?: number;
+  newLine?: number;
+}
+
 export interface TikzPatchProposal {
   id: string;
   summary: string;
@@ -74,6 +88,13 @@ export interface TikzPatchProposal {
   affectedElementIds: string[];
   status: 'pending' | 'applied' | 'rejected';
   previousTikzCode?: string;
+  mode?: 'surgical_diff' | 'full_replace' | 'agent_skill';
+  semanticItems?: TikzSemanticDiffItem[];
+  diffLines?: TikzDiffLine[];
+  autoRepairs?: string[];
+  layoutScore?: number;
+  recommendedThemeId?: string;
+  fitCanvasOnApply?: boolean;
 }
 
 export interface AgentChatMessage {
@@ -85,6 +106,7 @@ export interface AgentChatMessage {
   agentId: AcpAgentId;
   contextSelectionIds?: string[];
   includeFullCanvas?: boolean;
+  templateReferenceId?: string;
   patchProposal?: TikzPatchProposal;
   mcpToolCalls?: Array<{
     toolName: string;
@@ -98,5 +120,6 @@ export interface AgentSession {
   title: string;
   agentId: AcpAgentId;
   createdAt: string;
+  templateReferenceId?: string;
   messages: AgentChatMessage[];
 }

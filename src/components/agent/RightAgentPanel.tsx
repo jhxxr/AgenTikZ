@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useAgentStore } from '../../store/useAgentStore';
 import { useWorkspaceStore } from '../../store/useWorkspaceStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
+import { FULL_FIGURE_TEMPLATES } from '../../core/templates/dl-templates';
+import { JOURNAL_THEMES } from '../../core/themes/journal-presets';
 import { AcpAgentId } from '../../types/acp';
 import {
   Bot,
@@ -11,16 +13,20 @@ import {
   ChevronRight,
   Code2,
   Cpu,
+  GitCompare,
   History,
   Layers,
+  Palette,
   PanelRightClose,
   PanelRightOpen,
   Plus,
   RotateCcw,
+  ScanSearch,
   Send,
   Settings,
   Sparkles,
   Terminal,
+  Wand2,
   Wrench,
 } from 'lucide-react';
 
@@ -32,16 +38,20 @@ export const RightAgentPanel: React.FC = () => {
     setCustomCommand,
     attachCanvasContext,
     attachSelectionContext,
+    autoLayoutRepairEnabled,
     isStreaming,
     sessions,
     activeSessionId,
     setActiveAgentId,
     setAttachCanvasContext,
     setAttachSelectionContext,
+    setAutoLayoutRepairEnabled,
+    setTemplateReference,
     createNewSession,
     switchSession,
     probeLocalAgents,
     sendPromptToAgent,
+    runLocalAgentSkill,
     applyPatchProposal,
     revertPatchProposal,
   } = useAgentStore();
@@ -49,6 +59,7 @@ export const RightAgentPanel: React.FC = () => {
   const {
     selectedIds,
     parsedDoc,
+    activeThemeId,
     setLeftTab,
     isAgentPanelCollapsed,
     toggleAgentPanel,
@@ -58,7 +69,9 @@ export const RightAgentPanel: React.FC = () => {
   const [inputText, setInputText] = useState('');
   const [showHistoryDropdown, setShowHistoryDropdown] = useState(false);
   const [showAgentConfig, setShowAgentConfig] = useState(false);
-  const [expandedCodeIds, setExpandedCodeIds] = useState<Record<string, boolean>>({});
+  const [previewTabByMsgId, setPreviewTabByMsgId] = useState<
+    Record<string, 'closed' | 'diff' | 'code'>
+  >({});
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const historyDropdownRef = useRef<HTMLDivElement | null>(null);
 
@@ -76,8 +89,10 @@ export const RightAgentPanel: React.FC = () => {
 
   const activeSession =
     sessions.find((s) => s.id === activeSessionId) || sessions[0];
+  const referenceTemplate = FULL_FIGURE_TEMPLATES.find((template) => template.id === activeSession?.templateReferenceId);
   const activeProvider =
     providers.find((p) => p.id === activeAgentId) || providers[0];
+  const activeTheme = JOURNAL_THEMES[activeThemeId] || JOURNAL_THEMES.neurips;
 
   useEffect(() => {
     probeLocalAgents();
@@ -94,11 +109,14 @@ export const RightAgentPanel: React.FC = () => {
     await sendPromptToAgent(text);
   };
 
-  const quickPrompts = [
-    '为当前选中节点添加正交残差跳线',
-    '在选中模块旁添加跨模态注意力分支',
-    '在右侧添加 Cross-Attention 注意力热力图',
-    '生成 CVPR 多尺度 3D 视觉特征金字塔',
+  const quickPrompts = parsedDoc.elements.length === 0 ? [
+    '绘制双流 Encoder-Decoder 架构图，使用 stage_box 分组与顶刊语义配色',
+    '画一个带 3D 特征张量 (feature_cube) 与多头注意力 (mha_block) 的视觉主干图',
+    '绘制左侧架构图 + 右侧 PGFPlots 消融实验折线对比图的组合面板',
+  ] : [
+    '用 SEARCH/REPLACE 增量补丁修复当前画布重叠并应用顶刊语义配色',
+    '为当前选中模块添加右侧正交残差跳线与 Add & Norm 模块',
+    '在选中模块旁添加 3D 特征张量立方体 (feature_cube) 并连接箭头',
   ];
 
   if (isAgentPanelCollapsed) {
@@ -159,7 +177,7 @@ export const RightAgentPanel: React.FC = () => {
                   Agent 协作窗口
                 </span>
                 <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-medium">
-                  BYOA · ACP
+                  AST · Diff · ACP
                 </span>
               </div>
             </div>
@@ -225,7 +243,7 @@ export const RightAgentPanel: React.FC = () => {
           </div>
         </div>
 
-        {/* Agent CLI Selector + MCP Status Row */}
+        {/* Agent CLI Selector + Auto-Heal Engine Toggle Row */}
         <div className="flex items-center gap-1.5">
           <div className="relative flex-1">
             <select
@@ -247,20 +265,58 @@ export const RightAgentPanel: React.FC = () => {
           </div>
 
           <button
-            disabled
-            className="px-2 py-1 rounded-md text-[10px] font-medium border flex items-center gap-1 shrink-0 bg-white text-slate-400 border-slate-200 cursor-not-allowed"
-            title="MCP 画布工具服务尚未连接；当前通过提示词附加上下文"
+            onClick={() => setAutoLayoutRepairEnabled(!autoLayoutRepairEnabled)}
+            className={`px-2 py-1 rounded-md text-[10px] font-medium border flex items-center gap-1 shrink-0 transition-colors cursor-pointer ${
+              autoLayoutRepairEnabled
+                ? 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100/70'
+                : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'
+            }`}
+            title="智能几何防重叠与顶刊配色自愈引擎（自动修复间距遮挡、无框公式与单调白框）"
           >
             <Cpu className="w-3 h-3" />
-            <span>MCP</span>
+            <span>{autoLayoutRepairEnabled ? '自愈引擎 ON' : '自愈 OFF'}</span>
           </button>
 
           <button
             onClick={() => setShowAgentConfig(!showAgentConfig)}
-            className="p-1 rounded-md border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+            className="p-1 rounded-md border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 cursor-pointer"
             title="查看 ACP 协议命令详情"
           >
             <Terminal className="w-3.5 h-3.5" />
+          </button>
+        </div>
+
+        {/* 1-Click Agent Skills Bar (Local AST + Layout + Theme Palette Engine) */}
+        <div className="pt-0.5 flex items-center gap-1 overflow-x-auto no-scrollbar">
+          <button
+            type="button"
+            onClick={() => runLocalAgentSkill('full_optimize')}
+            disabled={isStreaming}
+            className="px-2 py-1 rounded-md bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white text-[10.5px] font-medium flex items-center gap-1 shrink-0 shadow-2xs transition-all cursor-pointer disabled:opacity-40"
+            title="一键执行：垂直间距防遮挡 + 顶刊语义配色 + 无框标签修复 + 容器自适应"
+          >
+            <Wand2 className="w-3 h-3" />
+            <span>一键综合精修</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => runLocalAgentSkill('theme_colorize')}
+            disabled={isStreaming}
+            className="px-2 py-1 rounded-md bg-white hover:bg-blue-50/70 text-slate-700 hover:text-blue-700 border border-slate-200 hover:border-blue-200 text-[10.5px] font-medium flex items-center gap-1 shrink-0 transition-colors cursor-pointer disabled:opacity-40"
+            title={`按当前顶刊主题 (${activeTheme.name}) 自动设计模块语义配色`}
+          >
+            <Palette className="w-3 h-3 text-indigo-600" />
+            <span>顶刊配色</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => runLocalAgentSkill('diagnose_canvas')}
+            disabled={isStreaming}
+            className="px-2 py-1 rounded-md bg-white hover:bg-blue-50/70 text-slate-700 hover:text-blue-700 border border-slate-200 hover:border-blue-200 text-[10.5px] font-medium flex items-center gap-1 shrink-0 transition-colors cursor-pointer disabled:opacity-40"
+            title="检查节点重叠、箭头遮挡、无框公式与配色一致性"
+          >
+            <ScanSearch className="w-3 h-3 text-emerald-600" />
+            <span>布局诊断</span>
           </button>
         </div>
 
@@ -312,180 +368,308 @@ export const RightAgentPanel: React.FC = () => {
 
       {/* 2. Middle Scrollable Chat Conversation Window */}
       <div className="flex-1 overflow-y-auto p-3 space-y-3 bg-white select-text">
-        {activeSession?.messages.map((msg) => (
-          <div
-            key={msg.id}
-            className={`flex flex-col ${
-              msg.role === 'user' ? 'items-end' : 'items-start'
-            }`}
-          >
-            {/* Sender Meta Header */}
-            <div className="flex items-center gap-1.5 mb-1 px-0.5">
-              <span className="text-[10px] font-semibold text-slate-500">
-                {msg.role === 'user'
-                  ? '你 (Researcher)'
-                  : msg.role === 'system' ? 'AgenTikZ 状态'
-                  : providers.find((p) => p.id === msg.agentId)?.name ||
-                    'ACP Agent'}
-              </span>
-              <span className="text-[10px] text-slate-400">{msg.timestamp}</span>
-            </div>
+        {activeSession?.messages.map((msg) => {
+          const patch = msg.patchProposal;
+          const previewMode =
+            previewTabByMsgId[msg.id] ||
+            (patch?.mode === 'surgical_diff' ? 'diff' : 'closed');
 
-            {/* Context Pills attached to user message */}
-            {msg.role === 'user' &&
-              ((msg.contextSelectionIds && msg.contextSelectionIds.length > 0) ||
-                msg.includeFullCanvas) && (
-                <div className="flex flex-wrap gap-1 mb-1 justify-end">
-                  {msg.includeFullCanvas && (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-mono">
-                      @canvas
-                    </span>
-                  )}
-                  {msg.contextSelectionIds?.map((id) => (
-                    <span
-                      key={id}
-                      className="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200 font-mono"
-                    >
-                      @选中({id})
-                    </span>
-                  ))}
-                </div>
-              )}
-
-            {/* Message Bubble */}
+          return (
             <div
-              className={`max-w-[95%] rounded-xl px-3 py-2 text-xs leading-relaxed ${
-                msg.role === 'user'
-                  ? 'bg-blue-600 text-white rounded-br-xs shadow-2xs'
-                  : 'bg-slate-50/90 text-slate-800 border border-slate-200/90 rounded-bl-xs space-y-2'
+              key={msg.id}
+              className={`flex flex-col ${
+                msg.role === 'user' ? 'items-end' : 'items-start'
               }`}
             >
-              {/* ACP Thought Stream */}
-              {msg.thoughtProcess && (
-                <details className="group bg-white rounded-lg border border-slate-200/80 px-2.5 py-1.5 text-[11px] text-slate-500">
-                  <summary className="cursor-pointer font-medium text-slate-600 flex items-center gap-1 list-none">
-                    <ChevronRight className="w-3 h-3 group-open:rotate-90 transition-transform" />
-                    <span>ACP 推理与 AST 分析过程</span>
-                  </summary>
-                  <p className="mt-1.5 pt-1.5 border-t border-slate-100 text-[10.5px] font-mono text-slate-500 leading-normal">
-                    {msg.thoughtProcess}
-                  </p>
-                </details>
-              )}
+              {/* Sender Meta Header */}
+              <div className="flex items-center gap-1.5 mb-1 px-0.5">
+                <span className="text-[10px] font-semibold text-slate-500">
+                  {msg.role === 'user'
+                    ? '你 (Researcher)'
+                    : msg.role === 'system'
+                    ? 'AgenTikZ 状态'
+                    : providers.find((p) => p.id === msg.agentId)?.name ||
+                      'ACP Agent'}
+                </span>
+                <span className="text-[10px] text-slate-400">{msg.timestamp}</span>
+              </div>
 
-              {/* MCP Tool Calls */}
-              {msg.mcpToolCalls && msg.mcpToolCalls.length > 0 && (
-                <div className="space-y-1">
-                  {msg.mcpToolCalls.map((tc, idx) => (
-                    <div
-                      key={idx}
-                      className="flex items-center justify-between px-2 py-1 rounded bg-white border border-slate-200/80 text-[10px] font-mono text-slate-600"
-                    >
-                      <span className="flex items-center gap-1 truncate">
-                        <Wrench className="w-3 h-3 text-blue-600 shrink-0" />
-                        <strong className="text-slate-800">
-                          {tc.toolName.replace(/^mcp__agen?tikz__/, '')}
-                        </strong>
-                        <span className="text-slate-400 truncate">
-                          ({tc.argsSummary})
-                        </span>
+              {/* Context Pills attached to user message */}
+              {msg.role === 'user' &&
+                ((msg.contextSelectionIds && msg.contextSelectionIds.length > 0) ||
+                  msg.includeFullCanvas) && (
+                  <div className="flex flex-wrap gap-1 mb-1 justify-end">
+                    {msg.includeFullCanvas && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-mono">
+                        @canvas
                       </span>
-                      {tc.status === 'completed' ? (
-                        <Check className="w-3 h-3 text-emerald-600 shrink-0 ml-1" />
-                      ) : (
-                        <span className={tc.status === 'failed' ? 'text-red-600 shrink-0 ml-1' : 'text-slate-400 shrink-0 ml-1'}>
-                          {tc.status === 'failed' ? '失败' : '运行中'}
-                        </span>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Message Text */}
-              <div className="whitespace-pre-wrap">{msg.content}</div>
-
-              {/* TikZ Code Patch Proposal Card */}
-              {msg.patchProposal && (
-                <div className="mt-2 bg-white border border-blue-200 rounded-lg overflow-hidden shadow-2xs">
-                  <div className="px-2.5 py-1.5 bg-blue-50/70 border-b border-blue-100 flex items-center justify-between">
-                    <span className="text-[11px] font-semibold text-blue-900 flex items-center gap-1">
-                      <Sparkles className="w-3 h-3 text-blue-600" />
-                      {msg.patchProposal.summary}
-                    </span>
-                    <span
-                      className={`text-[10px] px-1.5 py-0.2 rounded font-medium ${
-                        msg.patchProposal.status === 'applied'
-                          ? 'bg-emerald-100 text-emerald-800'
-                          : 'bg-amber-100 text-amber-800'
-                      }`}
-                    >
-                      {msg.patchProposal.status === 'applied' ? '已应用' : '待确认'}
-                    </span>
-                  </div>
-
-                  <div className="p-2.5 space-y-2">
-                    <p className="text-[11px] text-slate-500">
-                      {msg.patchProposal.rationale}
-                    </p>
-
-                    {/* Expandable TikZ Code Preview */}
-                    <button
-                      onClick={() =>
-                        setExpandedCodeIds((prev) => ({
-                          ...prev,
-                          [msg.id]: !prev[msg.id],
-                        }))
-                      }
-                      className="text-[10.5px] text-blue-600 hover:underline flex items-center gap-1 font-medium"
-                    >
-                      <Code2 className="w-3 h-3" />
-                      <span>
-                        {expandedCodeIds[msg.id]
-                          ? '收起生成的 TikZ 源码'
-                          : '预览生成的干净 TikZ 源码'}
-                      </span>
-                    </button>
-
-                    {expandedCodeIds[msg.id] && (
-                      <pre className="p-2 rounded bg-slate-50 border border-slate-200 text-[10px] font-mono text-slate-700 max-h-40 overflow-auto leading-snug">
-                        {msg.patchProposal.newTikzCode}
-                      </pre>
                     )}
-
-                    {/* Action Buttons: Apply / Revert / Open Code Tab */}
-                    <div className="flex items-center gap-1.5 pt-1">
-                      {msg.patchProposal.status !== 'applied' ? (
-                        <button
-                          onClick={() => applyPatchProposal(msg.id)}
-                          className="flex-1 py-1.5 px-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-[11px] font-medium flex items-center justify-center gap-1 transition-colors cursor-pointer"
-                        >
-                          <Check className="w-3.5 h-3.5" />
-                          <span>应用到画布与代码</span>
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => revertPatchProposal(msg.id)}
-                          className="flex-1 py-1.5 px-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md text-[11px] font-medium flex items-center justify-center gap-1 transition-colors cursor-pointer"
-                        >
-                          <RotateCcw className="w-3.5 h-3.5" />
-                          <span>撤回此修改</span>
-                        </button>
-                      )}
-                      <button
-                        onClick={() => setLeftTab('code')}
-                        className="py-1.5 px-2 border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-md text-[11px]"
-                        title="在左侧 TikZ 代码标签页查看"
+                    {msg.contextSelectionIds?.map((id) => (
+                      <span
+                        key={id}
+                        className="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200 font-mono"
                       >
-                        查看源码
-                      </button>
+                        @选中({id})
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+              {/* Message Bubble */}
+              <div
+                className={`max-w-[95%] rounded-xl px-3 py-2 text-xs leading-relaxed ${
+                  msg.role === 'user'
+                    ? 'bg-blue-600 text-white rounded-br-xs shadow-2xs'
+                    : 'bg-slate-50/90 text-slate-800 border border-slate-200/90 rounded-bl-xs space-y-2'
+                }`}
+              >
+                {/* ACP Thought Stream */}
+                {msg.thoughtProcess && (
+                  <details className="group bg-white rounded-lg border border-slate-200/80 px-2.5 py-1.5 text-[11px] text-slate-500">
+                    <summary className="cursor-pointer font-medium text-slate-600 flex items-center gap-1 list-none">
+                      <ChevronRight className="w-3 h-3 group-open:rotate-90 transition-transform" />
+                      <span>ACP 推理与 AST 分析过程</span>
+                    </summary>
+                    <p className="mt-1.5 pt-1.5 border-t border-slate-100 text-[10.5px] font-mono text-slate-500 leading-normal">
+                      {msg.thoughtProcess}
+                    </p>
+                  </details>
+                )}
+
+                {/* MCP Tool Calls */}
+                {msg.mcpToolCalls && msg.mcpToolCalls.length > 0 && (
+                  <div className="space-y-1">
+                    {msg.mcpToolCalls.map((tc, idx) => (
+                      <div
+                        key={idx}
+                        className="flex items-center justify-between px-2 py-1 rounded bg-white border border-slate-200/80 text-[10px] font-mono text-slate-600"
+                      >
+                        <span className="flex items-center gap-1 truncate">
+                          <Wrench className="w-3 h-3 text-blue-600 shrink-0" />
+                          <strong className="text-slate-800">
+                            {tc.toolName.replace(/^mcp__agen?tikz__/, '')}
+                          </strong>
+                          <span className="text-slate-400 truncate">
+                            ({tc.argsSummary})
+                          </span>
+                        </span>
+                        {tc.status === 'completed' ? (
+                          <Check className="w-3 h-3 text-emerald-600 shrink-0 ml-1" />
+                        ) : (
+                          <span
+                            className={
+                              tc.status === 'failed'
+                                ? 'text-red-600 shrink-0 ml-1'
+                                : 'text-slate-400 shrink-0 ml-1'
+                            }
+                          >
+                            {tc.status === 'failed' ? '失败' : '运行中'}
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Message Text */}
+                <div className="whitespace-pre-wrap">{msg.content}</div>
+
+                {/* TikZ Code Patch Proposal Card with Diff & Semantic Change Preview */}
+                {patch && (
+                  <div className="mt-2 bg-white border border-blue-200 rounded-lg overflow-hidden shadow-2xs">
+                    <div className="px-2.5 py-1.5 bg-blue-50/70 border-b border-blue-100 flex items-center justify-between gap-1">
+                      <span className="text-[11px] font-semibold text-blue-900 flex items-center gap-1 truncate">
+                        <Sparkles className="w-3 h-3 text-blue-600 shrink-0" />
+                        <span className="truncate">{patch.summary}</span>
+                      </span>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {typeof patch.layoutScore === 'number' && (
+                          <span
+                            className={`text-[9.5px] px-1.5 py-0.2 rounded font-mono font-semibold ${
+                              patch.layoutScore >= 90
+                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                : 'bg-amber-50 text-amber-700 border border-amber-200'
+                            }`}
+                            title="AST 2D 几何防重叠与配色健康度评分"
+                          >
+                            {patch.layoutScore}分
+                          </span>
+                        )}
+                        <span
+                          className={`text-[10px] px-1.5 py-0.2 rounded font-medium ${
+                            patch.status === 'applied'
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : 'bg-amber-100 text-amber-800'
+                          }`}
+                        >
+                          {patch.status === 'applied' ? '已应用' : '待确认'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="p-2.5 space-y-2">
+                      <p className="text-[11px] text-slate-500">
+                        {patch.rationale}
+                      </p>
+
+                      {/* Semantic AST Change Summary Pills */}
+                      {patch.semanticItems && patch.semanticItems.length > 0 && (
+                        <div className="flex flex-wrap gap-1">
+                          {patch.semanticItems.slice(0, 6).map((item, idx) => (
+                            <span
+                              key={idx}
+                              className={`text-[10px] px-1.5 py-0.5 rounded font-mono border ${
+                                item.type === 'add'
+                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                  : item.type === 'remove'
+                                  ? 'bg-red-50 text-red-700 border-red-200'
+                                  : 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                              }`}
+                            >
+                              {item.type === 'add'
+                                ? '+'
+                                : item.type === 'remove'
+                                ? '-'
+                                : '~'}{' '}
+                              {item.id}: {item.detail}
+                            </span>
+                          ))}
+                          {patch.semanticItems.length > 6 && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 font-mono">
+                              +{patch.semanticItems.length - 6} 项变更
+                            </span>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Auto-Repairs Summary */}
+                      {patch.autoRepairs && patch.autoRepairs.length > 0 && (
+                        <div className="p-1.5 rounded bg-indigo-50/60 border border-indigo-100 text-[10px] text-indigo-800 space-y-0.5">
+                          <div className="font-semibold flex items-center gap-1">
+                            <Wand2 className="w-3 h-3 text-indigo-600" />
+                            <span>智能自愈已优化 ({patch.autoRepairs.length} 项)：</span>
+                          </div>
+                          {patch.autoRepairs.slice(0, 3).map((rep, i) => (
+                            <div key={i} className="truncate pl-4 text-slate-600">
+                              • {rep}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* View Toggle: Diff View vs Full TikZ Code Preview */}
+                      <div className="flex items-center gap-2 pt-0.5">
+                        {patch.diffLines && patch.diffLines.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setPreviewTabByMsgId((prev) => ({
+                                ...prev,
+                                [msg.id]: previewMode === 'diff' ? 'closed' : 'diff',
+                              }))
+                            }
+                            className={`text-[10.5px] flex items-center gap-1 font-medium cursor-pointer ${
+                              previewMode === 'diff'
+                                ? 'text-indigo-700 underline'
+                                : 'text-slate-600 hover:text-indigo-600'
+                            }`}
+                          >
+                            <GitCompare className="w-3 h-3" />
+                            <span>
+                              {previewMode === 'diff' ? '收起 Diff 对比' : '查看 Diff 变更对比'}
+                            </span>
+                          </button>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setPreviewTabByMsgId((prev) => ({
+                              ...prev,
+                              [msg.id]: previewMode === 'code' ? 'closed' : 'code',
+                            }))
+                          }
+                          className="text-[10.5px] text-blue-600 hover:underline flex items-center gap-1 font-medium cursor-pointer"
+                        >
+                          <Code2 className="w-3 h-3" />
+                          <span>
+                            {previewMode === 'code'
+                              ? '收起生成的 TikZ 源码'
+                              : '预览生成的干净 TikZ 源码'}
+                          </span>
+                        </button>
+                      </div>
+
+                      {previewMode === 'diff' &&
+                        patch.diffLines &&
+                        patch.diffLines.length > 0 && (
+                          <div className="rounded bg-slate-900 border border-slate-800 text-[10px] font-mono max-h-48 overflow-auto py-1">
+                            {patch.diffLines.map((dl, idx) => (
+                              <div
+                                key={idx}
+                                className={`px-2 py-0.5 whitespace-pre flex items-start gap-1.5 ${
+                                  dl.type === 'add'
+                                    ? 'bg-emerald-950/80 text-emerald-300'
+                                    : dl.type === 'remove'
+                                    ? 'bg-rose-950/80 text-rose-300'
+                                    : dl.text === '@@ ... @@'
+                                    ? 'bg-slate-800/80 text-slate-400 italic'
+                                    : 'text-slate-300'
+                                }`}
+                              >
+                                <span className="w-4 shrink-0 select-none text-right opacity-60">
+                                  {dl.type === 'add'
+                                    ? '+'
+                                    : dl.type === 'remove'
+                                    ? '-'
+                                    : ' '}
+                                </span>
+                                <span className="truncate">{dl.text}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                      {previewMode === 'code' && (
+                        <pre className="p-2 rounded bg-slate-50 border border-slate-200 text-[10px] font-mono text-slate-700 max-h-44 overflow-auto leading-snug">
+                          {patch.newTikzCode}
+                        </pre>
+                      )}
+
+                      {/* Action Buttons: Apply / Revert / Open Code Tab */}
+                      <div className="flex items-center gap-1.5 pt-1">
+                        {patch.status !== 'applied' ? (
+                          <button
+                            onClick={() => applyPatchProposal(msg.id)}
+                            className="flex-1 py-1.5 px-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-[11px] font-medium flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                            <span>应用到画布与代码</span>
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => revertPatchProposal(msg.id)}
+                            className="flex-1 py-1.5 px-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md text-[11px] font-medium flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" />
+                            <span>撤回此修改</span>
+                          </button>
+                        )}
+                        <button
+                          onClick={() => setLeftTab('code')}
+                          className="py-1.5 px-2 border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-md text-[11px] cursor-pointer"
+                          title="在左侧 TikZ 代码标签页查看"
+                        >
+                          查看源码
+                        </button>
+                      </div>
                     </div>
                   </div>
-                </div>
-              )}
+                )}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
 
         {isStreaming && (
           <div className="flex items-center gap-2 text-xs text-slate-500 bg-white/80 border border-slate-200/70 rounded-2xl px-3 py-2 w-fit animate-shimmer">
@@ -513,12 +697,12 @@ export const RightAgentPanel: React.FC = () => {
           ))}
         </div>
 
-        {/* Context Pills Row (@canvas & @selection) */}
+        {/* Context Pills Row (@canvas & @selection & active theme) */}
         <div className="flex items-center gap-1.5 flex-wrap">
-          <span className="text-[10px] text-slate-400">附加上下文:</span>
+          <span className="text-[10px] text-slate-400">上下文:</span>
           <button
             onClick={() => setAttachCanvasContext(!attachCanvasContext)}
-            className={`px-1.5 py-0.5 rounded text-[10px] font-mono border flex items-center gap-1 ${
+            className={`px-1.5 py-0.5 rounded text-[10px] font-mono border flex items-center gap-1 cursor-pointer ${
               attachCanvasContext
                 ? 'bg-blue-50 text-blue-700 border-blue-200 font-medium'
                 : 'bg-white text-slate-400 border-slate-200'
@@ -530,7 +714,7 @@ export const RightAgentPanel: React.FC = () => {
 
           <button
             onClick={() => setAttachSelectionContext(!attachSelectionContext)}
-            className={`px-1.5 py-0.5 rounded text-[10px] font-mono border ${
+            className={`px-1.5 py-0.5 rounded text-[10px] font-mono border cursor-pointer ${
               attachSelectionContext && selectedIds.length > 0
                 ? 'bg-amber-50 text-amber-800 border-amber-200 font-medium'
                 : 'bg-white text-slate-400 border-slate-200'
@@ -539,6 +723,27 @@ export const RightAgentPanel: React.FC = () => {
             @选中(
             {selectedIds.length > 0 ? selectedIds.slice(0, 2).join(',') : '无'})
           </button>
+
+          <span
+            className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-indigo-50/80 text-indigo-700 border border-indigo-200"
+            title={`当前激活顶刊配色主题：${activeTheme.name}`}
+          >
+            @{activeThemeId}色板
+          </span>
+        </div>
+
+        <div className="rounded-lg border border-blue-100 bg-blue-50/60 px-2.5 py-2 text-[11px]">
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-medium text-blue-800 truncate" title={referenceTemplate?.title}>
+              {referenceTemplate ? `构图参考：${referenceTemplate.title}` : '已挂载组件库 · 顶刊配色 · 增量 Diff 引擎'}
+            </span>
+            {referenceTemplate && (
+              <button onClick={() => setTemplateReference()} className="shrink-0 text-slate-500 hover:text-blue-700 cursor-pointer">清除</button>
+            )}
+          </div>
+          <p className="mt-1 text-slate-500">
+            支持局部 SEARCH/REPLACE 增量修改、自动防重叠间距计算与 {activeTheme.name.split(' ')[0]} 语义配色。
+          </p>
         </div>
 
         {/* Multi-line Prompt Input Box */}
@@ -553,12 +758,12 @@ export const RightAgentPanel: React.FC = () => {
                 handleSend();
               }
             }}
-            placeholder="输入自然语言指令生成或修改选中图元 (Enter 发送)..."
+            placeholder="描述架构或局部修改需求（如：把注意力模块改为橙色、拉开垂直间距、添加残差跳线）..."
             className="w-full px-3 pt-2 pb-7 text-xs text-slate-800 bg-transparent resize-none focus:outline-none"
           />
           <div className="absolute bottom-1.5 left-2.5 right-2 flex items-center justify-between">
             <span className="text-[10px] text-slate-400">
-              生成语义化 TikZ · 保留注释
+              增量 Diff · 组件库 · 防重叠自愈
             </span>
             <button
               onClick={handleSend}

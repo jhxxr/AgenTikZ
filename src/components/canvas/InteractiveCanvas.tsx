@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useWorkspaceStore } from '../../store/useWorkspaceStore';
 import { useProjectStore } from '../../store/useProjectStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
+import { EMPTY_TIKZ_CODE } from '../../core/templates/blank-document';
 import { TikzEdgeElement, TikzNodeElement } from '../../types/tikz-ast';
 import {
   JOURNAL_THEMES,
@@ -132,6 +133,8 @@ export const InteractiveCanvas: React.FC = () => {
     compiledSvg,
     texCompilerStatus,
     setSelectedIds,
+    setLeftTab,
+    setAgentPanelCollapsed,
     setActiveTool,
     setShowGrid,
     setSnapToGrid,
@@ -1441,6 +1444,18 @@ export const InteractiveCanvas: React.FC = () => {
     >
       {/* Main Interactive Vector Canvas (Tavotto Studio Stage + Bounded Paper Artboard) */}
       <div className="relative flex-1 w-full h-full flex">
+        {tikzCode.trim() === EMPTY_TIKZ_CODE.trim() && activeTool === 'select' && previewMode === 'interactive' && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none p-4">
+            <div className="max-w-sm rounded-2xl border border-slate-200 bg-white/95 p-6 text-center shadow-sm pointer-events-auto">
+              <h2 className="text-base font-semibold text-slate-800">从你的想法开始绘图</h2>
+              <p className="mt-2 text-xs leading-relaxed text-slate-500">向 AI 描述模块、关系与数据，按需求生成新图。模板只是构图参考，也可主动选择以快速出图。</p>
+              <div className="mt-4 flex flex-wrap justify-center gap-2">
+                <button onClick={() => setAgentPanelCollapsed(false)} className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-medium text-white hover:bg-blue-700 cursor-pointer">向 AI 描述需求</button>
+                <button onClick={() => setLeftTab('library')} className="rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-600 hover:bg-slate-50 cursor-pointer">浏览内置模板</button>
+              </div>
+            </div>
+          </div>
+        )}
         <svg
           id="agentikz-canvas-svg"
           ref={svgRef}
@@ -1958,10 +1973,12 @@ export const InteractiveCanvas: React.FC = () => {
             <strong className="font-bold text-slate-900 mr-1.5">
               Figure 1:
             </strong>
-            <span>{parsedDoc.figureCaption}</span>
-            <span className="ml-2 text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">
-              \{parsedDoc.figureLabel}
-            </span>
+            <span>{parsedDoc.figureCaption || '点击添加图注'}</span>
+            {parsedDoc.figureLabel && (
+              <span className="ml-2 text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">
+                {parsedDoc.figureLabel}
+              </span>
+            )}
           </div>
           <span className="text-[11px] text-blue-600 opacity-70 group-hover:opacity-100 flex items-center gap-1 shrink-0 mt-0.5">
             <Edit3 className="w-3 h-3" />

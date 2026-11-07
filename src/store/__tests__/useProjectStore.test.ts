@@ -10,6 +10,8 @@ vi.mock('@tauri-apps/api/core', () => ({
 
 import { CanvasFileDocument, useProjectStore } from '../useProjectStore';
 import { useWorkspaceStore } from '../useWorkspaceStore';
+import { EMPTY_TIKZ_CODE } from '../../core/templates/blank-document';
+import { FULL_FIGURE_TEMPLATES } from '../../core/templates/dl-templates';
 
 interface MockStorage {
   store: Record<string, string>;
@@ -133,6 +135,30 @@ describe('useProjectStore', () => {
       globalThis as unknown as { window: Record<string, unknown> }
     ).window.__TAURI_INTERNALS__ = {};
   }
+
+  describe('blank-first canvas creation', () => {
+    it('creates an empty canvas without changing the previous drawing', async () => {
+      const fileName = await useProjectStore.getState().createNewCanvasFile('Independent drawing');
+      expect(fileName).toBeTruthy();
+      expect(useWorkspaceStore.getState().tikzCode).toBe(EMPTY_TIKZ_CODE);
+      expect(useWorkspaceStore.getState().activeTemplateId).toBe('');
+      await useProjectStore.getState().switchCanvasFile('fig1-architecture.canvas.json');
+      expect(useWorkspaceStore.getState().tikzCode).toBe(CODE_A);
+    });
+
+    it('uses ready-made code only for an explicitly chosen template', async () => {
+      const template = FULL_FIGURE_TEMPLATES[2];
+      await useProjectStore.getState().createNewCanvasFile('Quick start', template.id);
+      expect(useWorkspaceStore.getState().tikzCode).toBe(template.tikzCode);
+      expect(useWorkspaceStore.getState().activeThemeId).toBe(template.themeId);
+      expect(useWorkspaceStore.getState().activeTemplateId).toBe(template.id);
+    });
+
+    it('does not silently fall back to the first template for an invalid ID', async () => {
+      await useProjectStore.getState().createNewCanvasFile('Unknown template', 'missing');
+      expect(useWorkspaceStore.getState().tikzCode).toBe(EMPTY_TIKZ_CODE);
+    });
+  });
 
   describe('1. Async save race condition (Issue 1)', () => {
     it('does not overwrite activeCanvasFileName with A or overwrite A with B when A finishes saving after switching to B', async () => {

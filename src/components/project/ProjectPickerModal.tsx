@@ -403,7 +403,7 @@ export const ProjectPickerModal: React.FC = () => {
                 </code>
               </span>
             ) : (
-              <span>当前处于临时模板模式（未关联本地文件夹）</span>
+              <span>当前处于临时画布模式（未关联本地文件夹）</span>
             )}
           </div>
           <div className="flex items-center gap-2 shrink-0">
@@ -412,7 +412,7 @@ export const ProjectPickerModal: React.FC = () => {
               onClick={() => setPickerOpen(false)}
               className="px-4 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 font-medium transition-colors cursor-pointer"
             >
-              {projectDir ? '返回画布' : '暂不关联文件夹（使用模板体验）'}
+              {projectDir ? '返回画布' : '暂不关联文件夹（从空白画布开始）'}
             </button>
           </div>
         </div>

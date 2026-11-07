@@ -12,6 +12,7 @@ import {
   TikzEdgeElement,
   TikzNodeElement,
 } from '../../types/tikz-ast';
+import { registerCustomTikzColors } from '../themes/journal-presets';
 
 // ── Depth-aware scanning utilities ──────────────────────────────────────
 // These replace naive non-greedy regex matches that would break on nested
@@ -297,15 +298,7 @@ function parsePreambleStyles(source: string): Record<string, Record<string, stri
     },
   };
 
-  const tikzsetRegex = /\\tikzset\s*\{/g;
-  let match: RegExpExecArray | null;
-  while ((match = tikzsetRegex.exec(source)) !== null) {
-    const outerBraceIdx = match.index + match[0].length - 1;
-    const outerClose = findMatchingClose(source, outerBraceIdx, '{', '}');
-    if (outerClose === -1) continue;
-    const body = source.slice(outerBraceIdx + 1, outerClose);
-
-    // Scan for `styleName/.style={...}` with depth-aware body extraction
+  const extractStyleDefinitions = (body: string) => {
     const styleKeyRegex = /([a-zA-Z0-9_-]+)\s*\/\.style\s*=\s*\{/g;
     let sMatch: RegExpExecArray | null;
     while ((sMatch = styleKeyRegex.exec(body)) !== null) {
@@ -319,14 +312,45 @@ function parsePreambleStyles(source: string): Record<string, Record<string, stri
         ...parseTikzOptionString(styleBody),
       };
     }
+  };
+
+  // Scan \begin{tikzpicture}[...] options for inline style definitions
+  const beginTikzMatch = /\\begin\{tikzpicture\}\s*\[/g.exec(source);
+  if (beginTikzMatch) {
+    const openBracketIdx = beginTikzMatch.index + beginTikzMatch[0].length - 1;
+    const extracted = extractBracketContent(source, openBracketIdx);
+    if (extracted) {
+      extractStyleDefinitions(extracted.content);
+    }
+  }
+
+  const tikzsetRegex = /\\tikzset\s*\{/g;
+  let match: RegExpExecArray | null;
+  while ((match = tikzsetRegex.exec(source)) !== null) {
+    const outerBraceIdx = match.index + match[0].length - 1;
+    const outerClose = findMatchingClose(source, outerBraceIdx, '{', '}');
+    if (outerClose === -1) continue;
+    const body = source.slice(outerBraceIdx + 1, outerClose);
+    extractStyleDefinitions(body);
   }
   return styles;
 }
 
+const BUILTIN_BLOCK_STYLES = new Set([
+  'dl_block',
+  'mha_block',
+  'addnorm_block',
+  'conv_block',
+  'feature_cube',
+  'op_circle',
+  'stage_box',
+]);
+
 function inferNodeSubtype(
   styleClass: string | undefined,
   mergedOpts: Record<string, string>,
-  label: string
+  label: string,
+  nodeId?: string
 ): NodeSubtype {
   if (mergedOpts['subtype']) {
     return mergedOpts['subtype'] as NodeSubtype;
@@ -353,16 +377,24 @@ function inferNodeSubtype(
   ) {
     return 'op_circle';
   }
+  const minH = parseCmValue(mergedOpts['minimum height'], 0.85);
+  const minW = parseCmValue(mergedOpts['minimum width'], 2.8);
   if (
     styleClass === 'stage_box' ||
-    (mergedOpts['dashed'] === 'true' && mergedOpts['minimum height'] && parseCmValue(mergedOpts['minimum height'], 1) >= 2.2)
+    (mergedOpts['dashed'] === 'true' && minH >= 2.2) ||
+    (minW >= 3.6 &&
+      minH >= 2.5 &&
+      (label.trim() === '' ||
+        /stage|container|group|frame|encoder_block|decoder_block|outer/i.test(
+          `${styleClass || ''} ${nodeId || ''}`
+        )))
   ) {
     return 'container';
   }
   if (styleClass === 'mha_block' || /Multi-Head|Attention|MHA/i.test(label)) {
     return 'mha';
   }
-  if (styleClass === 'addnorm_block' || /Add\s*&\s*Norm|LayerNorm|RMSNorm/i.test(label)) {
+  if (styleClass === 'addnorm_block' || /^Add\s*\\?&\s*(?:Layer)?Norm|^LayerNorm|^RMSNorm/i.test(label)) {
     return 'addnorm';
   }
   if (styleClass === 'conv_block' || /Conv|Pool|Downsample|Upsample/i.test(label)) {
@@ -379,6 +411,22 @@ function inferNodeSubtype(
   }
   if (mergedOpts['draw'] === 'none' && (!mergedOpts['fill'] || mergedOpts['fill'] === 'none')) {
     return 'math';
+  }
+  // If a custom style (like `textlabel`, `note`, `annot`) or raw option list has no visible border/fill
+  const hasVisibleDraw =
+    mergedOpts['draw'] !== undefined && mergedOpts['draw'] !== 'none';
+  const hasVisibleFill =
+    mergedOpts['fill'] !== undefined && mergedOpts['fill'] !== 'none';
+  if (
+    !hasVisibleDraw &&
+    !hasVisibleFill &&
+    styleClass &&
+    !BUILTIN_BLOCK_STYLES.has(styleClass) &&
+    /label|note|annot|text|caption|math|eq|title|repeat|dim/i.test(
+      `${styleClass} ${nodeId || ''}`
+    )
+  ) {
+    return minW >= 5.5 ? 'caption' : 'math';
   }
   return 'block';
 }
@@ -495,7 +543,7 @@ function parseSingleNodeStatement(
   }
   mergedOpts = { ...mergedOpts, ...rawOptions };
 
-  const subtype = inferNodeSubtype(styleClass, mergedOpts, label);
+  const subtype = inferNodeSubtype(styleClass, mergedOpts, label, id);
 
   // Extract \includegraphics[...]{path} details if subtype === 'image'
   let imagePath: string | undefined = mergedOpts['image_path'];
@@ -710,7 +758,71 @@ function parseSingleDrawStatement(
       bodyAfterOpt
     );
 
-  if (!stdMatch) return null;
+  const hasArrowEnd =
+    !mergedOpts['-'] &&
+    (mergedOpts['->'] === 'true' ||
+      mergedOpts['-Stealth'] === 'true' ||
+      mergedOpts['-Latex'] === 'true' ||
+      styleClass !== undefined ||
+      Object.keys(mergedOpts).some((k) => k.startsWith('-')));
+
+  if (!stdMatch) {
+    // Fallback for multi-segment waypoint paths between two named nodes:
+    // e.g. `(a.east) -- (15.4, 2.2) |- (b.east);` or `(a.east) -- (9.55, 3.7) -- (9.55, 0.7) |- (b.west);`
+    const namedEndpoints: Array<{ id: string; anchor?: string; index: number }> = [];
+    const tokenRegex = /(\+\+\s*)?\(\s*([a-zA-Z_][a-zA-Z0-9_:-]*)(?:\.([a-zA-Z ]+))?\s*\)/g;
+    let tMatch: RegExpExecArray | null;
+    while ((tMatch = tokenRegex.exec(bodyAfterOpt)) !== null) {
+      if (tMatch[1]) continue; // skip relative ++(...)
+      namedEndpoints.push({
+        id: tMatch[2].trim(),
+        anchor: tMatch[3]?.trim(),
+        index: tMatch.index,
+      });
+    }
+    if (namedEndpoints.length >= 2) {
+      const first = namedEndpoints[0];
+      const last = namedEndpoints[namedEndpoints.length - 1];
+      const fAnchor = first.anchor;
+      const tAnchor = last.anchor;
+      const inlineLabelMatch = /node\s*(?:\[([^\]]*)\])?\s*\{([\s\S]*?)\}/.exec(bodyAfterOpt);
+      let routeType: EdgeRouteType = 'direct';
+      let residualOffset: number | undefined;
+      if (fAnchor === 'east' && tAnchor === 'east') {
+        routeType = 'residual_right';
+        residualOffset = 1.2;
+      } else if (fAnchor === 'west' && tAnchor === 'west') {
+        routeType = 'residual_left';
+        residualOffset = 1.2;
+      } else if (/\|-\s*(?:node[\s\S]*?)?\(\s*[a-zA-Z_]/.test(bodyAfterOpt)) {
+        routeType = 'vh';
+      } else if (/-\|\s*(?:node[\s\S]*?)?\(\s*[a-zA-Z_]/.test(bodyAfterOpt)) {
+        routeType = 'hv';
+      }
+      return {
+        kind: 'edge',
+        id: `edge_${autoIdx}`,
+        from: first.id,
+        fromAnchor: fAnchor,
+        to: last.id,
+        toAnchor: tAnchor,
+        routeType,
+        residualOffset,
+        label: inlineLabelMatch?.[2]?.trim(),
+        labelOffset: parseEdgeLabelOffset(inlineLabelMatch?.[1]),
+        arrowStart: Object.keys(mergedOpts).some((k) => k.startsWith('<') || k.startsWith('Stealth-')),
+        arrowEnd: hasArrowEnd,
+        stroke: mergedOpts['draw'] || 'nips_slate!85!black',
+        lineWidth: mergedOpts['line width'] || '0.7pt',
+        dashed: mergedOpts['dashed'] === 'true' || mergedOpts['densely dashed'] === 'true',
+        styleClass,
+        rawOptions,
+        span: makeSpan(source, stmtStart, stmtEnd),
+        optionsSpan,
+      };
+    }
+    return null;
+  }
 
   const connector = stdMatch[3].trim();
   let routeType: EdgeRouteType = 'direct';
@@ -725,14 +837,6 @@ function parseSingleDrawStatement(
       bendAngle = bendMatch[1] === 'right' ? -deg : deg;
     }
   }
-
-  const hasArrowEnd =
-    !mergedOpts['-'] &&
-    (mergedOpts['->'] === 'true' ||
-      mergedOpts['-Stealth'] === 'true' ||
-      mergedOpts['-Latex'] === 'true' ||
-      styleClass !== undefined ||
-      Object.keys(mergedOpts).some((k) => k.startsWith('-')));
 
   return {
     kind: 'edge',
@@ -1009,6 +1113,7 @@ function parsePgfAxisBlock(
  * where every node, edge, and chart carries its exact character `SourceSpan`.
  */
 export function parseTikzDocument(source: string): ParsedTikzDocument {
+  registerCustomTikzColors(source);
   const preambleStyles = parsePreambleStyles(source);
   const elements: SceneElement[] = [];
   const nodes: TikzNodeElement[] = [];
@@ -1017,9 +1122,8 @@ export function parseTikzDocument(source: string): ParsedTikzDocument {
   const diagnostics: ParsedTikzDocument['diagnostics'] = [];
 
   // Extract overall Figure Caption (% \caption{...} or \caption{...}) and \label{...}
-  let figureCaption =
-    'Overview of the proposed architecture and experimental scaling analysis.';
-  let figureLabel = 'fig:architecture_overview';
+  let figureCaption = '';
+  let figureLabel = '';
   // Extract caption using depth-aware brace matching
   const capSearchRegex = /(?:%\s*)?\\caption\{/g;
   const capStartMatch = capSearchRegex.exec(source);

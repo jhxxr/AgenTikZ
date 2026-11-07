@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useWorkspaceStore } from '../../store/useWorkspaceStore';
+import { useAgentStore } from '../../store/useAgentStore';
 import {
   useProjectStore,
   AGENTIKZ_FOLDER_NAME,
@@ -199,8 +200,12 @@ export const LeftTabbedSidebar: React.FC = () => {
     setLeftTab,
     addPrimitiveToCanvas,
     addImageAssetToCanvas,
-    loadTemplate,
+    setAgentPanelCollapsed,
   } = useWorkspaceStore();
+  const setTemplateReference = useAgentStore((state) => state.setTemplateReference);
+  const referenceTemplateId = useAgentStore((state) =>
+    state.sessions.find((session) => session.id === state.activeSessionId)?.templateReferenceId
+  );
 
   const {
     projectDir,
@@ -584,10 +589,13 @@ export const LeftTabbedSidebar: React.FC = () => {
               <div className="flex items-center justify-between mb-2.5">
                 <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-800">
                   <BookOpen className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>顶刊整图预设模板</span>
+                  <span>构图参考与快速模板</span>
                 </div>
-                <span className="text-[10px] text-slate-400 italic">Publication-Grade</span>
+                <span className="text-[10px] text-slate-400">内置 {FULL_FIGURE_TEMPLATES.length} 组</span>
               </div>
+              <p className="mb-3 text-[11px] leading-relaxed text-slate-500">
+                AI 借鉴构图思路，按你的需求重新绘制；快速出图可从模板新建，不覆盖当前画布。图表中的数值仅为示例。
+              </p>
 
               {/* Category Pills with Icons */}
               <div className="flex items-center gap-1 overflow-x-auto pb-2.5 mb-1 no-scrollbar">
@@ -611,14 +619,14 @@ export const LeftTabbedSidebar: React.FC = () => {
               <div className="space-y-3">
                 {filteredTemplates.map((tpl) => {
                   const isActive = activeTemplateId === tpl.id;
+                  const isReference = referenceTemplateId === tpl.id;
                   const stats = templateStats[tpl.id];
                   const venueStyle = VENUE_COLORS[tpl.venue] || VENUE_COLORS['NeurIPS / ICLR'];
                   return (
                     <div
                       key={tpl.id}
-                      onClick={() => loadTemplate(tpl.id)}
-                      className={`rounded-xl border overflow-hidden transition-all cursor-pointer group ${
-                        isActive
+                      className={`rounded-xl border overflow-hidden transition-all group ${
+                        isReference
                           ? 'border-blue-500 shadow-md ring-1 ring-blue-200'
                           : 'border-slate-200 bg-white hover:border-blue-300 hover:shadow-sm'
                       }`}
@@ -634,15 +642,13 @@ export const LeftTabbedSidebar: React.FC = () => {
                               {stats.nodes}N · {stats.edges}E{stats.charts > 0 ? ` · ${stats.charts}C` : ''}
                             </span>
                           )}
-                          {isActive ? (
+                          {isReference ? (
                             <span className="text-[10px] text-blue-600 font-bold flex items-center gap-0.5">
-                              <CheckCircle2 className="w-3 h-3" /> 当前
+                              <CheckCircle2 className="w-3 h-3" /> AI 参考
                             </span>
-                          ) : (
-                            <span className="text-[10px] text-blue-500 opacity-0 group-hover:opacity-100 font-medium flex items-center gap-0.5">
-                              <Sparkles className="w-3 h-3" /> 载入当前画布
-                            </span>
-                          )}
+                          ) : isActive ? (
+                            <span className="text-[10px] text-slate-500">当前模板</span>
+                          ) : null}
                         </div>
                       </div>
 
@@ -664,8 +670,16 @@ export const LeftTabbedSidebar: React.FC = () => {
                           </div>
                         </div>
 
-                        {/* Tags + Action Buttons */}
-                        <div className="flex items-center justify-between mt-2 gap-1.5">
+                        <details className="mt-2 text-[10.5px] text-slate-500 leading-relaxed">
+                          <summary className="cursor-pointer text-slate-600">可借鉴的绘图思路</summary>
+                          <p className="mt-1">{tpl.designGuide.intent}</p>
+                          <ul className="list-disc pl-4 mt-1 space-y-1">
+                            {[...tpl.designGuide.layout, ...tpl.designGuide.adapt].map((idea) => <li key={idea}>{idea}</li>)}
+                          </ul>
+                        </details>
+
+                        {/* Reference never mutates the canvas; quick start creates a separate file. */}
+                        <div className="flex flex-wrap items-center justify-between mt-2 gap-1.5">
                           <div className="flex flex-wrap gap-1 min-w-0">
                             {tpl.tags.slice(0, 2).map((tag) => (
                               <span key={tag} className="text-[9.5px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500">
@@ -684,15 +698,19 @@ export const LeftTabbedSidebar: React.FC = () => {
                               title="基于此模板在当前项目中新建一个画布文件"
                             >
                               <FilePlus2 className="w-3 h-3" />
-                              <span>新建画布</span>
+                              <span>快速新建</span>
                             </button>
                             <button
                               type="button"
-                              onClick={(e) => { e.stopPropagation(); loadTemplate(tpl.id); setLeftTab('code'); }}
-                              className="px-2 py-0.5 rounded-md text-[10px] font-medium bg-slate-100 hover:bg-blue-600 hover:text-white text-slate-500 flex items-center gap-1 transition-colors cursor-pointer"
+                              onClick={() => {
+                                setTemplateReference(tpl.id);
+                                setAgentPanelCollapsed(false);
+                              }}
+                              className="px-2 py-0.5 rounded-md text-[10px] font-medium bg-blue-50 hover:bg-blue-600 hover:text-white text-blue-700 flex items-center gap-1 transition-colors cursor-pointer"
+                              title="只附加构图思路；在右侧输入你的绘图需求后发送"
                             >
-                              <FileCode2 className="w-3 h-3" />
-                              <span>代码</span>
+                              <Sparkles className="w-3 h-3" />
+                              <span>给 AI 参考</span>
                             </button>
                           </div>
                         </div>

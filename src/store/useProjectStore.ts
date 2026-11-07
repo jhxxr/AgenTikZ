@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { JournalThemeId } from '../types/theme';
 import { FULL_FIGURE_TEMPLATES } from '../core/templates/dl-templates';
+import { EMPTY_TIKZ_CODE } from '../core/templates/blank-document';
 import { useWorkspaceStore } from './useWorkspaceStore';
 
 export const AGENTIKZ_FOLDER_NAME = 'agentikzfile';
@@ -852,18 +853,17 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         counter++;
       }
 
-      const tpl =
-        (templateId &&
-          FULL_FIGURE_TEMPLATES.find((t) => t.id === templateId)) ||
-        FULL_FIGURE_TEMPLATES[0];
+      const tpl = templateId
+        ? FULL_FIGURE_TEMPLATES.find((t) => t.id === templateId)
+        : undefined;
 
       isApplyingCanvasSwitch = true;
       try {
         useWorkspaceStore.getState().applyCanvasDocumentState({
-          tikzCode: tpl.tikzCode,
-          activeThemeId: tpl.themeId,
-          zoom: tpl.recommendedZoom || 1,
-          pan: tpl.recommendedPan || { x: 85, y: 490 },
+          tikzCode: tpl?.tikzCode ?? EMPTY_TIKZ_CODE,
+          activeThemeId: tpl?.themeId ?? prevDoc.activeThemeId,
+          zoom: tpl?.recommendedZoom ?? 1,
+          pan: tpl?.recommendedPan ?? { x: 80, y: 495 },
         });
       } finally {
         isApplyingCanvasSwitch = false;

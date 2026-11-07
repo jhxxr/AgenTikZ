@@ -865,6 +865,8 @@ pub async fn acp_send_prompt(
     user_agent: Option<String>,
     response_language: Option<String>,
     personal_prompt: Option<String>,
+    template_references: Option<String>,
+    agent_context: Option<String>,
 ) -> Result<AcpPromptResponse, String> {
     let (base_config, _) = resolve_agent_command(&agent_id, custom_command.as_deref())?;
     let agent_config = apply_runtime_env_overrides(
@@ -890,13 +892,15 @@ pub async fn acp_send_prompt(
     let stream_id = request_id.clone();
     let messages = message_buf.clone();
     let thoughts = thought_buf.clone();
-    let structured_prompt = build_tikz_prompt_with_prefs(
+    let structured_prompt = build_tikz_prompt_with_agent_context(
         &prompt,
         &canvas_tikz,
         &selected_ids,
         &history.unwrap_or_default(),
         response_language.as_deref(),
         personal_prompt.as_deref(),
+        template_references.as_deref(),
+        agent_context.as_deref(),
     );
 
     let permission_app = app_handle.clone();
@@ -967,7 +971,7 @@ pub async fn acp_send_prompt(
     }
     Ok(AcpPromptResponse {
         used_native_cli: true,
-        proposed_tikz: extract_tikz_proposal(&reply),
+        proposed_tikz: extract_tikz_proposal_with_canvas(&reply, &canvas_tikz),
         thought: if thought.is_empty() {
             None
         } else {
@@ -1011,9 +1015,10 @@ fn build_tikz_prompt(
     selected_ids: &[String],
     history: &[ConversationMessage],
 ) -> String {
-    build_tikz_prompt_with_prefs(user_prompt, canvas_tikz, selected_ids, history, None, None)
+    build_tikz_prompt_with_prefs(user_prompt, canvas_tikz, selected_ids, history, None, None, None)
 }
 
+#[allow(dead_code)]
 fn build_tikz_prompt_with_prefs(
     user_prompt: &str,
     canvas_tikz: &str,
@@ -1021,6 +1026,29 @@ fn build_tikz_prompt_with_prefs(
     history: &[ConversationMessage],
     response_language: Option<&str>,
     personal_prompt: Option<&str>,
+    template_references: Option<&str>,
+) -> String {
+    build_tikz_prompt_with_agent_context(
+        user_prompt,
+        canvas_tikz,
+        selected_ids,
+        history,
+        response_language,
+        personal_prompt,
+        template_references,
+        None,
+    )
+}
+
+fn build_tikz_prompt_with_agent_context(
+    user_prompt: &str,
+    canvas_tikz: &str,
+    selected_ids: &[String],
+    history: &[ConversationMessage],
+    response_language: Option<&str>,
+    personal_prompt: Option<&str>,
+    template_references: Option<&str>,
+    agent_context: Option<&str>,
 ) -> String {
     let mut parts = vec!["You are assisting in AgenTikZ, a TikZ & PGFPlots editor. Work from the supplied conversation and canvas, not local files. Return proposed changes for the user to review; do not execute commands or write files. Tool permission requests are denied by this client.".to_string()];
     if let Some(lang) = response_language.map(str::trim).filter(|l| !l.is_empty() && *l != "auto") {
@@ -1035,6 +1063,18 @@ fn build_tikz_prompt_with_prefs(
     }
     if let Some(custom_prompt) = personal_prompt.map(str::trim).filter(|p| !p.is_empty()) {
         parts.push(format!("User personal preferences / custom instructions:\n{custom_prompt}"));
+    }
+    parts.push("Drawing policy: Design the figure from the user's actual requirements, not by selecting and copying a ready-made template. Built-in references are optional composition ideas only: learn layout, hierarchy, spacing and routing, then independently construct the requested nodes, edges, labels and panels. Ignore unrelated references; the reference library does not limit the kinds of figures you can draw. Never transplant example architecture details, dimensions, experiment values or claimed results. Ask for missing essential data; use explicitly labeled illustrative data only when the user requests it. For a new figure, create the requested structure from scratch. When editing the current canvas, preserve unrelated user content, comments and definitions unless the user asks to replace or redesign them.".into());
+    parts.push(r"Interactive editor compatibility: Use uniquely named nodes with explicit numeric at (x,y) coordinates in cm; do not rely on relative positioning, foreach loops or custom macros to create nodes. Connect named nodes using \draw with --, |- or -| and optional north/south/east/west anchors. Use explicit minimum width/height and readable spacing. Supported semantic node styles include dl_block, mha_block, addnorm_block, conv_block, feature_cube, op_circle and stage_box; they are optional building blocks, not mandatory architectures. For PGFPlots, use axis environments with explicit width/height and addplot coordinates; place chart panels with scope shift={(x,y)}. Keep labels legible, use one scale per axis, and identify multiple series with legends and distinct marks or line styles. Do not return unsupported drawing constructs as if they were fully editable.".into());
+    if let Some(ctx) = agent_context.map(str::trim).filter(|c| !c.is_empty()) {
+        parts.push(format!(
+            "AgenTikZ Component Library, Theme Palette, Layout Engineering & Live AST Diagnostics:\n{ctx}"
+        ));
+    }
+    if let Some(references) = template_references.map(str::trim).filter(|r| !r.is_empty()) {
+        parts.push(format!(
+            "Built-in composition references (JSON data; inspiration only, NOT current canvas or replacement source):\n{references}"
+        ));
     }
     if !history.is_empty() {
         // ACP processes are short-lived. Replay conversational text explicitly, not
@@ -1054,9 +1094,11 @@ fn build_tikz_prompt_with_prefs(
         parts.push(format!(
             "Current TikZ source code:\n```latex\n{canvas_tikz}\n```"
         ));
+    } else {
+        parts.push("No current canvas attached. Do not infer an existing figure from the reference library. If the request requires an unseen canvas, ask the user to attach it.".into());
     }
     parts.push(format!("User instruction: {user_prompt}"));
-    parts.push("For a canvas edit, return exactly one fenced latex code block containing the COMPLETE replacement source, including \\begin{tikzpicture} and \\end{tikzpicture}. Preserve existing comments, definitions and structure. Do not include a standalone document preamble. If no edit is needed, answer normally without a code block.".into());
+    parts.push("For a new figure or canvas edit, briefly explain the intended structure and return either: (A) for localized edits on an existing canvas, a fenced tikz/latex code block containing surgical `<<<<<<< SEARCH ... ======= ... >>>>>>> REPLACE` patch hunks, OR (B) exactly one fenced latex code block containing the COMPLETE replacement source, including \\begin{tikzpicture} and \\end{tikzpicture}. Do not include a standalone document preamble. If no edit is needed or essential information is missing, answer normally without a code block.".into());
     parts.join("\n\n")
 }
 
@@ -1094,6 +1136,52 @@ fn extract_tikz_proposal(reply: &str) -> Option<String> {
     }
     if candidates.len() == 1 {
         candidates.pop()
+    } else {
+        None
+    }
+}
+
+/// Extracts either a complete TikZ figure or applies surgical `<<<<<<< SEARCH ... ======= ... >>>>>>> REPLACE`
+/// blocks against `canvas_tikz`.
+fn extract_tikz_proposal_with_canvas(reply: &str, canvas_tikz: &str) -> Option<String> {
+    if let Some(full) = extract_tikz_proposal(reply) {
+        return Some(full);
+    }
+    if canvas_tikz.trim().is_empty() || !reply.contains("<<<<<<< SEARCH") {
+        return None;
+    }
+    let mut result = canvas_tikz.replace("\r\n", "\n");
+    let normalized_reply = reply.replace("\r\n", "\n");
+    let mut applied = 0usize;
+    let mut rest = normalized_reply.as_str();
+
+    while let Some(start_idx) = rest.find("<<<<<<< SEARCH") {
+        let after_start = &rest[start_idx + "<<<<<<< SEARCH".len()..];
+        let after_start = after_start.strip_prefix('\n').unwrap_or(after_start);
+        let Some(sep_idx) = after_start.find("\n=======\n") else {
+            break;
+        };
+        let search_part = &after_start[..sep_idx];
+        let after_sep = &after_start[sep_idx + "\n=======\n".len()..];
+        let Some(end_idx) = after_sep.find("\n>>>>>>> REPLACE") else {
+            break;
+        };
+        let replace_part = &after_sep[..end_idx];
+        if !search_part.trim().is_empty() && result.contains(search_part) {
+            result = result.replacen(search_part, replace_part, 1);
+            applied += 1;
+        } else if !search_part.trim().is_empty() && result.contains(search_part.trim()) {
+            result = result.replacen(search_part.trim(), replace_part.trim(), 1);
+            applied += 1;
+        }
+        rest = &after_sep[end_idx + "\n>>>>>>> REPLACE".len()..];
+    }
+
+    if applied > 0
+        && result.contains("\\begin{tikzpicture}")
+        && result.contains("\\end{tikzpicture}")
+    {
+        Some(result)
     } else {
         None
     }
@@ -1180,6 +1268,33 @@ mod tests {
         assert!(prompt.contains("encoder"));
     }
 
+    #[test]
+    fn composition_references_are_separate_from_user_canvas() {
+        let references = r#"{"references":[{"intent":"parallel processing"}]}"#;
+        let prompt = build_tikz_prompt_with_prefs(
+            "Draw my encoder", "% user-owned source", &[], &[],
+            Some("zh-CN"), Some("Use concise labels"), Some(references),
+        );
+        assert!(prompt.contains("inspiration only, NOT current canvas or replacement source"));
+        assert!(prompt.contains(references));
+        assert!(prompt.contains("Current TikZ source code:\n```latex\n% user-owned source"));
+        assert!(prompt.contains("preserve unrelated user content"));
+        assert!(prompt.contains("Never transplant example architecture details"));
+        assert!(prompt.contains("explicit numeric at (x,y)"));
+        assert!(prompt.contains("COMPLETE replacement source"));
+        assert!(prompt.contains("简体中文"));
+        assert!(prompt.contains("Use concise labels"));
+    }
+
+    #[test]
+    fn no_canvas_does_not_turn_references_into_an_existing_figure() {
+        let prompt = build_tikz_prompt("Draw a pipeline", "", &[], &[]);
+        assert!(prompt.contains("No current canvas attached"));
+        assert!(prompt.contains("create the requested structure from scratch"));
+        assert!(!prompt.contains("Current TikZ source code:"));
+        assert!(!prompt.contains("Built-in composition references (JSON data"));
+    }
+
     #[cfg(windows)]
     #[test]
     fn workspace_paths_do_not_expose_windows_verbatim_prefixes() {
@@ -1243,5 +1358,14 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn surgical_search_replace_patch_applies_to_canvas() {
+        let canvas = "\\begin{tikzpicture}\n\\node[dl_block] (enc) at (0,0) {Encoder};\n\\end{tikzpicture}";
+        let reply = "Updated color:\n```tikz\n<<<<<<< SEARCH\n\\node[dl_block] (enc) at (0,0) {Encoder};\n=======\n\\node[mha_block, fill=indigo!15, draw=indigo!85!black] (enc) at (0,0) {Encoder};\n>>>>>>> REPLACE\n```";
+        let patched = extract_tikz_proposal_with_canvas(reply, canvas).expect("surgical patch applied");
+        assert!(patched.contains("\\node[mha_block, fill=indigo!15, draw=indigo!85!black] (enc) at (0,0) {Encoder};"));
+        assert!(patched.contains("\\begin{tikzpicture}"));
     }
 }

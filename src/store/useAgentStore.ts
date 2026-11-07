@@ -6,13 +6,34 @@ import {
   AcpStreamEvent,
   AgentChatMessage,
   AgentSession,
+  TikzPatchProposal,
 } from '../types/acp';
 import { useWorkspaceStore } from './useWorkspaceStore';
+import { FULL_FIGURE_TEMPLATES } from '../core/templates/dl-templates';
+import { buildTemplateReferenceContext } from '../core/templates/template-reference';
+import { buildAgentSkillAndLibraryContext } from '../core/agent/agent-knowledge';
+import {
+  computeTikzDiff,
+  extractAgentDirectives,
+  resolveAgentPatchFromReply,
+} from '../core/agent/tikz-diff';
+import {
+  analyzeTikzLayout,
+  autoRepairTikzLayout,
+} from '../core/agent/layout-diagnostics';
+import { JOURNAL_THEMES } from '../core/themes/journal-presets';
+import { JournalThemeId } from '../types/theme';
 import {
   buildCustomAcpCommandSpec,
   resolveEffectiveUserAgent,
   useSettingsStore,
 } from './useSettingsStore';
+
+export type LocalAgentSkillId =
+  | 'full_optimize'
+  | 'auto_layout'
+  | 'theme_colorize'
+  | 'diagnose_canvas';
 
 const DEFAULT_ACP_PROVIDERS: AcpAgentProvider[] = [
   { id: 'claude-code', name: 'Claude Code (ACP)', command: 'claude-agent-acp', args: [],
@@ -45,6 +66,7 @@ interface AgentStoreState {
   mcpServerEnabled: boolean;
   attachCanvasContext: boolean;
   attachSelectionContext: boolean;
+  autoLayoutRepairEnabled: boolean;
   isStreaming: boolean;
   sessions: AgentSession[];
   activeSessionId: string;
@@ -53,11 +75,14 @@ interface AgentStoreState {
   setMcpServerEnabled: (enabled: boolean) => void;
   setAttachCanvasContext: (attach: boolean) => void;
   setAttachSelectionContext: (attach: boolean) => void;
+  setAutoLayoutRepairEnabled: (enabled: boolean) => void;
+  setTemplateReference: (templateId?: string) => void;
   createNewSession: () => void;
   switchSession: (sessionId: string) => void;
   probeLocalAgents: () => Promise<void>;
   testAgentHandshake: (agentId: AcpAgentId) => Promise<AcpHandshakeResult>;
   sendPromptToAgent: (promptText: string) => Promise<void>;
+  runLocalAgentSkill: (skillId: LocalAgentSkillId) => void;
   applyPatchProposal: (messageId: string) => void;
   revertPatchProposal: (messageId: string) => void;
 }
@@ -69,7 +94,7 @@ const initialSession: AgentSession = {
   messages: [{
     id: 'msg_welcome', role: 'system', agentId: initialSettings.defaultAgentId,
     timestamp: new Date().toTimeString().slice(0, 5),
-    content: '尚未连接 Agent。发送时会启动本地已安装的 ACP 程序；请先安装对应适配器并完成 CLI 登录。不会下载程序或生成模拟回复。\n\n可附加画布与选中元素，生成的完整 TikZ 代码需要预览并确认后才会应用。',
+    content: '已挂载 AgenTikZ 智能绘图引擎（AST 语义解析 · 增量 Diff 补丁 · 防重叠几何排障 · 顶刊语义配色 · 组件库规范）。\n\n你可以直接用自然语言描述新架构或局部修改需求，或点击上方「Agent 快捷技能」一键自动修复画布重叠、无框公式与顶刊配色。',
   }],
 };
 
@@ -81,9 +106,10 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
     initialSettings.customAcpArgs,
     initialSettings.customAcpEnvJson
   ),
-  mcpServerEnabled: false,
+  mcpServerEnabled: true,
   attachCanvasContext: initialSettings.defaultAttachCanvas,
   attachSelectionContext: initialSettings.defaultAttachSelection,
+  autoLayoutRepairEnabled: true,
   isStreaming: false,
   sessions: [initialSession],
   activeSessionId: initialSessionId,
@@ -96,6 +122,15 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
   setMcpServerEnabled: (mcpServerEnabled) => set({ mcpServerEnabled }),
   setAttachCanvasContext: (attachCanvasContext) => set({ attachCanvasContext }),
   setAttachSelectionContext: (attachSelectionContext) => set({ attachSelectionContext }),
+  setAutoLayoutRepairEnabled: (autoLayoutRepairEnabled) => set({ autoLayoutRepairEnabled }),
+  setTemplateReference: (templateId) => {
+    const templateReferenceId = FULL_FIGURE_TEMPLATES.find((t) => t.id === templateId)?.id;
+    set((state) => ({
+      sessions: state.sessions.map((session) => session.id === state.activeSessionId
+        ? { ...session, templateReferenceId }
+        : session),
+    }));
+  },
   createNewSession: () => {
     const { activeAgentId, sessions } = get();
     const prefs = useSettingsStore.getState();
@@ -108,7 +143,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
         messages: [{
           id: `msg_${id}`, role: 'system', agentId: activeAgentId,
           timestamp: new Date().toTimeString().slice(0, 5),
-          content: '新对话已创建。发送后将尝试连接本地 ACP 程序。',
+          content: '新对话已创建。已注入组件库、顶刊配色规范与增量 Diff 协议。',
         }],
       }, ...sessions],
       activeSessionId: id,
@@ -219,14 +254,23 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
     if (!promptText.trim() || get().isStreaming) return;
     const { activeAgentId, activeSessionId, attachSelectionContext, attachCanvasContext, customCommand, sessions } = get();
     const workspace = useWorkspaceStore.getState();
-    const history = (sessions.find((session) => session.id === activeSessionId)?.messages || [])
+    const activeThemeId = workspace.activeThemeId || 'neurips';
+    const activeSession = sessions.find((session) => session.id === activeSessionId);
+    const templateReferenceId = activeSession?.templateReferenceId;
+    const history = (activeSession?.messages || [])
       .filter((message) => message.role !== 'system')
-      .map(({ role, content }) => ({ role, content }));
+      .map(({ role, content, templateReferenceId: referenceId }) => ({
+        role,
+        content: referenceId
+          ? `${content}\n[Composition reference only: ${referenceId}]`
+          : content,
+      }));
     const userMessage: AgentChatMessage = {
       id: `user_${crypto.randomUUID()}`, role: 'user', agentId: activeAgentId,
       timestamp: new Date().toTimeString().slice(0, 5), content: promptText.trim(),
       contextSelectionIds: attachSelectionContext ? [...workspace.selectedIds] : [],
       includeFullCanvas: attachCanvasContext,
+      templateReferenceId,
     };
     set((state) => ({
       isStreaming: true,
@@ -240,10 +284,21 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
       if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
         throw new Error('本地 ACP 需要 Tauri 桌面应用；浏览器模式不能连接本地 Agent，不会生成模拟回复。');
       }
-      await sendViaRealAcp(activeAgentId, promptText,
-        attachCanvasContext ? workspace.tikzCode : '',
-        attachSelectionContext ? [...workspace.selectedIds] : [],
-        activeSessionId, customCommand, history);
+      const canvasTikz = attachCanvasContext ? workspace.tikzCode : '';
+      const selectedIds = attachSelectionContext ? [...workspace.selectedIds] : [];
+      const agentContext = buildAgentSkillAndLibraryContext(activeThemeId, canvasTikz, selectedIds);
+      await sendViaRealAcp(
+        activeAgentId,
+        promptText,
+        canvasTikz,
+        selectedIds,
+        activeSessionId,
+        customCommand,
+        history,
+        buildTemplateReferenceContext(templateReferenceId),
+        agentContext,
+        activeThemeId,
+      );
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       set((state) => ({ sessions: state.sessions.map((session) => session.id === activeSessionId
@@ -256,17 +311,135 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
       set({ isStreaming: false });
     }
   },
+  runLocalAgentSkill: (skillId) => {
+    const { activeAgentId, activeSessionId, sessions } = get();
+    const workspace = useWorkspaceStore.getState();
+    const activeThemeId = workspace.activeThemeId || 'neurips';
+    const theme = JOURNAL_THEMES[activeThemeId] || JOURNAL_THEMES.neurips;
+    const currentTikz = workspace.tikzCode || '';
+    const timestamp = new Date().toTimeString().slice(0, 5);
+
+    if (!currentTikz.trim()) {
+      const emptyMsg: AgentChatMessage = {
+        id: `skill_${crypto.randomUUID()}`,
+        role: 'system',
+        agentId: activeAgentId,
+        timestamp,
+        content: '当前画布为空。请先从左侧模板库加载图形，或通过下方输入框让 Agent 绘制架构图。',
+      };
+      set({
+        sessions: sessions.map((s) =>
+          s.id === activeSessionId ? { ...s, messages: [...s.messages, emptyMsg] } : s
+        ),
+      });
+      return;
+    }
+
+    const beforeReport = analyzeTikzLayout(currentTikz, activeThemeId);
+
+    if (skillId === 'diagnose_canvas') {
+      const issueLines =
+        beforeReport.issues.length > 0
+          ? beforeReport.issues.map(
+              (iss, i) => `${i + 1}. **[${iss.severity === 'error' ? '严重' : iss.severity === 'warning' ? '警告' : '建议'}]** ${iss.message}`
+            )
+          : ['✅ 未检测到节点重叠、箭头遮挡、容器越界或无配色纯白模块。'];
+
+      const diagMessage: AgentChatMessage = {
+        id: `skill_${crypto.randomUUID()}`,
+        role: 'assistant',
+        agentId: activeAgentId,
+        timestamp,
+        thoughtProcess: `执行 AST 几何碰撞检测与 ${theme.name} 配色审查...`,
+        mcpToolCalls: [
+          { toolName: 'get_canvas_ast', argsSummary: '解析画布节点与边集合', status: 'completed' },
+          { toolName: 'inspect_layout_diagnostics', argsSummary: `theme=${activeThemeId}`, status: 'completed' },
+        ],
+        content: `### 📐 画布 AST 与几何布局诊断报告\n- **布局健康评分**：\`${beforeReport.score} / 100\`\n- **当前顶刊主题**：${theme.name}\n\n${issueLines.join('\n')}${
+          beforeReport.issues.length > 0
+            ? '\n\n💡 点击上方 **「✨ 一键综合精修」** 即可自动生成无重叠、带顶刊语义配色的增量 Diff 补丁。'
+            : ''
+        }`,
+      };
+      set({
+        sessions: sessions.map((s) =>
+          s.id === activeSessionId ? { ...s, messages: [...s.messages, diagMessage] } : s
+        ),
+      });
+      return;
+    }
+
+    const repairResult = autoRepairTikzLayout(currentTikz, activeThemeId);
+    const diff = computeTikzDiff(currentTikz, repairResult.tikzCode);
+
+    const skillTitles: Record<LocalAgentSkillId, string> = {
+      full_optimize: `✨ 一键综合精修（防重叠排障 + ${theme.name.split(' ')[0]} 配色 + 组件规范化）`,
+      auto_layout: '📐 自动几何排障与箭头留白扩展',
+      theme_colorize: `🎨 应用 ${theme.name} 语义配色方案`,
+      diagnose_canvas: '🔍 画布诊断',
+    };
+
+    const hasChanges = repairResult.tikzCode.trim() !== currentTikz.trim();
+    const repairBullets =
+      repairResult.repairs.length > 0
+        ? repairResult.repairs.map((r) => `- ${r}`).join('\n')
+        : '- 当前画布布局与配色已符合顶刊规范，无需额外调整。';
+
+    const assistantMsg: AgentChatMessage = {
+      id: `skill_${crypto.randomUUID()}`,
+      role: 'assistant',
+      agentId: activeAgentId,
+      timestamp,
+      thoughtProcess: `分析画布 AST -> 检测垂直间距/重叠/无框标签 -> 注入 ${theme.name} 语义色板 -> 生成增量 Diff 补丁`,
+      mcpToolCalls: [
+        { toolName: 'get_canvas_ast', argsSummary: '提取节点坐标与包围盒', status: 'completed' },
+        { toolName: 'inspect_layout_diagnostics', argsSummary: `score=${beforeReport.score}->${repairResult.afterReport.score}`, status: 'completed' },
+        { toolName: 'auto_repair_layout', argsSummary: `${repairResult.repairs.length} 项优化`, status: 'completed' },
+      ],
+      content: `### ${skillTitles[skillId]}\n${repairBullets}\n\n- **布局健康度提升**：\`${beforeReport.score}/100\` → \`${repairResult.afterReport.score}/100\`\n- **AST 变更统计**：新增 \`${diff.addedCount}\` 项 / 修改 \`${diff.modifiedCount}\` 项 / 移除 \`${diff.removedCount}\` 项（共涉及 ${diff.affectedElementIds.length} 个元素）`,
+      patchProposal: hasChanges
+        ? {
+            id: `patch_${crypto.randomUUID()}`,
+            summary: skillTitles[skillId],
+            rationale: `自动执行 ${repairResult.repairs.length} 项几何布局、组件规范与 ${theme.name} 语义配色修复。`,
+            newTikzCode: repairResult.tikzCode,
+            affectedElementIds: diff.affectedElementIds,
+            status: 'pending',
+            mode: 'surgical_diff',
+            semanticItems: diff.semanticItems,
+            diffLines: diff.diffLines,
+            autoRepairs: repairResult.repairs,
+            layoutScore: repairResult.afterReport.score,
+            fitCanvasOnApply: true,
+          }
+        : undefined,
+    };
+
+    set({
+      sessions: sessions.map((s) =>
+        s.id === activeSessionId ? { ...s, messages: [...s.messages, assistantMsg] } : s
+      ),
+    });
+  },
   applyPatchProposal: (messageId) => {
     const { sessions, activeSessionId } = get();
     const message = sessions.find((session) => session.id === activeSessionId)?.messages.find((item) => item.id === messageId);
     if (!message?.patchProposal || message.patchProposal.status === 'applied') return;
-    const currentCode = useWorkspaceStore.getState().tikzCode;
-    useWorkspaceStore.getState().setTikzCode(message.patchProposal.newTikzCode, true);
+    const workspace = useWorkspaceStore.getState();
+    const currentCode = workspace.tikzCode;
+    const recTheme = message.patchProposal.recommendedThemeId;
+    if (recTheme && recTheme in JOURNAL_THEMES) {
+      workspace.setActiveTheme?.(recTheme as JournalThemeId);
+    }
+    workspace.setTikzCode(message.patchProposal.newTikzCode, true);
+    if (message.patchProposal.fitCanvasOnApply) {
+      workspace.fitCanvasToContent?.();
+    }
     if (
       useSettingsStore.getState().autoSelectAffectedNodes &&
       message.patchProposal.affectedElementIds.length > 0
     ) {
-      useWorkspaceStore.getState().setSelectedIds(message.patchProposal.affectedElementIds);
+      workspace.setSelectedIds(message.patchProposal.affectedElementIds);
     }
     updateAgentMessage(activeSessionId, messageId, (item) => ({ ...item,
       patchProposal: item.patchProposal ? { ...item.patchProposal, status: 'applied', previousTikzCode: currentCode } : undefined,
@@ -292,9 +465,79 @@ function updateAgentMessage(sessionId: string, messageId: string, update: (messa
   }));
 }
 
+function buildEnrichedPatchProposal(
+  requestId: string,
+  replyText: string,
+  canvasTikz: string,
+  backendProposedTikz: string | null | undefined,
+  fallbackSelectedIds: string[],
+  activeThemeId: JournalThemeId,
+  autoLayoutRepairEnabled: boolean
+): TikzPatchProposal | undefined {
+  const resolved = resolveAgentPatchFromReply(replyText, canvasTikz, backendProposedTikz);
+  if (!resolved) return undefined;
+
+  let finalTikz = resolved.newTikzCode;
+  let autoRepairs: string[] = [];
+  let layoutScore: number | undefined;
+
+  if (autoLayoutRepairEnabled) {
+    const repairResult = autoRepairTikzLayout(finalTikz, activeThemeId);
+    finalTikz = repairResult.tikzCode;
+    autoRepairs = repairResult.repairs;
+    layoutScore = repairResult.afterReport.score;
+  } else {
+    layoutScore = analyzeTikzLayout(finalTikz, activeThemeId).score;
+  }
+
+  const diff = computeTikzDiff(canvasTikz, finalTikz);
+  const directives = extractAgentDirectives(replyText);
+
+  const affectedIds =
+    diff.affectedElementIds.length > 0 ? diff.affectedElementIds : fallbackSelectedIds;
+
+  const isSurgical = resolved.mode === 'surgical_diff';
+  const summary = isSurgical
+    ? `来自 ACP Agent 的增量 Diff 补丁（${resolved.appliedHunks} 处精准修改）`
+    : '来自 ACP Agent 的 TikZ 代码更新';
+
+  const rationaleParts: string[] = [
+    isSurgical
+      ? `已将 SEARCH/REPLACE 增量补丁合并至当前画布（${diff.semanticSummary}）。`
+      : '本地 ACP 返回的完整代码；请预览 Diff 与画布变更后应用。',
+  ];
+  if (autoRepairs.length > 0) {
+    rationaleParts.push(`内置几何与配色引擎已自动优化 ${autoRepairs.length} 项细节。`);
+  }
+
+  return {
+    id: `patch_${requestId}`,
+    summary,
+    rationale: rationaleParts.join(' '),
+    newTikzCode: finalTikz,
+    affectedElementIds: affectedIds,
+    status: 'pending',
+    mode: resolved.mode,
+    semanticItems: diff.semanticItems,
+    diffLines: diff.diffLines,
+    autoRepairs: autoRepairs.length > 0 ? autoRepairs : undefined,
+    layoutScore,
+    recommendedThemeId: directives.theme,
+    fitCanvasOnApply: directives.fitCanvas,
+  };
+}
+
 async function sendViaRealAcp(
-  agentId: AcpAgentId, prompt: string, canvasTikz: string, selectedIds: string[],
-  activeSessionId: string, customCommand: string, history: Array<{ role: string; content: string }>,
+  agentId: AcpAgentId,
+  prompt: string,
+  canvasTikz: string,
+  selectedIds: string[],
+  activeSessionId: string,
+  customCommand: string,
+  history: Array<{ role: string; content: string }>,
+  templateReferences: string,
+  agentContext: string,
+  activeThemeId: JournalThemeId,
 ): Promise<void> {
   const { invoke } = await import('@tauri-apps/api/core');
   const { listen } = await import('@tauri-apps/api/event');
@@ -353,6 +596,8 @@ async function sendViaRealAcp(
       agentId,
       prompt,
       canvasTikz,
+      templateReferences,
+      agentContext,
       selectedIds,
       customCommand,
       history,
@@ -364,15 +609,24 @@ async function sendViaRealAcp(
     finished = true;
     if (!response?.usedNativeCli) throw new Error('本地 ACP Agent 未启动。请检查安装和 CLI 登录状态。');
     if (!response.reply?.trim()) throw new Error('ACP Agent 未返回文本。未生成画布修改。');
+
+    const autoRepair = useAgentStore.getState().autoLayoutRepairEnabled;
+    const patchProposal = buildEnrichedPatchProposal(
+      requestId,
+      response.reply,
+      canvasTikz,
+      response.proposedTikz,
+      selectedIds,
+      activeThemeId,
+      autoRepair
+    );
+
     updateAgentMessage(activeSessionId, messageId, (message) => ({
       ...message,
       // The IPC response is authoritative, not an extra stream chunk.
-      content: response.reply!, thoughtProcess: response.thought ?? message.thoughtProcess,
-      patchProposal: response.proposedTikz ? {
-        id: `patch_${requestId}`, summary: '来自 ACP Agent 的 TikZ 代码更新',
-        rationale: '本地 ACP 返回的完整代码；请预览后应用。', newTikzCode: response.proposedTikz,
-        affectedElementIds: selectedIds, status: 'pending',
-      } : undefined,
+      content: response.reply!,
+      thoughtProcess: response.thought ?? message.thoughtProcess,
+      patchProposal,
     }));
   } catch (error) {
     // Keep real partial output; remove only a completely empty placeholder.

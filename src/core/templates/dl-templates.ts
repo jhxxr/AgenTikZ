@@ -27,6 +27,12 @@ export interface FullFigureTemplate {
   themeId: JournalThemeId;
   description: string;
   tags: string[];
+  /** Composition guidance for AI; kept separate from ready-made figure code. */
+  designGuide: {
+    intent: string;
+    layout: string[];
+    adapt: string[];
+  };
   recommendedPan?: { x: number; y: number };
   recommendedZoom?: number;
   tikzCode: string;
@@ -243,6 +249,11 @@ export const FULL_FIGURE_TEMPLATES: FullFigureTemplate[] = [
     description:
       '顶刊经典左架构右实验联合布局：(a) Pre-LN SwiGLU 完整模块含对称残差跳线与 ⊕ 算子，(b) PGFPlots 误差带收敛曲线，统一 1.2cm 垂直步进网格',
     tags: ['Transformer', 'Residual Skip', 'PGFPlots', 'Figure 1'],
+    designGuide: {
+      intent: '在同一张图中解释模块机制，并用用户提供的实验支撑结论。',
+      layout: ['架构与实验分区，统一子图标题和对齐基线。', '主路径保持单一阅读方向，残差连接绕到模块外侧。'],
+      adapt: ['按实际计算顺序、层数和残差位置重建模块，不固定为 Transformer。', '只有用户提供实验数据时才添加实验面板；不照搬示例数值或性能结论。'],
+    },
     recommendedPan: { x: 75, y: 520 },
     recommendedZoom: 1,
     tikzCode: `% ============================================================================
@@ -337,6 +348,11 @@ export const FULL_FIGURE_TEMPLATES: FullFigureTemplate[] = [
     description:
       '精细微观结构图：Query / Key / Value 三路等距并行投影、缩放点积、Causal Softmax 路由与门控残差输出，算子节点严格居中',
     tags: ['Q-K-V Branches', 'Parallel Layout', 'Dot-Product', 'Micro-Block'],
+    designGuide: {
+      intent: '解释分支并行计算及其汇合关系。',
+      layout: ['并行分支等距排列，共享输入清楚分叉。', '汇合算子位于相关分支之间，给公式标注留出独立空间。'],
+      adapt: ['分支数量、运算、掩码和门控由用户的算法决定，不固定为 Q/K/V 三路。', '重新计算节点间距和连线路由，避免交叉与文字遮挡。'],
+    },
     recommendedPan: { x: 90, y: 510 },
     recommendedZoom: 1,
     tikzCode: `% ============================================================================
@@ -405,6 +421,11 @@ export const FULL_FIGURE_TEMPLATES: FullFigureTemplate[] = [
     description:
       '多阶段 3D 特征图立方体 (C×H×W) 空间降采样、通道递增与自顶向下 FPN 跨尺度融合，backbone 与 neck 严格 x 对齐',
     tags: ['3D Feature Cube', 'Backbone', 'FPN Fusion', 'Vision'],
+    designGuide: {
+      intent: '表达层级特征及跨尺度信息融合。',
+      layout: ['主干各阶段沿一个方向排列，融合层与对应阶段对齐。', '用张量块表达尺度变化，以连线标签区分上下采样和横向连接。'],
+      adapt: ['依据真实输入尺寸、阶段数量和融合方式重构，不预设 FPN 或 U-Net。', '维度未知时使用符号或询问用户，不复制示例通道数。'],
+    },
     recommendedPan: { x: 80, y: 480 },
     recommendedZoom: 1,
     tikzCode: `% ============================================================================
@@ -460,6 +481,11 @@ export const FULL_FIGURE_TEMPLATES: FullFigureTemplate[] = [
     description:
       '严格对称双塔架构：视觉 ViT Patch 编码流与文本 Causal Attention 编码流，⊗ 对比算子精确居中，右侧跨模态余弦相似度热力图',
     tags: ['Multimodal VLM', 'Dual Encoder', 'Contrastive Heatmap', '3D Tokens'],
+    designGuide: {
+      intent: '对照多个输入流，并说明其交互或对齐机制。',
+      layout: ['各输入流分栏，语义对应的阶段对齐。', '交互模块置于分支之间；如需实验矩阵则单独分区。'],
+      adapt: ['流数量、编码器和融合位置服从实际任务，不默认双塔或对比损失。', '没有真实相似度数据时不生成看似实测的热力图。'],
+    },
     recommendedPan: { x: 75, y: 500 },
     recommendedZoom: 1,
     tikzCode: `% ============================================================================
@@ -528,6 +554,11 @@ export const FULL_FIGURE_TEMPLATES: FullFigureTemplate[] = [
     description:
       '等距横向流水线：高斯噪声潜变量 → Spatial Self-Attention → AdaLN-Zero 条件调制 → 去噪输出，条件路径从上方清晰注入',
     tags: ['Diffusion / DiT', 'Flow Matching', 'AdaLN Conditioning', 'Generative'],
+    designGuide: {
+      intent: '解释带外部条件的处理或生成流程。',
+      layout: ['主流程横向推进，条件输入从另一方向注入。', '重复阶段用容器表达，目标函数与主连线分开。'],
+      adapt: ['按实际过程区分训练、推理和迭代，不混用不同生成方法的公式。', '根据用户说明选择输入、条件、步骤和输出，不固定为 DiT 或 AdaLN。'],
+    },
     recommendedPan: { x: 75, y: 485 },
     recommendedZoom: 1,
     tikzCode: `% ============================================================================
@@ -581,6 +612,11 @@ export const FULL_FIGURE_TEMPLATES: FullFigureTemplate[] = [
     description:
       'NPG 配色规范双联实验图：(a) 三曲线误差带收敛对比 (b) 三组消融柱状图，严格等宽等高 5.8cm × 4.4cm，子图注精确居中',
     tags: ['PGFPlots', 'Grouped Bar', 'Error Band', 'Nature NPG'],
+    designGuide: {
+      intent: '用多个实验面板回答彼此相关但不同的研究问题。',
+      layout: ['连续变化用折线、类别比较用柱形、分布用箱线；不强制使用示例组合。', '统一面板尺寸、字体与系列标识，保留单位、图例和误差定义。'],
+      adapt: ['先检查用户数据、指标和比较对象，再选择图表与坐标范围。', '不得将模板示例数据当作真实结果；缺少数据时询问或仅在明确要求时绘制标注为示意的占位图。'],
+    },
     recommendedPan: { x: 75, y: 475 },
     recommendedZoom: 1,
     tikzCode: `% ============================================================================

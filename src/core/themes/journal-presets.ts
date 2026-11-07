@@ -284,20 +284,111 @@ const STANDARD_TIKZ_COLORS: Record<string, { fill: string; stroke: string }> = {
   white: { fill: '#FFFFFF', stroke: '#334155' },
   black: { fill: '#F1F5F9', stroke: '#0F172A' },
   gray: { fill: '#F3F4F6', stroke: '#4B5563' },
+  darkgray: { fill: '#E5E7EB', stroke: '#1F2937' },
+  lightgray: { fill: '#F9FAFB', stroke: '#6B7280' },
   slate: { fill: '#F1F5F9', stroke: '#475569' },
   blue: { fill: '#EBF3FA', stroke: '#2563EB' },
+  navy: { fill: '#E6EFFA', stroke: '#1E3A8A' },
+  indigo: { fill: '#EEF0FF', stroke: '#4338CA' },
   cyan: { fill: '#ECFEFF', stroke: '#0891B2' },
   teal: { fill: '#E6F7F5', stroke: '#0D9488' },
   green: { fill: '#EAF5EF', stroke: '#16A34A' },
+  sage: { fill: '#EAF5EF', stroke: '#28664B' },
   emerald: { fill: '#ECFDF5', stroke: '#059669' },
+  lime: { fill: '#F7FEE7', stroke: '#65A30D' },
+  olive: { fill: '#F4F6E8', stroke: '#4D7C0F' },
   orange: { fill: '#FEF3E2', stroke: '#D97706' },
+  coral: { fill: '#FFF0EB', stroke: '#C2410C' },
   amber: { fill: '#FEF3C7', stroke: '#B45309' },
+  gold: { fill: '#FEF9E7', stroke: '#A16207' },
   red: { fill: '#FDEDED', stroke: '#DC2626' },
+  crimson: { fill: '#FCE7F3', stroke: '#BE123C' },
   rose: { fill: '#FFF1F2', stroke: '#E11D48' },
+  pink: { fill: '#FDF2F8', stroke: '#DB2777' },
+  magenta: { fill: '#FAE8FF', stroke: '#A21CAF' },
   purple: { fill: '#F3EEFA', stroke: '#7C3AED' },
   violet: { fill: '#F5F3FF', stroke: '#6D28D9' },
   yellow: { fill: '#FEFCE8', stroke: '#CA8A04' },
+  brown: { fill: '#FBF3EE', stroke: '#78350F' },
 };
+
+const CUSTOM_TIKZ_COLORS: Record<string, { fill: string; stroke: string; baseHex: string }> = {};
+
+function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
+  const clean = hex.replace(/^#/, '').trim();
+  if (clean.length === 3) {
+    const r = parseInt(clean[0] + clean[0], 16);
+    const g = parseInt(clean[1] + clean[1], 16);
+    const b = parseInt(clean[2] + clean[2], 16);
+    return isNaN(r) || isNaN(g) || isNaN(b) ? null : { r, g, b };
+  }
+  if (clean.length === 6) {
+    const r = parseInt(clean.slice(0, 2), 16);
+    const g = parseInt(clean.slice(2, 4), 16);
+    const b = parseInt(clean.slice(4, 6), 16);
+    return isNaN(r) || isNaN(g) || isNaN(b) ? null : { r, g, b };
+  }
+  return null;
+}
+
+function rgbToHex(r: number, g: number, b: number): string {
+  const clamp = (n: number) => Math.max(0, Math.min(255, Math.round(n)));
+  return (
+    '#' +
+    [clamp(r), clamp(g), clamp(b)]
+      .map((c) => c.toString(16).padStart(2, '0'))
+      .join('')
+      .toUpperCase()
+  );
+}
+
+function mixHex(hexA: string, hexB: string, weightA: number): string {
+  const a = hexToRgb(hexA);
+  const b = hexToRgb(hexB);
+  if (!a || !b) return hexA;
+  const w = Math.max(0, Math.min(1, weightA));
+  return rgbToHex(
+    a.r * w + b.r * (1 - w),
+    a.g * w + b.g * (1 - w),
+    a.b * w + b.b * (1 - w)
+  );
+}
+
+/**
+ * Scans TikZ source for `\definecolor{name}{HTML}{HEX}` or `\definecolor{name}{RGB}{r,g,b}`
+ * and registers them for `resolveTikzColor`.
+ */
+export function registerCustomTikzColors(source: string): void {
+  const htmlRegex = /\\definecolor\{\s*([a-zA-Z0-9_-]+)\s*\}\{\s*HTML\s*\}\{\s*#?([0-9a-fA-F]{6})\s*\}/g;
+  let m: RegExpExecArray | null;
+  while ((m = htmlRegex.exec(source)) !== null) {
+    const name = m[1].trim();
+    const baseHex = `#${m[2].toUpperCase()}`;
+    const rgb = hexToRgb(baseHex);
+    const isLight =
+      rgb && (0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b) / 255 > 0.78;
+    CUSTOM_TIKZ_COLORS[name] = {
+      baseHex,
+      fill: isLight ? baseHex : mixHex(baseHex, '#FFFFFF', 0.16),
+      stroke: isLight ? mixHex(baseHex, '#0F172A', 0.55) : baseHex,
+    };
+  }
+
+  const rgbRegex = /\\definecolor\{\s*([a-zA-Z0-9_-]+)\s*\}\{\s*RGB\s*\}\{\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\}/g;
+  while ((m = rgbRegex.exec(source)) !== null) {
+    const name = m[1].trim();
+    const r = Number(m[2]);
+    const g = Number(m[3]);
+    const b = Number(m[4]);
+    const baseHex = rgbToHex(r, g, b);
+    const isLight = (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.78;
+    CUSTOM_TIKZ_COLORS[name] = {
+      baseHex,
+      fill: isLight ? baseHex : mixHex(baseHex, '#FFFFFF', 0.16),
+      stroke: isLight ? mixHex(baseHex, '#0F172A', 0.55) : baseHex,
+    };
+  }
+}
 
 /**
  * Resolves a TikZ color expression (e.g. `nips_blue!14`, `blue!15`, `black!80`, `#EBF3FA`)
@@ -315,12 +406,30 @@ export function resolveTikzColor(
   if (trimmed === 'none') return 'none';
   if (trimmed.startsWith('#')) return trimmed;
 
-  const baseName = trimmed.split('!')[0].trim();
+  const parts = trimmed.split('!').map((s) => s.trim());
+  const baseName = parts[0];
+  const pct = parts.length > 1 ? parseFloat(parts[1]) : NaN;
+  const secondColor = parts.length > 2 ? parts[2].toLowerCase() : undefined;
 
   // Check theme tokens first
   const token = ALL_COLOR_TOKENS.find((c) => c.name === baseName);
   if (token) {
     return role === 'fill' ? token.fillHex : token.strokeHex;
+  }
+
+  // Check user/agent \definecolor tokens
+  const custom = CUSTOM_TIKZ_COLORS[baseName];
+  if (custom) {
+    if (!isNaN(pct)) {
+      const targetHex =
+        secondColor === 'black'
+          ? '#0F172A'
+          : secondColor && STANDARD_TIKZ_COLORS[secondColor]
+            ? STANDARD_TIKZ_COLORS[secondColor].stroke
+            : '#FFFFFF';
+      return mixHex(custom.baseHex, targetHex, pct / 100);
+    }
+    return role === 'fill' ? custom.fill : custom.stroke;
   }
 
   // Check standard TikZ color names
@@ -329,11 +438,17 @@ export function resolveTikzColor(
     if (baseName.toLowerCase() === 'black' && role === 'fill') {
       const match = trimmed.match(/black!(\d+)/);
       if (match) {
-        const pct = parseInt(match[1], 10);
-        if (pct <= 5) return '#F8FAFC';
-        if (pct <= 12) return '#F1F5F9';
-        if (pct <= 25) return '#E2E8F0';
+        const blackPct = parseInt(match[1], 10);
+        if (blackPct <= 5) return '#F8FAFC';
+        if (blackPct <= 12) return '#F1F5F9';
+        if (blackPct <= 25) return '#E2E8F0';
       }
+    }
+    if (!isNaN(pct) && secondColor === 'black') {
+      return mixHex(std.stroke, '#0F172A', pct / 100);
+    }
+    if (!isNaN(pct) && role === 'fill' && pct <= 45) {
+      return mixHex(std.stroke, '#FFFFFF', Math.max(0.1, pct / 100));
     }
     return role === 'fill' ? std.fill : std.stroke;
   }

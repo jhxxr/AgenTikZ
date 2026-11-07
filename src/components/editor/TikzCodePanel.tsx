@@ -373,10 +373,15 @@ export const TikzCodePanel: React.FC = () => {
           <BookOpen className="w-3 h-3 text-slate-400 shrink-0" />
           <select
             value={activeTemplateId}
-            onChange={(e) => loadTemplate(e.target.value)}
+            onChange={(e) => {
+              if (window.confirm('将用内置模板替换当前画布，可撤销。继续吗？')) {
+                loadTemplate(e.target.value);
+              }
+            }}
             className="text-[11px] bg-white border border-slate-200 rounded px-1.5 py-0.5 text-slate-700 font-medium truncate max-w-[205px] focus:outline-none focus:border-blue-500 cursor-pointer"
-            title="快捷切换预设顶刊模板"
+            title="主动载入内置模板（替换当前画布）"
           >
+            <option value="" disabled>自主绘图 · 可选择快速模板</option>
             {FULL_FIGURE_TEMPLATES.map((tpl) => (
               <option key={tpl.id} value={tpl.id}>
                 [{tpl.venue}] {tpl.title}

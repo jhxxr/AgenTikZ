@@ -25,6 +25,7 @@ import {
   FULL_FIGURE_TEMPLATES,
   PRIMITIVE_LIBRARY,
 } from '../core/templates/dl-templates';
+import { EMPTY_TIKZ_CODE } from '../core/templates/blank-document';
 import { JOURNAL_THEMES } from '../core/themes/journal-presets';
 import { useSettingsStore } from './useSettingsStore';
 
@@ -195,7 +196,7 @@ interface WorkspaceState {
   loadTemplate: (templateId: string) => void;
 }
 
-const initialCode = FULL_FIGURE_TEMPLATES[0].tikzCode;
+const initialCode = EMPTY_TIKZ_CODE;
 const initialParsed = parseTikzDocument(initialCode);
 
 function computeLineRangeForSelection(
@@ -219,18 +220,18 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       ? useSettingsStore.getState().defaultThemeId
       : 'neurips'
   ) as JournalThemeId,
-  activeTemplateId: FULL_FIGURE_TEMPLATES[0].id,
+  activeTemplateId: '',
   leftTab: 'code',
   activeTool: 'select',
-  selectedIds: ['mha'],
-  highlightedLineRange: computeLineRangeForSelection(initialParsed, ['mha']),
+  selectedIds: [],
+  highlightedLineRange: null,
   lastChangeInfo: null,
   showGrid: useSettingsStore.getState().showGridByDefault,
   snapToGrid: useSettingsStore.getState().snapToGridByDefault,
   canvasWidthCm: 16.0,
   canvasHeightCm: 10.0,
   zoom: 1,
-  pan: FULL_FIGURE_TEMPLATES[0].recommendedPan || { x: 80, y: 495 },
+  pan: { x: 80, y: 495 },
   previewMode: 'interactive',
   compiledSvg: null,
   isCompilingTex: false,
@@ -361,6 +362,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     const nextDoc = parseTikzDocument(newCode);
     set({
       tikzCode: newCode,
+      activeTemplateId: FULL_FIGURE_TEMPLATES.find((t) => t.tikzCode === newCode)?.id ?? '',
       parsedDoc: nextDoc,
       highlightedLineRange: computeLineRangeForSelection(nextDoc, selectedIds),
       undoStack: recordUndo ? [...undoStack.slice(-39), tikzCode] : undoStack,
@@ -375,6 +377,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     const nextDoc = parseTikzDocument(prevCode);
     set({
       tikzCode: prevCode,
+      activeTemplateId: FULL_FIGURE_TEMPLATES.find((t) => t.tikzCode === prevCode)?.id ?? '',
       parsedDoc: nextDoc,
       highlightedLineRange: computeLineRangeForSelection(nextDoc, selectedIds),
       undoStack: undoStack.slice(0, -1),
@@ -389,6 +392,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     const nextDoc = parseTikzDocument(nextCode);
     set({
       tikzCode: nextCode,
+      activeTemplateId: FULL_FIGURE_TEMPLATES.find((t) => t.tikzCode === nextCode)?.id ?? '',
       parsedDoc: nextDoc,
       highlightedLineRange: computeLineRangeForSelection(nextDoc, selectedIds),
       undoStack: [...undoStack.slice(-39), tikzCode],
@@ -885,6 +889,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     const nextSelected = primaryTarget ? [primaryTarget.id] : [];
     set({
       tikzCode: docState.tikzCode,
+      activeTemplateId: FULL_FIGURE_TEMPLATES.find((t) => t.tikzCode === docState.tikzCode)?.id ?? '',
       parsedDoc: nextDoc,
       activeThemeId:
         docState.activeThemeId && docState.activeThemeId in JOURNAL_THEMES
