@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useWorkspaceStore } from '../../store/useWorkspaceStore';
 import { useProjectStore } from '../../store/useProjectStore';
+import { useSettingsStore } from '../../store/useSettingsStore';
 import { JOURNAL_THEMES } from '../../core/themes/journal-presets';
+import { generateScientificIllustration } from '../../core/agent/illustration-prompt';
 import { EdgeRouteType, PgfChartType } from '../../types/tikz-ast';
 import { JournalThemeId } from '../../types/theme';
 import {
@@ -21,7 +23,289 @@ import {
   Sliders,
   Sparkles,
   Trash2,
+  Wand2,
+  X,
 } from 'lucide-react';
+
+/**
+ * Figma / Excalidraw-inspired Floating Contextual Selection Bar.
+ * Surfaces 90% of daily node/edge/chart actions right above the canvas without eating permanent sidebar width.
+ */
+export const FloatingSelectionBar: React.FC = () => {
+  const {
+    parsedDoc,
+    selectedIds,
+    activeThemeId,
+    isInspectorDrawerOpen,
+    setInspectorDrawerOpen,
+    updateNodeLabelById,
+    updateNodeOptionsById,
+    updateEdgeById,
+    updateChartById,
+    duplicateSelectedElements,
+    deleteSelectedElements,
+    setLeftTab,
+  } = useWorkspaceStore();
+
+  const firstId = selectedIds[0];
+  const selectedNode = firstId
+    ? parsedDoc.nodes.find((n) => n.id === firstId)
+    : undefined;
+  const selectedEdge = firstId
+    ? parsedDoc.edges.find((e) => e.id === firstId)
+    : undefined;
+  const selectedChart = firstId
+    ? parsedDoc.charts.find((c) => c.id === firstId)
+    : undefined;
+
+  if (!selectedNode && !selectedEdge && !selectedChart) return null;
+
+  const theme = JOURNAL_THEMES[activeThemeId];
+
+  return (
+    <div
+      className="absolute top-2.5 left-1/2 -translate-x-1/2 z-20 max-w-[95%] bg-white/95 backdrop-blur-md border border-slate-200/90 rounded-2xl shadow-lg px-2.5 py-1.5 flex items-center gap-2 select-none"
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      {/* NODE CONTEXTUAL CONTROLS */}
+      {selectedNode && (
+        <>
+          <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-mono text-[10px] font-semibold shrink-0">
+            {selectedNode.id}
+          </span>
+
+          <input
+            type="text"
+            value={selectedNode.label}
+            onChange={(e) =>
+              updateNodeLabelById(
+                selectedNode.id,
+                e.target.value,
+                selectedNode.sublabel
+              )
+            }
+            placeholder="节点标签/公式..."
+            className="w-32 px-2 py-0.5 text-xs font-mono bg-slate-50 border border-slate-200 rounded-md focus:bg-white focus:outline-none focus:border-blue-500"
+          />
+
+          {selectedNode.subtype !== 'caption' &&
+            selectedNode.subtype !== 'math' &&
+            selectedNode.subtype !== 'image' && (
+              <>
+                <div className="w-px h-4 bg-slate-200 shrink-0" />
+                {/* 1-Click Salience Role Pills (Nature 1+1+1 Budget) */}
+                <div className="flex items-center gap-1 shrink-0">
+                  {[
+                    {
+                      id: 'neutral' as const,
+                      label: '⚪ 基线',
+                      fill: theme.colorRoles.neutral.fill,
+                      draw: theme.colorRoles.neutral.stroke,
+                    },
+                    {
+                      id: 'signal' as const,
+                      label: '📡 主干',
+                      fill: theme.colorRoles.signal.fill,
+                      draw: theme.colorRoles.signal.stroke,
+                    },
+                    {
+                      id: 'hero' as const,
+                      label: '🎯 主证据',
+                      fill: theme.colorRoles.hero.fill,
+                      draw: theme.colorRoles.hero.stroke,
+                    },
+                  ].map((r) => (
+                    <button
+                      key={r.id}
+                      type="button"
+                      onClick={() =>
+                        updateNodeOptionsById(selectedNode.id, {
+                          role: r.id,
+                          fill: r.fill,
+                          draw: r.draw,
+                        })
+                      }
+                      className={`px-1.5 py-0.5 rounded text-[10px] font-medium border transition-colors cursor-pointer ${
+                        selectedNode.salienceRole === r.id
+                          ? 'bg-indigo-600 text-white border-indigo-600'
+                          : 'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'
+                      }`}
+                      title={`切换为 ${r.label} 显著性层级`}
+                    >
+                      {r.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="w-px h-4 bg-slate-200 shrink-0 hidden sm:block" />
+
+                {/* Quick Theme Swatches */}
+                <div className="hidden sm:flex items-center gap-1 shrink-0">
+                  {theme.palette.slice(0, 6).map((tok) => (
+                    <button
+                      key={tok.name}
+                      type="button"
+                      onClick={() =>
+                        updateNodeOptionsById(selectedNode.id, {
+                          fill: tok.tikzFill,
+                          draw: tok.tikzStroke,
+                        })
+                      }
+                      className="w-4 h-4 rounded-full border transition-transform hover:scale-115 cursor-pointer"
+                      style={{
+                        backgroundColor: tok.fillHex,
+                        borderColor: tok.strokeHex,
+                        borderWidth: '1.5px',
+                      }}
+                      title={`${tok.label} (${tok.tikzFill})`}
+                    />
+                  ))}
+                </div>
+              </>
+            )}
+
+          {selectedNode.subtype === 'image' && (
+            <button
+              type="button"
+              onClick={() => setInspectorDrawerOpen(true)}
+              className="px-2 py-0.5 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-[10.5px] font-semibold flex items-center gap-1 shrink-0 cursor-pointer"
+            >
+              <Wand2 className="w-3 h-3" />
+              <span>AI 透明抠图 / 换图</span>
+            </button>
+          )}
+        </>
+      )}
+
+      {/* EDGE CONTEXTUAL CONTROLS */}
+      {selectedEdge && (
+        <>
+          <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-mono text-[10px] font-semibold shrink-0">
+            {selectedEdge.from} → {selectedEdge.to}
+          </span>
+          <select
+            value={selectedEdge.routeType}
+            onChange={(e) =>
+              updateEdgeById(selectedEdge.id, {
+                routeType: e.target.value as EdgeRouteType,
+              })
+            }
+            className="px-1.5 py-0.5 text-xs bg-slate-50 border border-slate-200 rounded-md"
+          >
+            <option value="direct">直线 (--)</option>
+            <option value="vh">正交 (|-)</option>
+            <option value="hv">正交 (-|)</option>
+            <option value="residual_right">右残差</option>
+            <option value="residual_left">左残差</option>
+            <option value="curved">弧线</option>
+          </select>
+          <input
+            type="text"
+            value={selectedEdge.label || ''}
+            onChange={(e) =>
+              updateEdgeById(selectedEdge.id, { label: e.target.value })
+            }
+            placeholder="连线标注..."
+            className="w-28 px-2 py-0.5 text-xs font-mono bg-slate-50 border border-slate-200 rounded-md focus:bg-white focus:outline-none"
+          />
+          <label className="flex items-center gap-1 text-[11px] text-slate-600 cursor-pointer shrink-0">
+            <input
+              type="checkbox"
+              checked={Boolean(selectedEdge.dashed)}
+              onChange={(e) =>
+                updateEdgeById(selectedEdge.id, { dashed: e.target.checked })
+              }
+            />
+            <span>虚线</span>
+          </label>
+        </>
+      )}
+
+      {/* CHART CONTEXTUAL CONTROLS */}
+      {selectedChart && (
+        <>
+          <span className="px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 font-mono text-[10px] font-semibold shrink-0">
+            📊 {selectedChart.id}
+          </span>
+          <select
+            value={selectedChart.chartType}
+            onChange={(e) =>
+              updateChartById(selectedChart.id, {
+                chartType: e.target.value as PgfChartType,
+              })
+            }
+            className="px-1.5 py-0.5 text-xs bg-slate-50 border border-slate-200 rounded-md"
+          >
+            <option value="line">折线+误差带</option>
+            <option value="bar">分组柱状图</option>
+            <option value="heatmap">热力图</option>
+            <option value="boxplot">箱线图</option>
+          </select>
+          <input
+            type="text"
+            value={selectedChart.title}
+            onChange={(e) =>
+              updateChartById(selectedChart.id, { title: e.target.value })
+            }
+            placeholder="图表标题..."
+            className="w-32 px-2 py-0.5 text-xs font-mono bg-slate-50 border border-slate-200 rounded-md"
+          />
+          <button
+            type="button"
+            onClick={() => setInspectorDrawerOpen(true)}
+            className="px-2 py-0.5 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-[10.5px] font-semibold flex items-center gap-1 shrink-0 cursor-pointer"
+          >
+            <BarChart3 className="w-3 h-3" />
+            <span>编辑数据表 (\addplot)</span>
+          </button>
+        </>
+      )}
+
+      <div className="w-px h-4 bg-slate-200 shrink-0" />
+
+      {/* Common Quick Actions: Duplicate, Code, More Inspector Drawer, Delete */}
+      <div className="flex items-center gap-0.5 shrink-0">
+        <button
+          type="button"
+          onClick={duplicateSelectedElements}
+          className="p-1 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded cursor-pointer"
+          title="复制 (Ctrl+D)"
+        >
+          <Copy className="w-3.5 h-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={() => setLeftTab('code')}
+          className="p-1 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded cursor-pointer"
+          title="定位 TikZ 源码行"
+        >
+          <Code2 className="w-3.5 h-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={() => setInspectorDrawerOpen(!isInspectorDrawerOpen)}
+          className={`px-1.5 py-0.5 rounded text-[10.5px] font-medium flex items-center gap-1 transition-colors cursor-pointer ${
+            isInspectorDrawerOpen
+              ? 'bg-indigo-100 text-indigo-800'
+              : 'text-slate-600 hover:bg-slate-100'
+          }`}
+          title="展开/收起完整坐标与参数检查器"
+        >
+          <Sliders className="w-3 h-3" />
+          <span className="hidden md:inline">更多</span>
+        </button>
+        <button
+          type="button"
+          onClick={deleteSelectedElements}
+          className="p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded cursor-pointer"
+          title="删除 (Delete)"
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+        </button>
+      </div>
+    </div>
+  );
+};
 
 export const PropertyPanel: React.FC = () => {
   const {
@@ -38,6 +322,8 @@ export const PropertyPanel: React.FC = () => {
     setShowGrid,
     snapToGrid,
     setSnapToGrid,
+    isInspectorDrawerOpen,
+    setInspectorDrawerOpen,
     moveElementsByPosition,
     updateNodeLabelById,
     updateNodeOptionsById,
@@ -51,14 +337,24 @@ export const PropertyPanel: React.FC = () => {
     setLeftTab,
   } = useWorkspaceStore();
 
-  const { assets } = useProjectStore();
+  const { assets, projectDir, registerGeneratedAsset } = useProjectStore();
+  const settings = useSettingsStore();
 
   const [activeSeriesIdx, setActiveSeriesIdx] = useState(0);
+  const [aiImgPrompt, setAiImgPrompt] = useState('');
+  const [aiImgAspect, setAiImgAspect] = useState<'1:1' | '4:3' | '16:9'>('1:1');
+  const [isGeneratingImg, setIsGeneratingImg] = useState(false);
+  const [aiImgStatus, setAiImgStatus] = useState<string | null>(null);
 
   // Reset series tab index when selection changes
   useEffect(() => {
     setActiveSeriesIdx(0);
+    setAiImgStatus(null);
   }, [selectedIds[0]]);
+
+  if (!isInspectorDrawerOpen) {
+    return null;
+  }
 
   const firstId = selectedIds[0];
   const selectedNode = firstId
@@ -84,7 +380,7 @@ export const PropertyPanel: React.FC = () => {
 
   return (
     <aside
-      className="w-[310px] h-full bg-white border-l border-slate-200/80 flex flex-col shrink-0 select-none overflow-hidden z-20"
+      className="absolute top-0 right-0 bottom-0 w-[310px] bg-white/98 backdrop-blur-md border-l border-slate-200/90 shadow-2xl flex flex-col select-none overflow-hidden z-30"
       onPointerDown={(e) => e.stopPropagation()}
     >
       {/* Sticky Top Header Bar */}
@@ -109,35 +405,41 @@ export const PropertyPanel: React.FC = () => {
             </span>
           </div>
 
-          {hasSelectedElement ? (
-            <div className="flex items-center gap-0.5 shrink-0">
-              <button
-                onClick={duplicateSelectedElements}
-                className="p-1 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded cursor-pointer"
-                title="克隆复制选中图元 (Ctrl+D)"
-              >
-                <Copy className="w-3.5 h-3.5" />
-              </button>
-              <button
-                onClick={() => setLeftTab('code')}
-                className="p-1 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded cursor-pointer"
-                title="在左侧 TikZ 代码标签页中查看对应源码行"
-              >
-                <Code2 className="w-3.5 h-3.5" />
-              </button>
-              <button
-                onClick={deleteSelectedElements}
-                className="p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded cursor-pointer"
-                title="删除选中图元 (Delete)"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          ) : (
-            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200/70 shrink-0">
-              {canvasWidthCm.toFixed(1)} × {canvasHeightCm.toFixed(1)} cm
-            </span>
-          )}
+          <div className="flex items-center gap-0.5 shrink-0">
+            {hasSelectedElement && (
+              <>
+                <button
+                  onClick={duplicateSelectedElements}
+                  className="p-1 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded cursor-pointer"
+                  title="克隆复制选中图元 (Ctrl+D)"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => setLeftTab('code')}
+                  className="p-1 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded cursor-pointer"
+                  title="在左侧 TikZ 代码标签页中查看对应源码行"
+                >
+                  <Code2 className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={deleteSelectedElements}
+                  className="p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded cursor-pointer"
+                  title="删除选中图元 (Delete)"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </>
+            )}
+            <button
+              type="button"
+              onClick={() => setInspectorDrawerOpen(false)}
+              className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-200/70 rounded cursor-pointer ml-0.5"
+              title="收起属性抽屉"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
         </div>
 
         {hasSelectedElement && (
@@ -424,12 +726,19 @@ export const PropertyPanel: React.FC = () => {
           <div className="space-y-2.5">
             {/* Image Asset Inspector (\includegraphics) */}
             {selectedNode.subtype === 'image' && (
-              <div className="p-2.5 rounded-xl bg-emerald-50/50 border border-emerald-200/80 space-y-2">
+              <div className="p-2.5 rounded-xl bg-emerald-50/50 border border-emerald-200/80 space-y-2.5">
                 <div className="flex items-center justify-between">
                   <span className="text-[11px] font-semibold text-emerald-900 flex items-center gap-1">
                     <ImageIcon className="w-3.5 h-3.5 text-emerald-600" />
                     图像素材属性 (\includegraphics)
                   </span>
+                  <button
+                    type="button"
+                    onClick={() => settings.openSettings('illustration')}
+                    className="text-[10px] text-emerald-700 hover:underline cursor-pointer"
+                  >
+                    引擎设置 ({settings.imageGenProvider})
+                  </button>
                 </div>
 
                 <div>
@@ -439,7 +748,7 @@ export const PropertyPanel: React.FC = () => {
                   <input
                     type="text"
                     value={selectedNode.imagePath || ''}
-                    placeholder="例如: assets/sample_vis.png"
+                    placeholder="例如: figures/assets/ai/sample_vis.png"
                     onChange={(e) =>
                       updateImageNodePathById(selectedNode.id, e.target.value)
                     }
@@ -470,6 +779,95 @@ export const PropertyPanel: React.FC = () => {
                       </option>
                     ))}
                   </select>
+                </div>
+
+                {/* AI Transparent Cutout Generator for this Image Node */}
+                <div className="pt-2 border-t border-emerald-200/70 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10.5px] font-semibold text-emerald-950 flex items-center gap-1">
+                      <Wand2 className="w-3 h-3 text-emerald-600" />
+                      ✨ AI 生成透明抠图插图 (自动去背+紧致裁切)
+                    </span>
+                  </div>
+                  <textarea
+                    rows={2}
+                    value={aiImgPrompt}
+                    onChange={(e) => setAiImgPrompt(e.target.value)}
+                    placeholder="描述科研实物/生物器官/传感器/3D样本（如: 3D isometric microscope lens, clean scientific illustration）..."
+                    className="w-full px-2 py-1 text-[11px] bg-white border border-emerald-200 rounded focus:outline-none focus:border-emerald-500 resize-none"
+                  />
+                  <div className="flex items-center gap-1.5">
+                    <select
+                      value={aiImgAspect}
+                      onChange={(e) =>
+                        setAiImgAspect(e.target.value as '1:1' | '4:3' | '16:9')
+                      }
+                      className="px-1.5 py-1 text-[10.5px] bg-white border border-emerald-200 rounded font-mono"
+                    >
+                      <option value="1:1">1:1 方形</option>
+                      <option value="4:3">4:3 横版</option>
+                      <option value="16:9">16:9 宽幅</option>
+                    </select>
+                    <button
+                      type="button"
+                      disabled={isGeneratingImg || !aiImgPrompt.trim()}
+                      onClick={async () => {
+                        if (!aiImgPrompt.trim() || isGeneratingImg) return;
+                        setIsGeneratingImg(true);
+                        setAiImgStatus('正在调用 AI 绘图引擎并执行边缘泛洪去背与 Alpha 裁切...');
+                        try {
+                          const targetRelPath =
+                            selectedNode.imagePath &&
+                            selectedNode.imagePath.startsWith('figures/assets/ai/')
+                              ? selectedNode.imagePath
+                              : `figures/assets/ai/${selectedNode.id}.png`;
+                          const res = await generateScientificIllustration({
+                            provider: settings.imageGenProvider,
+                            apiKey: settings.imageGenApiKey,
+                            baseUrl: settings.imageGenBaseUrl,
+                            model: settings.imageGenModel,
+                            subjectPrompt: aiImgPrompt.trim(),
+                            themeId: activeThemeId,
+                            aspectRatio: aiImgAspect,
+                            transparentBackground: settings.imageGenAutoRemoveWhiteBg,
+                            autoTrimAlpha: settings.imageGenAutoTrimAlpha,
+                            projectDir,
+                            targetRelativePath: targetRelPath,
+                            proxyUrl: settings.proxyEnabled
+                              ? settings.proxyUrl
+                              : undefined,
+                          });
+                          if (!res.ok || !res.dataUrl) {
+                            setAiImgStatus(`❌ 生成失败: ${res.error || '未知错误'}`);
+                          } else {
+                            const finalRel = await registerGeneratedAsset(
+                              res.savedRelativePath || targetRelPath,
+                              res.dataUrl
+                            );
+                            updateImageNodePathById(selectedNode.id, finalRel);
+                            setAiImgStatus(
+                              `✅ 已生成透明抠图 (${res.width}×${res.height}px) 并绑定至 ${finalRel}`
+                            );
+                          }
+                        } catch (err) {
+                          setAiImgStatus(`❌ 错误: ${String(err)}`);
+                        } finally {
+                          setIsGeneratingImg(false);
+                        }
+                      }}
+                      className="flex-1 py-1 px-2 rounded bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white text-[10.5px] font-semibold flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                    >
+                      <Sparkles className="w-3 h-3" />
+                      <span>
+                        {isGeneratingImg ? '生成并抠图中...' : '生成透明 PNG'}
+                      </span>
+                    </button>
+                  </div>
+                  {aiImgStatus && (
+                    <div className="text-[10px] text-emerald-900 bg-white/80 px-2 py-1 rounded border border-emerald-200/80 leading-snug">
+                      {aiImgStatus}
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -668,11 +1066,69 @@ export const PropertyPanel: React.FC = () => {
               </div>
             )}
 
-            {/* Publication Palette Swatches */}
+            {/* Publication Palette Swatches & Salience Role */}
             {selectedNode.subtype !== 'caption' &&
               selectedNode.subtype !== 'math' &&
               selectedNode.subtype !== 'image' && (
                 <>
+                  {/* Nature Skills Salience Role Selector */}
+                  <div>
+                    <label className="text-[10.5px] font-medium text-slate-500 block mb-1">
+                      视觉显著性角色 (1 Neutral + 1 Signal + 1 Hero)
+                    </label>
+                    <div className="grid grid-cols-4 gap-1">
+                      {[
+                        {
+                          id: 'neutral' as const,
+                          label: '基线 Neutral',
+                          fill: theme.colorRoles.neutral.fill,
+                          draw: theme.colorRoles.neutral.stroke,
+                        },
+                        {
+                          id: 'signal' as const,
+                          label: '主干 Signal',
+                          fill: theme.colorRoles.signal.fill,
+                          draw: theme.colorRoles.signal.stroke,
+                        },
+                        {
+                          id: 'secondary' as const,
+                          label: '从属 Aux',
+                          fill: theme.colorRoles.secondary.fill,
+                          draw: theme.colorRoles.secondary.stroke,
+                        },
+                        {
+                          id: 'hero' as const,
+                          label: '★ 创新 Hero',
+                          fill: theme.colorRoles.hero.fill,
+                          draw: theme.colorRoles.hero.stroke,
+                        },
+                      ].map((roleItem) => {
+                        const isActiveRole =
+                          selectedNode.salienceRole === roleItem.id;
+                        return (
+                          <button
+                            key={roleItem.id}
+                            type="button"
+                            onClick={() =>
+                              updateNodeOptionsById(selectedNode.id, {
+                                role: roleItem.id,
+                                fill: roleItem.fill,
+                                draw: roleItem.draw,
+                              })
+                            }
+                            className={`py-1 px-1 rounded border text-[10px] font-medium transition-colors cursor-pointer ${
+                              isActiveRole
+                                ? 'bg-indigo-50 border-indigo-400 text-indigo-800 font-semibold'
+                                : 'bg-white border-slate-200 text-slate-600 hover:border-indigo-300'
+                            }`}
+                          >
+                            {roleItem.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
                   <div>
                     <label className="text-[11px] font-medium text-slate-500 block mb-1.5">
                       顶刊主题色板 ({theme.venueBadge})
@@ -1083,11 +1539,28 @@ export const PropertyPanel: React.FC = () => {
                   className="w-full px-2 py-1 border border-slate-200 rounded text-xs font-mono"
                 />
               </div>
+
+              <div>
+                <label className="text-[10px] text-slate-400 block">
+                  误差带/统计显著性标注 (Nature 规范: n, SD/SE/95%CI)
+                </label>
+                <input
+                  type="text"
+                  value={selectedChart.uncertaintyNote || ''}
+                  placeholder="例如: n=5, mean±SD"
+                  onChange={(e) =>
+                    updateChartById(selectedChart.id, {
+                      uncertaintyNote: e.target.value || undefined,
+                    })
+                  }
+                  className="w-full px-2 py-1 border border-slate-200 rounded text-xs font-mono"
+                />
+              </div>
             </div>
 
-            {/* Grid & Legend Toggles + Legend Preset Positions */}
+            {/* Grid & Legend Toggles + Direct End Labels */}
             <div className="pt-1.5 border-t border-slate-100 space-y-2">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between flex-wrap gap-1.5">
                 <label className="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
                   <input
                     type="checkbox"
@@ -1114,6 +1587,21 @@ export const PropertyPanel: React.FC = () => {
                   />
                   显示图例框 (legend)
                 </label>
+                {selectedChart.chartType === 'line' && (
+                  <label className="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(selectedChart.directEndLabels)}
+                      onChange={(e) =>
+                        updateChartById(selectedChart.id, {
+                          directEndLabels: e.target.checked,
+                        })
+                      }
+                      className="rounded border-slate-300"
+                    />
+                    曲线末端直接标签 (Nature 推荐)
+                  </label>
+                )}
               </div>
 
               {selectedChart.showLegend && (

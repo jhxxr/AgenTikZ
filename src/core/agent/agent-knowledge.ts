@@ -10,6 +10,7 @@ import { PRIMITIVE_LIBRARY } from '../templates/dl-templates';
 import { JOURNAL_THEMES } from '../themes/journal-presets';
 import { parseTikzDocument } from '../parser/parser';
 import { analyzeTikzLayout, getThemeSemanticPalette } from './layout-diagnostics';
+import { buildPublicationStyleSystemPrompt } from './prompt-compiler';
 
 /**
  * Builds the comprehensive Agent Skill, Component Library, Color Palette,
@@ -18,7 +19,8 @@ import { analyzeTikzLayout, getThemeSemanticPalette } from './layout-diagnostics
 export function buildAgentSkillAndLibraryContext(
   activeThemeId: string = 'neurips',
   canvasTikz: string = '',
-  selectedIds: string[] = []
+  selectedIds: string[] = [],
+  options: { enforcePublicationStyleGuide?: boolean; requireFigureContract?: boolean } = {}
 ): string {
   const themeId = (
     activeThemeId in JOURNAL_THEMES ? activeThemeId : 'neurips'
@@ -31,7 +33,10 @@ export function buildAgentSkillAndLibraryContext(
       `- [${p.category.toUpperCase()}] ${p.name} (${p.id}): ${p.description}\n  Snippet: ${p.generateSnippet(1, 0, 0).replace(/\n/g, ' ')}`
   );
 
+  const pubStyleSection = buildPublicationStyleSystemPrompt(themeId, options);
+
   const sections: string[] = [
+    ...(pubStyleSection ? [pubStyleSection, ''] : []),
     '=== AGENTIKZ COMPONENT LIBRARY & VISUAL RENDERER SPECIFICATION ===',
     'AgenTikZ renders TikZ on an interactive vector canvas + LaTeX compiler. Use these canonical styles and node attributes so components render with rich visual fidelity:',
     '1. Neural & Architecture Blocks:',

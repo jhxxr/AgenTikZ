@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import {
+  EdgeLineStyle,
   EdgeRouteType,
   ParsedTikzDocument,
   TikzChartElement,
@@ -30,6 +31,8 @@ import { JOURNAL_THEMES } from '../core/themes/journal-presets';
 import { useSettingsStore } from './useSettingsStore';
 
 export type LeftSidebarTab = 'project' | 'library' | 'code';
+export type WorkbenchMode = 'figure_studio' | 'paper_writer' | 'split_link';
+export type ColumnGuideMode = 'none' | 'single' | 'double';
 
 export type CanvasTool =
   | 'select'
@@ -62,6 +65,9 @@ interface WorkspaceState {
   activeThemeId: JournalThemeId;
   activeTemplateId: string;
   leftTab: LeftSidebarTab;
+  workbenchMode: WorkbenchMode;
+  columnGuideMode: ColumnGuideMode;
+  isInsertFigureModalOpen: boolean;
   activeTool: CanvasTool;
   selectedIds: string[];
   highlightedLineRange: { startLine: number; endLine: number } | null;
@@ -79,11 +85,20 @@ interface WorkspaceState {
   undoStack: string[];
   redoStack: string[];
   isAgentPanelCollapsed: boolean;
+  isLeftSidebarCollapsed: boolean;
+  isInspectorDrawerOpen: boolean;
 
   // Actions
   setLeftTab: (tab: LeftSidebarTab) => void;
+  setWorkbenchMode: (mode: WorkbenchMode) => void;
+  setColumnGuideMode: (mode: ColumnGuideMode) => void;
+  setInsertFigureModalOpen: (open: boolean) => void;
   setAgentPanelCollapsed: (collapsed: boolean) => void;
   toggleAgentPanel: () => void;
+  setLeftSidebarCollapsed: (collapsed: boolean) => void;
+  toggleLeftSidebar: () => void;
+  setInspectorDrawerOpen: (open: boolean) => void;
+  toggleInspectorDrawer: () => void;
   setActiveTool: (tool: CanvasTool) => void;
   setActiveTheme: (themeId: JournalThemeId) => void;
   setSelectedIds: (ids: string[]) => void;
@@ -123,6 +138,8 @@ interface WorkspaceState {
       stroke?: string;
       lineWidth?: string;
       dashed?: boolean;
+      dotted?: boolean;
+      lineStyle?: EdgeLineStyle;
     },
     recordUndo?: boolean
   ) => void;
@@ -135,6 +152,8 @@ interface WorkspaceState {
         | 'xlabel'
         | 'ylabel'
         | 'subcaption'
+        | 'uncertaintyNote'
+        | 'directEndLabels'
         | 'chartType'
         | 'width'
         | 'height'
@@ -196,8 +215,13 @@ interface WorkspaceState {
   loadTemplate: (templateId: string) => void;
 }
 
+const initialThemeId: JournalThemeId = (
+  useSettingsStore.getState().defaultThemeId in JOURNAL_THEMES
+    ? useSettingsStore.getState().defaultThemeId
+    : 'neurips'
+) as JournalThemeId;
 const initialCode = EMPTY_TIKZ_CODE;
-const initialParsed = parseTikzDocument(initialCode);
+const initialParsed = parseTikzDocument(initialCode, initialThemeId);
 
 function computeLineRangeForSelection(
   doc: ParsedTikzDocument,
@@ -215,13 +239,12 @@ function computeLineRangeForSelection(
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   tikzCode: initialCode,
   parsedDoc: initialParsed,
-  activeThemeId: (
-    useSettingsStore.getState().defaultThemeId in JOURNAL_THEMES
-      ? useSettingsStore.getState().defaultThemeId
-      : 'neurips'
-  ) as JournalThemeId,
+  activeThemeId: initialThemeId,
   activeTemplateId: '',
   leftTab: 'code',
+  workbenchMode: 'figure_studio',
+  columnGuideMode: 'none',
+  isInsertFigureModalOpen: false,
   activeTool: 'select',
   selectedIds: [],
   highlightedLineRange: null,
@@ -239,14 +262,34 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   undoStack: [],
   redoStack: [],
   isAgentPanelCollapsed: false,
+  isLeftSidebarCollapsed: false,
+  isInspectorDrawerOpen: false,
 
-  setLeftTab: (leftTab) => set({ leftTab }),
+  setLeftTab: (leftTab) => set({ leftTab, isLeftSidebarCollapsed: false }),
+  setWorkbenchMode: (workbenchMode) => set({ workbenchMode }),
+  setColumnGuideMode: (columnGuideMode) => set({ columnGuideMode }),
+  setInsertFigureModalOpen: (isInsertFigureModalOpen) =>
+    set({ isInsertFigureModalOpen }),
   setAgentPanelCollapsed: (isAgentPanelCollapsed) =>
     set({ isAgentPanelCollapsed }),
   toggleAgentPanel: () =>
     set((s) => ({ isAgentPanelCollapsed: !s.isAgentPanelCollapsed })),
+  setLeftSidebarCollapsed: (isLeftSidebarCollapsed) =>
+    set({ isLeftSidebarCollapsed }),
+  toggleLeftSidebar: () =>
+    set((s) => ({ isLeftSidebarCollapsed: !s.isLeftSidebarCollapsed })),
+  setInspectorDrawerOpen: (isInspectorDrawerOpen) =>
+    set({ isInspectorDrawerOpen }),
+  toggleInspectorDrawer: () =>
+    set((s) => ({ isInspectorDrawerOpen: !s.isInspectorDrawerOpen })),
   setActiveTool: (activeTool) => set({ activeTool }),
-  setActiveTheme: (activeThemeId) => set({ activeThemeId }),
+  setActiveTheme: (activeThemeId) => {
+    const { tikzCode } = get();
+    set({
+      activeThemeId,
+      parsedDoc: parseTikzDocument(tikzCode, activeThemeId),
+    });
+  },
 
   setSelectedIds: (selectedIds) => {
     const { parsedDoc } = get();
@@ -357,9 +400,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   setTikzCode: (newCode, recordUndo = true) => {
-    const { tikzCode, undoStack, selectedIds } = get();
+    const { tikzCode, undoStack, selectedIds, activeThemeId } = get();
     if (newCode === tikzCode) return;
-    const nextDoc = parseTikzDocument(newCode);
+    const nextDoc = parseTikzDocument(newCode, activeThemeId);
     set({
       tikzCode: newCode,
       activeTemplateId: FULL_FIGURE_TEMPLATES.find((t) => t.tikzCode === newCode)?.id ?? '',
@@ -371,10 +414,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   undo: () => {
-    const { undoStack, redoStack, tikzCode, selectedIds } = get();
+    const { undoStack, redoStack, tikzCode, selectedIds, activeThemeId } = get();
     if (undoStack.length === 0) return;
     const prevCode = undoStack[undoStack.length - 1];
-    const nextDoc = parseTikzDocument(prevCode);
+    const nextDoc = parseTikzDocument(prevCode, activeThemeId);
     set({
       tikzCode: prevCode,
       activeTemplateId: FULL_FIGURE_TEMPLATES.find((t) => t.tikzCode === prevCode)?.id ?? '',
@@ -386,10 +429,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   redo: () => {
-    const { undoStack, redoStack, tikzCode, selectedIds } = get();
+    const { undoStack, redoStack, tikzCode, selectedIds, activeThemeId } = get();
     if (redoStack.length === 0) return;
     const nextCode = redoStack[0];
-    const nextDoc = parseTikzDocument(nextCode);
+    const nextDoc = parseTikzDocument(nextCode, activeThemeId);
     set({
       tikzCode: nextCode,
       activeTemplateId: FULL_FIGURE_TEMPLATES.find((t) => t.tikzCode === nextCode)?.id ?? '',
@@ -881,7 +924,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   },
 
   applyCanvasDocumentState: (docState) => {
-    const nextDoc = parseTikzDocument(docState.tikzCode);
+    const nextThemeId =
+      docState.activeThemeId && docState.activeThemeId in JOURNAL_THEMES
+        ? docState.activeThemeId
+        : get().activeThemeId;
+    const nextDoc = parseTikzDocument(docState.tikzCode, nextThemeId);
     const primaryTarget =
       nextDoc.nodes.find((n) => n.subtype !== 'container') ||
       nextDoc.charts[0] ||
@@ -891,10 +938,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       tikzCode: docState.tikzCode,
       activeTemplateId: FULL_FIGURE_TEMPLATES.find((t) => t.tikzCode === docState.tikzCode)?.id ?? '',
       parsedDoc: nextDoc,
-      activeThemeId:
-        docState.activeThemeId && docState.activeThemeId in JOURNAL_THEMES
-          ? docState.activeThemeId
-          : get().activeThemeId,
+      activeThemeId: nextThemeId,
       zoom: docState.zoom ?? 1,
       pan: docState.pan ?? { x: 80, y: 495 },
       showGrid: docState.showGrid ?? get().showGrid,

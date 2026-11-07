@@ -24,6 +24,8 @@ export function buildStandaloneLatexDocument(
   tikzCode: string,
   themeId: keyof typeof JOURNAL_THEMES
 ): string {
+  const theme = JOURNAL_THEMES[themeId] || JOURNAL_THEMES.neurips;
+  const roles = theme.colorRoles;
   const allPreambleColors = Object.values(JOURNAL_THEMES)
     .map((t) => t.tikzPreambleColors)
     .join('\n');
@@ -63,6 +65,8 @@ export function buildStandaloneLatexDocument(
     '  id/.code={},',
     '  chart_type/.code={},',
     '  subcaption/.code={},',
+    '  uncertainty_note/.code={},',
+    '  direct_labels/.code={},',
     '  title_offset/.code={},',
     '  xlabel_offset/.code={},',
     '  ylabel_offset/.code={},',
@@ -72,7 +76,7 @@ export function buildStandaloneLatexDocument(
     '\\usepgfplotslibrary{statistics}',
     '\\usetikzlibrary{arrows.meta,positioning,calc,fit,backgrounds,shapes.geometric}',
     '',
-    `% --- Publication Theme Color Palette (${JOURNAL_THEMES[themeId].venueBadge}) ---`,
+    `% --- Publication Theme Color Palette (${theme.venueBadge}) ---`,
     allPreambleColors,
     customHexDefs,
     '',
@@ -80,16 +84,17 @@ export function buildStandaloneLatexDocument(
     '\\tikzset{',
     '  every node/.append style={align=center},',
     '  subtype/.code={},',
+    '  role/.code={},',
     '  depth/.code={},',
     '  channels/.code={},',
     '  sublabel/.code={},',
-    '  dl_block/.style={draw=nips_blue!85!black, fill=nips_blue!14, rounded corners=2.5pt, line width=0.7pt, minimum width=2.8cm, minimum height=0.82cm, align=center},',
-    '  mha_block/.style={draw=nips_amber!85!black, fill=nips_amber!16, rounded corners=2.5pt, line width=0.75pt, minimum width=3.0cm, minimum height=0.92cm, align=center},',
-    '  addnorm_block/.style={draw=nips_sage!85!black, fill=nips_sage!15, rounded corners=2.0pt, line width=0.65pt, minimum width=2.8cm, minimum height=0.65cm, align=center},',
-    '  conv_block/.style={draw=cvpr_teal!85!black, fill=cvpr_teal!14, rounded corners=2.0pt, line width=0.7pt, minimum width=2.6cm, minimum height=0.85cm, align=center},',
-    '  feature_cube/.style={draw=cvpr_navy!85!black, fill=cvpr_navy!14, line width=0.7pt, minimum width=1.2cm, minimum height=2.0cm, align=center},',
-    '  op_circle/.style={circle, draw=nips_slate!85!black, fill=white, line width=0.7pt, minimum size=0.6cm, inner sep=1pt, align=center},',
-    '  stage_box/.style={draw=nips_slate!55, fill=nips_slate!5, dashed, rounded corners=4pt, line width=0.65pt, align=center},',
+    `  dl_block/.style={draw=${roles.signal.stroke}, fill=${roles.signal.fill}, rounded corners=${theme.defaultRoundedCorners}, line width=${theme.defaultLineWidth}, minimum width=2.8cm, minimum height=0.82cm, align=center},`,
+    `  mha_block/.style={draw=${roles.hero.stroke}, fill=${roles.hero.fill}, rounded corners=${theme.defaultRoundedCorners}, line width=${theme.defaultLineWidth}, minimum width=3.0cm, minimum height=0.92cm, align=center},`,
+    `  addnorm_block/.style={draw=${roles.secondary.stroke}, fill=${roles.secondary.fill}, rounded corners=${theme.defaultRoundedCorners}, line width=${theme.defaultLineWidth}, minimum width=2.8cm, minimum height=0.65cm, align=center},`,
+    `  conv_block/.style={draw=${roles.secondary.stroke}, fill=${roles.secondary.fill}, rounded corners=${theme.defaultRoundedCorners}, line width=${theme.defaultLineWidth}, minimum width=2.6cm, minimum height=0.85cm, align=center},`,
+    `  feature_cube/.style={draw=${roles.signal.stroke}, fill=${roles.signal.fill}, line width=${theme.defaultLineWidth}, minimum width=1.2cm, minimum height=2.0cm, align=center},`,
+    `  op_circle/.style={circle, draw=${roles.neutral.stroke}, fill=white, line width=${theme.defaultLineWidth}, minimum size=0.6cm, inner sep=1pt, align=center},`,
+    `  stage_box/.style={draw=${roles.container.stroke}, fill=${roles.container.fill}, dashed, rounded corners=4pt, line width=${theme.defaultLineWidth}, align=center},`,
     '  subcaption/.style={draw=none, fill=none, align=center}',
     '}',
     '',

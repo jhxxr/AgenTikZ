@@ -11,12 +11,10 @@ import {
   Loader2,
   AlertCircle,
   FolderOpen,
-  Save,
+  Sliders,
 } from 'lucide-react';
-import {
-  useProjectStore,
-  AGENTIKZ_FOLDER_NAME,
-} from '../../store/useProjectStore';
+import { useProjectStore } from '../../store/useProjectStore';
+import { useWorkspaceStore } from '../../store/useWorkspaceStore';
 
 export const CanvasTabsBar: React.FC = () => {
   const {
@@ -32,6 +30,13 @@ export const CanvasTabsBar: React.FC = () => {
     saveActiveCanvasNow,
     setPickerOpen,
   } = useProjectStore();
+
+  const {
+    isInspectorDrawerOpen,
+    toggleInspectorDrawer,
+    canvasWidthCm,
+    canvasHeightCm,
+  } = useWorkspaceStore();
 
   const [editingFileName, setEditingFileName] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
@@ -56,13 +61,17 @@ export const CanvasTabsBar: React.FC = () => {
     await createNewCanvasFile(`Fig ${nextIndex} - New Figure`);
   };
 
+  const activeStem =
+    activeCanvasFileName.replace(/\.canvas\.json$/i, '') || 'fig1-architecture';
+
   return (
     <div className="h-9 bg-slate-100/90 border-b border-slate-200/80 px-2 flex items-center justify-between gap-2 shrink-0 select-none z-20">
-      {/* Left: Canvas File Tabs */}
+      {/* Left: Unified Figure Tabs (figures/*.tikz) */}
       <div className="flex items-center gap-1 overflow-x-auto no-scrollbar min-w-0 flex-1 py-1">
         {canvases.map((canvas) => {
           const isActive = canvas.fileName === activeCanvasFileName;
           const isEditing = editingFileName === canvas.fileName;
+          const stem = canvas.fileName.replace(/\.canvas\.json$/i, '');
 
           return (
             <div
@@ -73,7 +82,7 @@ export const CanvasTabsBar: React.FC = () => {
                 }
               }}
               onDoubleClick={() => startRename(canvas.fileName, canvas.name)}
-              title={`${canvas.name}\n文件: ${AGENTIKZ_FOLDER_NAME}/${canvas.fileName}\n(双击可重命名)`}
+              title={`${canvas.name}\n论文配图路径: figures/${stem}.tikz\n(双击可重命名)`}
               className={`group flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs transition-all cursor-pointer shrink-0 border ${
                 isActive
                   ? 'bg-white text-indigo-700 font-semibold border-slate-200/90 shadow-2xs'
@@ -131,7 +140,7 @@ export const CanvasTabsBar: React.FC = () => {
                           startRename(canvas.fileName, canvas.name)
                         }
                         className="p-0.5 rounded hover:bg-slate-100 text-slate-400 hover:text-slate-700"
-                        title="重命名画布文件"
+                        title="重命名配图"
                       >
                         <Pencil className="w-2.5 h-2.5" />
                       </button>
@@ -140,7 +149,7 @@ export const CanvasTabsBar: React.FC = () => {
                           type="button"
                           onClick={() => void deleteCanvasFile(canvas.fileName)}
                           className="p-0.5 rounded hover:bg-rose-50 text-slate-400 hover:text-rose-600"
-                          title="删除此画布存档"
+                          title="删除此配图"
                         >
                           <Trash2 className="w-2.5 h-2.5" />
                         </button>
@@ -153,71 +162,55 @@ export const CanvasTabsBar: React.FC = () => {
           );
         })}
 
-        {/* New Canvas & Duplicate Buttons */}
+        {/* New Figure & Duplicate Buttons */}
         <button
           type="button"
           onClick={() => void handleCreateCanvas()}
           className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium text-slate-600 hover:text-indigo-700 hover:bg-white/80 transition-colors shrink-0 cursor-pointer"
-          title="在当前项目新建一个独立画布文件"
+          title="在 figures/ 下新建一张独立科研配图"
         >
           <Plus className="w-3.5 h-3.5" />
-          <span>新建画布</span>
+          <span>新建配图</span>
         </button>
 
         <button
           type="button"
           onClick={() => void duplicateCurrentCanvasFile()}
           className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium text-slate-500 hover:text-slate-800 hover:bg-white/80 transition-colors shrink-0 cursor-pointer"
-          title="复制当前画布为新存档文件"
+          title="复制当前配图为新配图"
         >
           <Copy className="w-3 h-3" />
           <span className="hidden sm:inline">创建副本</span>
         </button>
       </div>
 
-      {/* Right: Storage & Save Status Badge */}
-      <div className="flex items-center gap-2 shrink-0">
+      {/* Right: Auto-Sync Status Badge & On-Demand Inspector Drawer Toggle */}
+      <div className="flex items-center gap-1.5 shrink-0">
         {projectDir ? (
           <button
             type="button"
             onClick={() => void saveActiveCanvasNow()}
-            title="点击立即保存 (Ctrl+S)"
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white/80 hover:bg-white border border-slate-200/80 text-[11px] text-slate-600 transition-colors cursor-pointer"
+            title="已开启 500ms 防抖无感自动保存 · 点击可立即刷新同步 (Ctrl+S)"
+            className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-white/70 hover:bg-white border border-slate-200/80 text-[10.5px] text-slate-600 transition-colors cursor-pointer"
           >
-            {saveStatus === 'saving' && (
+            {(saveStatus === 'saving' || saveStatus === 'dirty') && (
               <>
                 <Loader2 className="w-3 h-3 text-indigo-600 animate-spin" />
-                <span className="text-indigo-700">正在写入...</span>
+                <span className="text-indigo-700">自动同步中...</span>
               </>
             )}
-            {saveStatus === 'dirty' && (
-              <>
-                <Save className="w-3 h-3 text-amber-500" />
-                <span className="text-amber-700 font-medium">
-                  有改动 · 点击保存
-                </span>
-              </>
-            )}
-            {saveStatus === 'saved' && (
+            {(saveStatus === 'saved' || saveStatus === 'local_only') && (
               <>
                 <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                <span className="font-mono text-[10px] text-slate-500 truncate max-w-[200px]">
-                  {AGENTIKZ_FOLDER_NAME}/{activeCanvasFileName}
+                <span className="font-mono text-[10px] text-slate-500 truncate max-w-[180px]">
+                  figures/{activeStem}.tikz
                 </span>
               </>
             )}
             {saveStatus === 'error' && (
               <>
                 <AlertCircle className="w-3 h-3 text-rose-600" />
-                <span className="text-rose-600 font-medium">保存失败</span>
-              </>
-            )}
-            {saveStatus === 'local_only' && (
-              <>
-                <CheckCircle2 className="w-3 h-3 text-slate-400" />
-                <span className="font-mono text-[10px] text-slate-500">
-                  {AGENTIKZ_FOLDER_NAME}/{activeCanvasFileName}
-                </span>
+                <span className="text-rose-600 font-medium">同步异常</span>
               </>
             )}
           </button>
@@ -225,12 +218,28 @@ export const CanvasTabsBar: React.FC = () => {
           <button
             type="button"
             onClick={() => setPickerOpen(true)}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-50 hover:bg-amber-100 border border-amber-200/90 text-[11px] text-amber-800 font-medium transition-colors cursor-pointer"
+            className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-amber-50 hover:bg-amber-100 border border-amber-200/90 text-[10.5px] text-amber-800 font-medium transition-colors cursor-pointer"
           >
             <FolderOpen className="w-3 h-3 text-amber-600" />
-            <span>关联论文/项目文件夹以存档</span>
+            <span>关联论文目录以自动同步</span>
           </button>
         )}
+
+        <button
+          type="button"
+          onClick={toggleInspectorDrawer}
+          title="展开/收起画布尺寸、整图 Caption 与详细参数抽屉"
+          className={`flex items-center gap-1 px-2 py-1 rounded-md border text-[10.5px] font-medium transition-colors cursor-pointer ${
+            isInspectorDrawerOpen
+              ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xs'
+              : 'bg-white/80 hover:bg-white text-slate-600 border-slate-200/80'
+          }`}
+        >
+          <Sliders className="w-3 h-3" />
+          <span className="hidden md:inline">
+            画布属性 ({canvasWidthCm.toFixed(0)}×{canvasHeightCm.toFixed(0)}cm)
+          </span>
+        </button>
       </div>
     </div>
   );

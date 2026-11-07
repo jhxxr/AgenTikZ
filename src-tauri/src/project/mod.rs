@@ -610,6 +610,12 @@ pub async fn project_save_canvas(
         if fs::write(&tikz_file, tikz_code.as_bytes()).is_ok() {
             exported_tikz_path = Some(tikz_file.to_string_lossy().to_string());
         }
+        // Also write to `<project_dir>/figures/<stem>.tikz` for clean `\input{figures/<stem>.tikz}` paper workflows
+        let figures_dir = root_path.join("figures");
+        if fs::create_dir_all(&figures_dir).is_ok() {
+            let clean_fig_tikz = figures_dir.join(format!("{}.tikz", stem));
+            let _ = fs::write(&clean_fig_tikz, tikz_code.as_bytes());
+        }
     }
 
     let now = now_millis();
@@ -643,8 +649,10 @@ pub async fn project_rename_canvas(
     let old_safe = sanitize_canvas_file_name(&old_file_name)?;
     let new_safe = sanitize_canvas_file_name(&new_file_name)?;
 
-    let storage_dir = PathBuf::from(project_dir.trim()).join(AGENTIKZ_FOLDER_NAME);
+    let root_path = PathBuf::from(project_dir.trim());
+    let storage_dir = root_path.join(AGENTIKZ_FOLDER_NAME);
     let export_dir = storage_dir.join(AGENTIKZ_EXPORT_FOLDER);
+    let figures_dir = root_path.join("figures");
     let old_path = storage_dir.join(&old_safe);
     let new_path = storage_dir.join(&new_safe);
 
@@ -652,6 +660,8 @@ pub async fn project_rename_canvas(
     let new_stem = new_safe.strip_suffix(".canvas.json").unwrap_or(&new_safe);
     let old_tikz = export_dir.join(format!("{}.tikz", old_stem));
     let new_tikz = export_dir.join(format!("{}.tikz", new_stem));
+    let old_fig_tikz = figures_dir.join(format!("{}.tikz", old_stem));
+    let new_fig_tikz = figures_dir.join(format!("{}.tikz", new_stem));
 
     let is_case_only_rename = old_safe != new_safe
         && (old_safe.eq_ignore_ascii_case(&new_safe)
@@ -675,6 +685,13 @@ pub async fn project_rename_canvas(
                 let _ = fs::rename(&tmp_tikz, &new_tikz);
             }
         }
+        if old_fig_tikz.exists() {
+            let tmp_fig = figures_dir.join(format!(".rename_tmp_{}.tikz", new_stem));
+            let _ = fs::remove_file(&tmp_fig);
+            if fs::rename(&old_fig_tikz, &tmp_fig).is_ok() {
+                let _ = fs::rename(&tmp_fig, &new_fig_tikz);
+            }
+        }
     }
 
     let save_res =
@@ -696,6 +713,14 @@ pub async fn project_rename_canvas(
         if !same_tikz {
             let _ = fs::remove_file(&old_tikz);
         }
+
+        let same_fig_tikz = match (fs::canonicalize(&old_fig_tikz), fs::canonicalize(&new_fig_tikz)) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => false,
+        };
+        if !same_fig_tikz {
+            let _ = fs::remove_file(&old_fig_tikz);
+        }
     }
 
     Ok(save_res)
@@ -705,7 +730,8 @@ pub async fn project_rename_canvas(
 #[tauri::command]
 pub async fn project_delete_canvas(project_dir: String, file_name: String) -> Result<bool, String> {
     let safe_name = sanitize_canvas_file_name(&file_name)?;
-    let storage_dir = PathBuf::from(project_dir.trim()).join(AGENTIKZ_FOLDER_NAME);
+    let root_path = PathBuf::from(project_dir.trim());
+    let storage_dir = root_path.join(AGENTIKZ_FOLDER_NAME);
     let file_path = storage_dir.join(&safe_name);
     if file_path.exists() {
         fs::remove_file(&file_path)
@@ -716,6 +742,8 @@ pub async fn project_delete_canvas(project_dir: String, file_name: String) -> Re
         .join(AGENTIKZ_EXPORT_FOLDER)
         .join(format!("{}.tikz", stem));
     let _ = fs::remove_file(tikz_path);
+    let fig_tikz_path = root_path.join("figures").join(format!("{}.tikz", stem));
+    let _ = fs::remove_file(fig_tikz_path);
     Ok(true)
 }
 
@@ -952,6 +980,218 @@ pub async fn project_reveal_in_explorer(path: String) -> Result<bool, String> {
             .spawn();
         return Ok(true);
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaperFileItem {
+    pub relative_path: String,
+    pub file_name: String,
+    pub category: String,
+    pub size_bytes: u64,
+    pub modified_at: u64,
+}
+
+fn classify_paper_file(rel_str: &str) -> String {
+    let lower = rel_str.to_ascii_lowercase();
+    if lower == "main.tex" || lower == "paper.tex" || lower == "manuscript.tex" {
+        "main".into()
+    } else if lower.ends_with(".bib") {
+        "bib".into()
+    } else if lower.ends_with(".sty") || lower.ends_with(".cls") {
+        "style".into()
+    } else if lower.ends_with(".tikz") {
+        "figure_tikz".into()
+    } else if lower.ends_with(".tex") {
+        "section".into()
+    } else {
+        "other".into()
+    }
+}
+
+fn scan_paper_files_recursive(
+    root: &Path,
+    current: &Path,
+    depth: usize,
+    max_depth: usize,
+    out: &mut Vec<PaperFileItem>,
+) {
+    if depth > max_depth || out.len() >= 250 {
+        return;
+    }
+    let entries = match fs::read_dir(current) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let file_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+
+        if path.is_dir() {
+            if !should_skip_dir(&file_name) {
+                scan_paper_files_recursive(root, &path, depth + 1, max_depth, out);
+            }
+            continue;
+        }
+
+        if !path.is_file() {
+            continue;
+        }
+
+        let ext = match path.extension().and_then(|e| e.to_str()) {
+            Some(e) => e.to_ascii_lowercase(),
+            None => continue,
+        };
+
+        if !matches!(ext.as_str(), "tex" | "bib" | "sty" | "cls" | "tikz") {
+            continue;
+        }
+
+        let rel_path = match path.strip_prefix(root) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+
+        let rel_str = rel_path
+            .components()
+            .filter_map(|c| match c {
+                Component::Normal(s) => s.to_str(),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("/");
+
+        let meta = fs::metadata(&path).ok();
+        let size_bytes = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+        let modified_at = meta
+            .as_ref()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+
+        out.push(PaperFileItem {
+            relative_path: rel_str.clone(),
+            file_name,
+            category: classify_paper_file(&rel_str),
+            size_bytes,
+            modified_at,
+        });
+    }
+}
+
+/// Initializes a clean academic paper directory structure (`main.tex`, `sections/`, `styles/`, `figures/`, etc.).
+/// Existing files with the same name are NOT overwritten unless they are `styles/agentikz-macros.sty`.
+#[tauri::command]
+pub async fn project_init_paper_workspace(
+    project_dir: String,
+    files: std::collections::HashMap<String, String>,
+) -> Result<bool, String> {
+    let trimmed = project_dir.trim();
+    if trimmed.is_empty() {
+        return Err("论文项目目录路径不能为空".into());
+    }
+    let root = PathBuf::from(trimmed);
+    fs::create_dir_all(&root).map_err(|e| format!("无法创建论文目录: {}", e))?;
+    fs::create_dir_all(root.join("sections")).ok();
+    fs::create_dir_all(root.join("styles")).ok();
+    fs::create_dir_all(root.join("figures")).ok();
+    fs::create_dir_all(root.join("figures").join("external")).ok();
+    fs::create_dir_all(root.join("figures").join("assets").join("ai")).ok();
+
+    for (rel, content) in files {
+        let clean_rel = normalize_relative_path(&rel)?;
+        let target = root.join(&clean_rel);
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("无法创建子目录 {:?}: {}", parent, e))?;
+        }
+        let is_macros = rel.ends_with("agentikz-macros.sty");
+        if !target.exists() || is_macros {
+            fs::write(&target, content.as_bytes())
+                .map_err(|e| format!("写入文件 {} 失败: {}", rel, e))?;
+        }
+    }
+
+    Ok(true)
+}
+
+/// Lists all `.tex`, `.bib`, `.sty`, `.cls`, and `.tikz` files inside `<project_dir>`.
+#[tauri::command]
+pub async fn project_list_paper_files(project_dir: String) -> Result<Vec<PaperFileItem>, String> {
+    let root = PathBuf::from(project_dir.trim());
+    if !root.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut list = Vec::new();
+    scan_paper_files_recursive(&root, &root, 0, 4, &mut list);
+    list.sort_by(|a, b| {
+        let rank = |cat: &str| match cat {
+            "main" => 0,
+            "section" => 1,
+            "bib" => 2,
+            "style" => 3,
+            "figure_tikz" => 4,
+            _ => 5,
+        };
+        rank(&a.category)
+            .cmp(&rank(&b.category))
+            .then_with(|| a.relative_path.cmp(&b.relative_path))
+    });
+    Ok(list)
+}
+
+/// Reads a UTF-8 text file (`.tex`, `.bib`, `.sty`, `.tikz`) inside `<project_dir>`.
+#[tauri::command]
+pub async fn project_read_text_file(
+    project_dir: String,
+    relative_path: String,
+) -> Result<String, String> {
+    let root = PathBuf::from(project_dir.trim());
+    let clean_rel = normalize_relative_path(&relative_path)?;
+    let full_path = root.join(&clean_rel);
+    if !full_path.is_file() {
+        return Err(format!("文件不存在: {}", relative_path));
+    }
+    if let (Ok(canon_root), Ok(canon_full)) = (fs::canonicalize(&root), fs::canonicalize(&full_path)) {
+        if !canon_full.starts_with(&canon_root) {
+            return Err("禁止读取项目目录之外的文件".into());
+        }
+    }
+    fs::read_to_string(&full_path).map_err(|e| format!("读取文件失败: {}", e))
+}
+
+/// Writes a UTF-8 text file (`.tex`, `.bib`, `.sty`, `.tikz`) inside `<project_dir>`.
+#[tauri::command]
+pub async fn project_write_text_file(
+    project_dir: String,
+    relative_path: String,
+    content: String,
+) -> Result<bool, String> {
+    let root = PathBuf::from(project_dir.trim());
+    if !root.is_dir() {
+        return Err("项目目录不存在".into());
+    }
+    let clean_rel = normalize_relative_path(&relative_path)?;
+    let full_path = root.join(&clean_rel);
+    if let Some(parent) = full_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("无法创建父目录: {}", e))?;
+        if let (Ok(canon_root), Ok(canon_parent)) =
+            (fs::canonicalize(&root), fs::canonicalize(parent))
+        {
+            if !canon_parent.starts_with(&canon_root) {
+                return Err("禁止写入项目目录之外的路径".into());
+            }
+        }
+    }
+    fs::write(&full_path, content.as_bytes())
+        .map_err(|e| format!("写入文件失败: {}", e))?;
+    Ok(true)
 }
 
 #[cfg(test)]

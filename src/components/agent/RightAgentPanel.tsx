@@ -2,8 +2,12 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useAgentStore } from '../../store/useAgentStore';
 import { useWorkspaceStore } from '../../store/useWorkspaceStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
+import { useProjectStore } from '../../store/useProjectStore';
 import { FULL_FIGURE_TEMPLATES } from '../../core/templates/dl-templates';
 import { JOURNAL_THEMES } from '../../core/themes/journal-presets';
+import { PUBLICATION_WORKFLOW_TEMPLATES } from '../../core/agent/figure-contract';
+import { parseTikzDocument } from '../../core/parser/parser';
+import { generateScientificIllustration } from '../../core/agent/illustration-prompt';
 import { AcpAgentId } from '../../types/acp';
 import {
   Bot,
@@ -15,6 +19,7 @@ import {
   Cpu,
   GitCompare,
   History,
+  Image as ImageIcon,
   Layers,
   Palette,
   PanelRightClose,
@@ -64,28 +69,49 @@ export const RightAgentPanel: React.FC = () => {
     isAgentPanelCollapsed,
     toggleAgentPanel,
   } = useWorkspaceStore();
-  const { openSettings } = useSettingsStore();
+  const settings = useSettingsStore();
+  const { openSettings } = settings;
+  const { projectDir, registerGeneratedAsset } = useProjectStore();
 
   const [inputText, setInputText] = useState('');
   const [showHistoryDropdown, setShowHistoryDropdown] = useState(false);
   const [showAgentConfig, setShowAgentConfig] = useState(false);
+  const [showWorkflowMenu, setShowWorkflowMenu] = useState(false);
   const [previewTabByMsgId, setPreviewTabByMsgId] = useState<
     Record<string, 'closed' | 'diff' | 'code'>
   >({});
+  const [generatingImgMsgId, setGeneratingImgMsgId] = useState<string | null>(
+    null
+  );
+  const [imgGenStatusByMsgId, setImgGenStatusByMsgId] = useState<
+    Record<string, string>
+  >({});
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const historyDropdownRef = useRef<HTMLDivElement | null>(null);
+  const workflowMenuRef = useRef<HTMLDivElement | null>(null);
 
-  // Close history dropdown on outside click
+  // Close dropdowns on outside click
   useEffect(() => {
-    if (!showHistoryDropdown) return;
+    if (!showHistoryDropdown && !showWorkflowMenu) return;
     const handler = (e: MouseEvent) => {
-      if (historyDropdownRef.current && !historyDropdownRef.current.contains(e.target as Node)) {
+      if (
+        showHistoryDropdown &&
+        historyDropdownRef.current &&
+        !historyDropdownRef.current.contains(e.target as Node)
+      ) {
         setShowHistoryDropdown(false);
+      }
+      if (
+        showWorkflowMenu &&
+        workflowMenuRef.current &&
+        !workflowMenuRef.current.contains(e.target as Node)
+      ) {
+        setShowWorkflowMenu(false);
       }
     };
     document.addEventListener('pointerdown', handler);
     return () => document.removeEventListener('pointerdown', handler);
-  }, [showHistoryDropdown]);
+  }, [showHistoryDropdown, showWorkflowMenu]);
 
   const activeSession =
     sessions.find((s) => s.id === activeSessionId) || sessions[0];
@@ -107,6 +133,68 @@ export const RightAgentPanel: React.FC = () => {
     const text = inputText;
     setInputText('');
     await sendPromptToAgent(text);
+  };
+
+  const executeAgentImageDirectives = async (
+    msgId: string,
+    tikzSource: string
+  ) => {
+    const directives = parseTikzDocument(tikzSource).imageDirectives || [];
+    if (directives.length === 0 || generatingImgMsgId === msgId) return;
+    setGeneratingImgMsgId(msgId);
+    setImgGenStatusByMsgId((prev) => ({
+      ...prev,
+      [msgId]: `正在后台自动调用 ${settings.imageGenProvider} 生成并抠图 (${directives.length} 张)...`,
+    }));
+    try {
+      let okCount = 0;
+      for (const dir of directives) {
+        const targetRel = dir.path || `figures/assets/ai/${dir.nodeId}.png`;
+        const res = await generateScientificIllustration({
+          provider: settings.imageGenProvider,
+          apiKey: settings.imageGenApiKey,
+          baseUrl: settings.imageGenBaseUrl,
+          model: settings.imageGenModel,
+          subjectPrompt: dir.prompt,
+          themeId: activeThemeId,
+          aspectRatio: dir.aspectRatio || '1:1',
+          transparentBackground: settings.imageGenAutoRemoveWhiteBg,
+          autoTrimAlpha: settings.imageGenAutoTrimAlpha,
+          projectDir,
+          targetRelativePath: targetRel,
+          proxyUrl: settings.proxyEnabled ? settings.proxyUrl : undefined,
+        });
+        if (res.ok && res.dataUrl) {
+          const savedRel = await registerGeneratedAsset(
+            res.savedRelativePath || targetRel,
+            res.dataUrl
+          );
+          useWorkspaceStore
+            .getState()
+            .updateImageNodePathById(dir.nodeId, savedRel);
+          okCount++;
+        }
+      }
+      setImgGenStatusByMsgId((prev) => ({
+        ...prev,
+        [msgId]: `✅ 已自动生成 ${okCount}/${directives.length} 张透明抠图插图并嵌入画布`,
+      }));
+    } catch (err) {
+      setImgGenStatusByMsgId((prev) => ({
+        ...prev,
+        [msgId]: `❌ 生成出错: ${String(err)}`,
+      }));
+    } finally {
+      setGeneratingImgMsgId(null);
+    }
+  };
+
+  const handleApplyPatchAndAutoCutout = (msgId: string, newTikzCode: string) => {
+    applyPatchProposal(msgId);
+    const directives = parseTikzDocument(newTikzCode).imageDirectives || [];
+    if (directives.length > 0) {
+      void executeAgentImageDirectives(msgId, newTikzCode);
+    }
   };
 
   const quickPrompts = parsedDoc.elements.length === 0 ? [
@@ -163,37 +251,36 @@ export const RightAgentPanel: React.FC = () => {
   }
 
   return (
-    <aside className="w-[360px] h-full bg-sidebar-gradient border-l border-slate-200/80 flex flex-col shrink-0 select-none">
-      {/* 1. Top Agent Header & BYOA / ACP Switcher */}
-      <div className="px-3 py-2.5 border-b border-slate-200/80 bg-white/70 space-y-2">
+    <aside className="w-[335px] h-full bg-sidebar-gradient border-l border-slate-200/80 flex flex-col shrink-0 select-none">
+      {/* 1. Streamlined Top Agent Header & BYOA / ACP Switcher */}
+      <div className="px-3 py-2 border-b border-slate-200/80 bg-white/70 space-y-1.5">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1.5">
-            <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 text-white flex items-center justify-center shadow-sm">
-              <Bot className="w-3.5 h-3.5" />
+            <div className="w-5 h-5 rounded-md bg-gradient-to-br from-blue-500 to-indigo-600 text-white flex items-center justify-center shadow-xs">
+              <Bot className="w-3 h-3" />
             </div>
-            <div>
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs font-semibold text-slate-900">
-                  Agent 协作窗口
-                </span>
-                <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-medium">
-                  AST · Diff · ACP
-                </span>
-              </div>
-            </div>
+            <span className="text-xs font-semibold text-slate-900">
+              Agent 协作
+            </span>
+            <span
+              className="text-[9.5px] px-1.5 py-0.2 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 font-medium"
+              title={`已自动注入 ${activeTheme.name} 常驻投稿规范`}
+            >
+              🛡️ {activeTheme.venueBadge}规范
+            </span>
           </div>
 
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-0.5">
             <button
               onClick={() => openSettings('agent')}
-              className="p-1.5 text-slate-600 hover:text-blue-600 hover:bg-white rounded-md border border-transparent hover:border-slate-200 transition-colors cursor-pointer"
+              className="p-1 text-slate-500 hover:text-blue-600 hover:bg-white rounded-md transition-colors cursor-pointer"
               title="打开 Agent 设置 (适配器探测 / 握手测试 / 代理 / 提示词)"
             >
               <Settings className="w-3.5 h-3.5" />
             </button>
             <button
               onClick={createNewSession}
-              className="p-1.5 text-slate-600 hover:text-blue-600 hover:bg-white rounded-md border border-transparent hover:border-slate-200 transition-colors"
+              className="p-1 text-slate-500 hover:text-blue-600 hover:bg-white rounded-md transition-colors cursor-pointer"
               title="新建对话"
             >
               <Plus className="w-3.5 h-3.5" />
@@ -201,7 +288,7 @@ export const RightAgentPanel: React.FC = () => {
             <div className="relative" ref={historyDropdownRef}>
               <button
                 onClick={() => setShowHistoryDropdown(!showHistoryDropdown)}
-                className="p-1.5 text-slate-600 hover:text-blue-600 hover:bg-white rounded-md border border-transparent hover:border-slate-200 transition-colors"
+                className="p-1 text-slate-500 hover:text-blue-600 hover:bg-white rounded-md transition-colors cursor-pointer"
                 title="历史会话记录"
               >
                 <History className="w-3.5 h-3.5" />
@@ -235,7 +322,7 @@ export const RightAgentPanel: React.FC = () => {
             </div>
             <button
               onClick={toggleAgentPanel}
-              className="p-1.5 text-slate-600 hover:text-blue-600 hover:bg-white rounded-md border border-transparent hover:border-slate-200 transition-colors cursor-pointer"
+              className="p-1 text-slate-500 hover:text-blue-600 hover:bg-white rounded-md transition-colors cursor-pointer"
               title="折叠 AI 绘图助手面板"
             >
               <PanelRightClose className="w-3.5 h-3.5" />
@@ -249,7 +336,7 @@ export const RightAgentPanel: React.FC = () => {
             <select
               value={activeAgentId}
               onChange={(e) => setActiveAgentId(e.target.value as AcpAgentId)}
-              className="w-full appearance-none pl-6 pr-6 py-1 text-xs font-medium bg-white border border-slate-200 rounded-md text-slate-800 focus:outline-none focus:border-blue-500 cursor-pointer"
+              className="w-full appearance-none pl-6 pr-6 py-1 text-[11px] font-medium bg-white border border-slate-200 rounded-md text-slate-800 focus:outline-none focus:border-blue-500 cursor-pointer"
             >
               {providers.map((p) => (
                 <option key={p.id} value={p.id}>
@@ -274,7 +361,7 @@ export const RightAgentPanel: React.FC = () => {
             title="智能几何防重叠与顶刊配色自愈引擎（自动修复间距遮挡、无框公式与单调白框）"
           >
             <Cpu className="w-3 h-3" />
-            <span>{autoLayoutRepairEnabled ? '自愈引擎 ON' : '自愈 OFF'}</span>
+            <span>{autoLayoutRepairEnabled ? '自愈 ON' : '自愈 OFF'}</span>
           </button>
 
           <button
@@ -283,40 +370,6 @@ export const RightAgentPanel: React.FC = () => {
             title="查看 ACP 协议命令详情"
           >
             <Terminal className="w-3.5 h-3.5" />
-          </button>
-        </div>
-
-        {/* 1-Click Agent Skills Bar (Local AST + Layout + Theme Palette Engine) */}
-        <div className="pt-0.5 flex items-center gap-1 overflow-x-auto no-scrollbar">
-          <button
-            type="button"
-            onClick={() => runLocalAgentSkill('full_optimize')}
-            disabled={isStreaming}
-            className="px-2 py-1 rounded-md bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white text-[10.5px] font-medium flex items-center gap-1 shrink-0 shadow-2xs transition-all cursor-pointer disabled:opacity-40"
-            title="一键执行：垂直间距防遮挡 + 顶刊语义配色 + 无框标签修复 + 容器自适应"
-          >
-            <Wand2 className="w-3 h-3" />
-            <span>一键综合精修</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => runLocalAgentSkill('theme_colorize')}
-            disabled={isStreaming}
-            className="px-2 py-1 rounded-md bg-white hover:bg-blue-50/70 text-slate-700 hover:text-blue-700 border border-slate-200 hover:border-blue-200 text-[10.5px] font-medium flex items-center gap-1 shrink-0 transition-colors cursor-pointer disabled:opacity-40"
-            title={`按当前顶刊主题 (${activeTheme.name}) 自动设计模块语义配色`}
-          >
-            <Palette className="w-3 h-3 text-indigo-600" />
-            <span>顶刊配色</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => runLocalAgentSkill('diagnose_canvas')}
-            disabled={isStreaming}
-            className="px-2 py-1 rounded-md bg-white hover:bg-blue-50/70 text-slate-700 hover:text-blue-700 border border-slate-200 hover:border-blue-200 text-[10.5px] font-medium flex items-center gap-1 shrink-0 transition-colors cursor-pointer disabled:opacity-40"
-            title="检查节点重叠、箭头遮挡、无框公式与配色一致性"
-          >
-            <ScanSearch className="w-3 h-3 text-emerald-600" />
-            <span>布局诊断</span>
           </button>
         </div>
 
@@ -636,11 +689,80 @@ export const RightAgentPanel: React.FC = () => {
                         </pre>
                       )}
 
-                      {/* Action Buttons: Apply / Revert / Open Code Tab */}
+                      {/* @agent-image Hybrid Vector + AI Cutout Directives */}
+                      {(() => {
+                        const directives =
+                          parseTikzDocument(patch.newTikzCode)
+                            .imageDirectives || [];
+                        if (directives.length === 0) return null;
+                        const isBusy = generatingImgMsgId === msg.id;
+                        const statusText = imgGenStatusByMsgId[msg.id];
+                        return (
+                          <div className="p-2 rounded-lg bg-emerald-50/80 border border-emerald-200 space-y-1.5">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10.5px] font-semibold text-emerald-950 flex items-center gap-1">
+                                <ImageIcon className="w-3 h-3 text-emerald-600" />
+                                检测到 {directives.length} 个 @agent-image 透明插图指令
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => openSettings('illustration')}
+                                className="text-[9.5px] text-emerald-700 hover:underline cursor-pointer"
+                              >
+                                {settings.imageGenProvider}
+                              </button>
+                            </div>
+                            <div className="space-y-1">
+                              {directives.map((d, di) => (
+                                <div
+                                  key={di}
+                                  className="text-[10px] font-mono text-emerald-900 bg-white/80 px-1.5 py-0.5 rounded border border-emerald-100 truncate"
+                                  title={d.prompt}
+                                >
+                                  • ({d.nodeId}) {d.prompt}
+                                </div>
+                              ))}
+                            </div>
+                            <button
+                              type="button"
+                              disabled={isBusy}
+                              onClick={async () => {
+                                if (patch.status !== 'applied') {
+                                  applyPatchProposal(msg.id);
+                                }
+                                await executeAgentImageDirectives(
+                                  msg.id,
+                                  patch.newTikzCode
+                                );
+                              }}
+                              className="w-full py-1 px-2 rounded bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white text-[10.5px] font-semibold flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                            >
+                              <Sparkles className="w-3 h-3" />
+                              <span>
+                                {isBusy
+                                  ? '正在生成并抠图...'
+                                  : `✨ 重新生成 ${directives.length} 张 AI 透明插图`}
+                              </span>
+                            </button>
+                            {statusText && (
+                              <div className="text-[10px] text-emerald-900">
+                                {statusText}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
+
+                      {/* Action Buttons: Apply (Auto-Cutout if @agent-image exists) / Revert / Open Code Tab */}
                       <div className="flex items-center gap-1.5 pt-1">
                         {patch.status !== 'applied' ? (
                           <button
-                            onClick={() => applyPatchProposal(msg.id)}
+                            onClick={() =>
+                              handleApplyPatchAndAutoCutout(
+                                msg.id,
+                                patch.newTikzCode
+                              )
+                            }
                             className="flex-1 py-1.5 px-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-[11px] font-medium flex items-center justify-center gap-1 transition-colors cursor-pointer"
                           >
                             <Check className="w-3.5 h-3.5" />
@@ -681,69 +803,207 @@ export const RightAgentPanel: React.FC = () => {
         <div ref={chatEndRef} />
       </div>
 
-      {/* 3. Quick Prompt Chips + Bottom Context & Chat Input Area */}
-      <div className="border-t border-slate-200/80 bg-white/60 p-2.5 space-y-2">
-        {/* Quick Suggestion Chips */}
-        <div className="flex gap-1.5 overflow-x-auto pb-0.5 no-scrollbar">
-          {quickPrompts.map((qp, i) => (
+      {/* 3. Progressive-Disclosure Workflow Bar + Context & Chat Input Area */}
+      <div className="border-t border-slate-200/80 bg-white/75 p-2.5 space-y-2 relative">
+        {/* Single Compact Workflow & Skill Row + Popover */}
+        <div className="flex items-center justify-between gap-1.5">
+          <div className="flex items-center gap-1 overflow-x-auto no-scrollbar">
             <button
-              key={i}
-              onClick={() => sendPromptToAgent(qp)}
+              type="button"
+              onClick={() => runLocalAgentSkill('full_optimize')}
               disabled={isStreaming}
-              className="text-[10.5px] px-2 py-1 rounded-full bg-white border border-slate-200 text-slate-600 hover:border-blue-400 hover:text-blue-700 shrink-0 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+              className="text-[10.5px] px-2 py-1 rounded-full bg-indigo-50/90 border border-indigo-200 text-indigo-800 hover:bg-indigo-600 hover:text-white font-medium shrink-0 transition-colors cursor-pointer disabled:opacity-40"
+              title="一键执行零重叠、层级对齐、顶刊色板、5点契约综合精修"
             >
-              {qp}
+              ✨ 综合精修
             </button>
-          ))}
-        </div>
-
-        {/* Context Pills Row (@canvas & @selection & active theme) */}
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <span className="text-[10px] text-slate-400">上下文:</span>
-          <button
-            onClick={() => setAttachCanvasContext(!attachCanvasContext)}
-            className={`px-1.5 py-0.5 rounded text-[10px] font-mono border flex items-center gap-1 cursor-pointer ${
-              attachCanvasContext
-                ? 'bg-blue-50 text-blue-700 border-blue-200 font-medium'
-                : 'bg-white text-slate-400 border-slate-200'
-            }`}
-          >
-            <Layers className="w-2.5 h-2.5" />
-            @canvas({parsedDoc.nodes.length}节点)
-          </button>
-
-          <button
-            onClick={() => setAttachSelectionContext(!attachSelectionContext)}
-            className={`px-1.5 py-0.5 rounded text-[10px] font-mono border cursor-pointer ${
-              attachSelectionContext && selectedIds.length > 0
-                ? 'bg-amber-50 text-amber-800 border-amber-200 font-medium'
-                : 'bg-white text-slate-400 border-slate-200'
-            }`}
-          >
-            @选中(
-            {selectedIds.length > 0 ? selectedIds.slice(0, 2).join(',') : '无'})
-          </button>
-
-          <span
-            className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-indigo-50/80 text-indigo-700 border border-indigo-200"
-            title={`当前激活顶刊配色主题：${activeTheme.name}`}
-          >
-            @{activeThemeId}色板
-          </span>
-        </div>
-
-        <div className="rounded-lg border border-blue-100 bg-blue-50/60 px-2.5 py-2 text-[11px]">
-          <div className="flex items-center justify-between gap-2">
-            <span className="font-medium text-blue-800 truncate" title={referenceTemplate?.title}>
-              {referenceTemplate ? `构图参考：${referenceTemplate.title}` : '已挂载组件库 · 顶刊配色 · 增量 Diff 引擎'}
-            </span>
-            {referenceTemplate && (
-              <button onClick={() => setTemplateReference()} className="shrink-0 text-slate-500 hover:text-blue-700 cursor-pointer">清除</button>
-            )}
+            <button
+              type="button"
+              onClick={() =>
+                setInputText(
+                  PUBLICATION_WORKFLOW_TEMPLATES[0].buildPrompt(activeThemeId)
+                )
+              }
+              disabled={isStreaming}
+              className="text-[10.5px] px-2 py-1 rounded-full bg-white border border-slate-200 text-slate-700 hover:border-indigo-300 hover:text-indigo-700 shrink-0 transition-colors cursor-pointer disabled:opacity-40"
+              title={PUBLICATION_WORKFLOW_TEMPLATES[0].description}
+            >
+              📐 {PUBLICATION_WORKFLOW_TEMPLATES[0].label}
+            </button>
+            <button
+              type="button"
+              onClick={() => runLocalAgentSkill('theme_colorize')}
+              disabled={isStreaming}
+              className="text-[10.5px] px-2 py-1 rounded-full bg-white border border-slate-200 text-slate-700 hover:border-indigo-300 hover:text-indigo-700 shrink-0 transition-colors cursor-pointer disabled:opacity-40"
+              title="按主证据层级重绘顶刊语义色板"
+            >
+              🎯 主证据着色
+            </button>
           </div>
-          <p className="mt-1 text-slate-500">
-            支持局部 SEARCH/REPLACE 增量修改、自动防重叠间距计算与 {activeTheme.name.split(' ')[0]} 语义配色。
-          </p>
+
+          <button
+            type="button"
+            onClick={() => setShowWorkflowMenu((v) => !v)}
+            className={`px-2 py-1 rounded-full text-[10.5px] font-medium border flex items-center gap-0.5 shrink-0 cursor-pointer transition-colors ${
+              showWorkflowMenu
+                ? 'bg-slate-800 text-white border-slate-800'
+                : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'
+            }`}
+          >
+            <span>更多模板</span>
+            <ChevronDown className="w-3 h-3" />
+          </button>
+        </div>
+
+        {/* Popover Menu for Full Skills, Publication Templates & Quick Prompts */}
+        {showWorkflowMenu && (
+          <div
+            ref={workflowMenuRef}
+            className="absolute bottom-full left-2 right-2 mb-1.5 bg-white rounded-xl border border-slate-200 shadow-xl p-2.5 z-30 space-y-2.5 max-h-72 overflow-y-auto"
+          >
+            <div className="flex items-center justify-between border-b border-slate-100 pb-1.5">
+              <span className="text-[10.5px] font-semibold text-slate-700">
+                ✦ 顶刊契约模板与单项规范体检
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowWorkflowMenu(false)}
+                className="text-[10px] text-slate-400 hover:text-slate-700 cursor-pointer"
+              >
+                收起
+              </button>
+            </div>
+
+            <div className="space-y-1">
+              <div className="text-[10px] font-medium text-slate-400">
+                Nature Skills 5点契约工作流模板
+              </div>
+              <div className="grid grid-cols-2 gap-1.5">
+                {PUBLICATION_WORKFLOW_TEMPLATES.map((tpl) => (
+                  <button
+                    key={tpl.id}
+                    type="button"
+                    onClick={() => {
+                      setInputText(tpl.buildPrompt(activeThemeId));
+                      setShowWorkflowMenu(false);
+                    }}
+                    className="text-left p-1.5 rounded-lg border border-indigo-100 bg-indigo-50/50 hover:bg-indigo-100/70 transition-colors cursor-pointer"
+                  >
+                    <div className="text-[10.5px] font-semibold text-indigo-900">
+                      ✦ {tpl.label}
+                    </div>
+                    <div className="text-[9.5px] text-slate-500 truncate mt-0.5">
+                      {tpl.description}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <div className="text-[10px] font-medium text-slate-400">
+                单项规范体检与快捷指令
+              </div>
+              <div className="flex flex-wrap gap-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    runLocalAgentSkill('auto_layout');
+                    setShowWorkflowMenu(false);
+                  }}
+                  className="px-2 py-0.5 rounded bg-slate-100 hover:bg-blue-50 text-slate-700 hover:text-blue-700 text-[10px] cursor-pointer"
+                >
+                  📐 零重叠自动排布
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    runLocalAgentSkill('theme_colorize');
+                    setShowWorkflowMenu(false);
+                  }}
+                  className="px-2 py-0.5 rounded bg-slate-100 hover:bg-blue-50 text-slate-700 hover:text-blue-700 text-[10px] cursor-pointer"
+                >
+                  🎨 顶刊色板重绘
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    runLocalAgentSkill('diagnose_canvas');
+                    setShowWorkflowMenu(false);
+                  }}
+                  className="px-2 py-0.5 rounded bg-slate-100 hover:bg-blue-50 text-slate-700 hover:text-blue-700 text-[10px] cursor-pointer"
+                >
+                  📋 5点契约与规范体检
+                </button>
+                {quickPrompts.map((qp, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={() => {
+                      sendPromptToAgent(qp);
+                      setShowWorkflowMenu(false);
+                    }}
+                    className="px-2 py-0.5 rounded bg-white border border-slate-200 hover:border-blue-300 text-slate-600 hover:text-blue-700 text-[10px] cursor-pointer"
+                  >
+                    {qp}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Compact Context Pills Row (@canvas & @selection & active theme & optional reference template) */}
+        <div className="flex items-center justify-between gap-1.5 flex-wrap">
+          <div className="flex items-center gap-1 flex-wrap">
+            <button
+              onClick={() => setAttachCanvasContext(!attachCanvasContext)}
+              className={`px-1.5 py-0.5 rounded text-[10px] font-mono border flex items-center gap-1 cursor-pointer ${
+                attachCanvasContext
+                  ? 'bg-blue-50 text-blue-700 border-blue-200 font-medium'
+                  : 'bg-white text-slate-400 border-slate-200'
+              }`}
+            >
+              <Layers className="w-2.5 h-2.5" />
+              @canvas({parsedDoc.nodes.length})
+            </button>
+
+            <button
+              onClick={() => setAttachSelectionContext(!attachSelectionContext)}
+              className={`px-1.5 py-0.5 rounded text-[10px] font-mono border cursor-pointer ${
+                attachSelectionContext && selectedIds.length > 0
+                  ? 'bg-amber-50 text-amber-800 border-amber-200 font-medium'
+                  : 'bg-white text-slate-400 border-slate-200'
+              }`}
+            >
+              @选中(
+              {selectedIds.length > 0
+                ? selectedIds.slice(0, 2).join(',')
+                : '无'}
+              )
+            </button>
+
+            <span
+              className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-indigo-50/80 text-indigo-700 border border-indigo-200"
+              title={`当前激活顶刊配色主题：${activeTheme.name}`}
+            >
+              @{activeThemeId}
+            </span>
+          </div>
+
+          {referenceTemplate && (
+            <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-50 border border-blue-200 text-[10px] text-blue-800 max-w-[140px]">
+              <span className="truncate" title={referenceTemplate.title}>
+                参考:{referenceTemplate.title}
+              </span>
+              <button
+                onClick={() => setTemplateReference()}
+                className="text-slate-400 hover:text-blue-700 shrink-0 cursor-pointer"
+              >
+                ×
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Multi-line Prompt Input Box */}
@@ -763,7 +1023,7 @@ export const RightAgentPanel: React.FC = () => {
           />
           <div className="absolute bottom-1.5 left-2.5 right-2 flex items-center justify-between">
             <span className="text-[10px] text-slate-400">
-              增量 Diff · 组件库 · 防重叠自愈
+              增量 Diff · 契约自愈 · 透明插图联动
             </span>
             <button
               onClick={handleSend}

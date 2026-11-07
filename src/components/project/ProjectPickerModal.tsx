@@ -19,6 +19,10 @@ import {
   useProjectStore,
   AGENTIKZ_FOLDER_NAME,
 } from '../../store/useProjectStore';
+import {
+  PAPER_VENUE_TEMPLATES,
+  type PaperVenueTemplateId,
+} from '../../core/paper/paper-templates';
 
 function formatRelativeTime(timestamp: number): string {
   const diffSec = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
@@ -46,6 +50,8 @@ export const ProjectPickerModal: React.FC = () => {
     recentProjects,
     pickAndOpenDirectory,
     openProjectDirectory,
+    initPaperWorkspace,
+    setWorkbenchMode,
     togglePinRecentProject,
     removeRecentProject,
     revealInFileManager,
@@ -57,6 +63,11 @@ export const ProjectPickerModal: React.FC = () => {
   );
   const [searchQuery, setSearchQuery] = useState('');
   const [isOpening, setIsOpening] = useState(false);
+  const [pickerTab, setPickerTab] = useState<'open' | 'create_template'>('open');
+  const [templateId, setTemplateId] = useState<PaperVenueTemplateId>('nature');
+  const [paperTitle, setPaperTitle] = useState(
+    'Unified Scientific Architecture and Experimental Analysis'
+  );
 
   if (!isPickerOpen) return null;
 
@@ -97,6 +108,19 @@ export const ProjectPickerModal: React.FC = () => {
     }
   };
 
+  const handleCreatePaperFromTemplate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const target = manualPath.trim() || projectDir || lastProjectDir;
+    if (!target) return;
+    setIsOpening(true);
+    try {
+      await initPaperWorkspace(target, templateId, paperTitle.trim());
+      setWorkbenchMode('split');
+    } finally {
+      setIsOpening(false);
+    }
+  };
+
   const handleOpenRecent = async (dirPath: string) => {
     setIsOpening(true);
     try {
@@ -114,22 +138,18 @@ export const ProjectPickerModal: React.FC = () => {
           <div>
             <div className="flex items-center gap-2">
               <span className="px-2 py-0.5 rounded-md bg-indigo-500/20 border border-indigo-400/30 text-indigo-200 text-[11px] font-semibold tracking-wide">
-                Paper & Project Workspace
+                One-Stop Paper & Figure Studio
               </span>
               <span className="text-[11px] text-slate-300 font-mono">
-                /{AGENTIKZ_FOLDER_NAME}/*.canvas.json
+                main.tex + sections/ + figures/*.tikz + styles/agentikz-macros.sty
               </span>
             </div>
             <h2 className="text-lg font-bold tracking-tight mt-1.5 flex items-center gap-2">
               <FolderOpen className="w-5 h-5 text-indigo-400" />
-              选择论文或项目文件夹
+              导入已有论文工程 或 从顶刊模板新建论文
             </h2>
             <p className="text-xs text-slate-300 mt-1 leading-relaxed">
-              进入论文/项目目录后，AgenTikZ 会在该目录下建立专属{' '}
-              <code className="px-1.5 py-0.5 rounded bg-white/10 text-indigo-200 font-mono">
-                {AGENTIKZ_FOLDER_NAME}/
-              </code>{' '}
-              文件夹保存画布存档（一个画布一个文件），并自动读取同目录下的插图作为可拖拽素材。
+              论文所有相关文件（<code className="px-1 py-0.5 rounded bg-white/10 text-indigo-200 font-mono">main.tex</code>、章节、参考文献、可编辑配图代码包 <code className="px-1 py-0.5 rounded bg-white/10 text-indigo-200 font-mono">figures/*.tikz</code>、外部成品图 <code className="px-1 py-0.5 rounded bg-white/10 text-indigo-200 font-mono">figures/external/</code>）统一收纳在您的独立论文文件夹中，不与软件本体混杂。
             </p>
           </div>
           <button
@@ -141,25 +161,31 @@ export const ProjectPickerModal: React.FC = () => {
           </button>
         </div>
 
-        {/* Feature Highlights Bar */}
-        <div className="grid grid-cols-3 gap-2 px-6 py-2.5 bg-slate-50 border-b border-slate-200/80 text-[11px] text-slate-600">
-          <div className="flex items-center gap-1.5">
-            <Sparkles className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-            <span>
-              专属 <strong className="text-slate-800">{AGENTIKZ_FOLDER_NAME}/</strong> 目录，不污染论文主目录
-            </span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <FileCode2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-            <span>
-              <strong className="text-slate-800">一画布一文件</strong>，自动同步导出 <code className="font-mono">.tikz</code>
-            </span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <Images className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-            <span>
-              自动扫描同目录 <strong className="text-slate-800">PNG / SVG / JPG</strong> 作为画布素材
-            </span>
+        {/* Mode Switch Tabs */}
+        <div className="px-6 pt-3 pb-2 bg-slate-50 border-b border-slate-200/80 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setPickerTab('open')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                pickerTab === 'open'
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+              }`}
+            >
+              📂 打开 / 导入已有论文或项目目录
+            </button>
+            <button
+              type="button"
+              onClick={() => setPickerTab('create_template')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                pickerTab === 'create_template'
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+              }`}
+            >
+              ✨ 从顶刊 LaTeX 模板新建论文工程 (Nature / NeurIPS / CVPR / IEEE / arXiv)
+            </button>
           </div>
         </div>
 
@@ -172,84 +198,174 @@ export const ProjectPickerModal: React.FC = () => {
             </div>
           )}
 
-          {/* Quick Resume Last Folder Card */}
-          {lastProjectDir && (
-            <div className="p-4 rounded-xl bg-indigo-50/70 border border-indigo-200/80 flex items-center justify-between gap-4">
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="px-2 py-0.5 rounded-full bg-indigo-600 text-white text-[10px] font-semibold">
-                    上次工作目录
-                  </span>
-                  {projectDir === lastProjectDir && (
-                    <span className="flex items-center gap-1 text-[11px] text-emerald-700 font-medium">
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      当前已打开
-                    </span>
-                  )}
+          {pickerTab === 'create_template' ? (
+            <form
+              onSubmit={handleCreatePaperFromTemplate}
+              className="p-4 rounded-xl border border-indigo-200 bg-indigo-50/40 space-y-4"
+            >
+              <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
+                {PAPER_VENUE_TEMPLATES.map((tpl) => {
+                  const active = tpl.id === templateId;
+                  return (
+                    <button
+                      key={tpl.id}
+                      type="button"
+                      onClick={() => setTemplateId(tpl.id)}
+                      className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                        active
+                          ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                          : 'bg-white text-slate-700 border-slate-200 hover:border-indigo-300'
+                      }`}
+                    >
+                      <div className="text-[11px] font-bold">{tpl.badge}</div>
+                      <div
+                        className={`text-[10px] mt-0.5 line-clamp-2 ${
+                          active ? 'text-indigo-100' : 'text-slate-400'
+                        }`}
+                      >
+                        {tpl.name}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                    论文标题 (Paper Title)
+                  </label>
+                  <input
+                    type="text"
+                    value={paperTitle}
+                    onChange={(e) => setPaperTitle(e.target.value)}
+                    className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-500"
+                    placeholder="输入您的论文标题..."
+                  />
                 </div>
-                <div className="text-sm font-bold text-slate-800 mt-1 truncate">
-                  {lastProjectDir.replace(/\\/g, '/').split('/').filter(Boolean).pop() ||
-                    lastProjectDir}
-                </div>
-                <div className="text-[11px] font-mono text-slate-500 truncate mt-0.5">
-                  {lastProjectDir}
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                    论文独立存放目录路径 (自动创建规范子目录)
+                  </label>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="text"
+                      value={manualPath}
+                      onChange={(e) => setManualPath(e.target.value)}
+                      className="flex-1 px-3 py-2 text-xs font-mono bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-500"
+                      placeholder="例如: E:/Papers/Nature2026-MyPaper 或 /Users/name/papers/my-paper"
+                    />
+                    <button
+                      type="button"
+                      onClick={handlePickNativeFolder}
+                      className="px-2.5 py-2 rounded-lg bg-white border border-slate-200 text-xs text-indigo-700 font-semibold hover:bg-indigo-50 shrink-0 cursor-pointer"
+                    >
+                      浏览...
+                    </button>
+                  </div>
                 </div>
               </div>
-              <button
-                onClick={() => handleOpenRecent(lastProjectDir)}
-                disabled={isOpening}
-                className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-all shrink-0 cursor-pointer"
-              >
-                <FolderCheck className="w-4 h-4" />
-                {projectDir === lastProjectDir ? '继续在此目录工作' : '直接进入上次文件夹'}
-                <ArrowRight className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          )}
 
-          {/* Choose Folder & Direct Path Input */}
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-stretch">
-            <button
-              type="button"
-              onClick={handlePickNativeFolder}
-              disabled={isOpening}
-              className="md:col-span-4 p-3.5 rounded-xl border-2 border-dashed border-indigo-300 hover:border-indigo-500 bg-indigo-50/30 hover:bg-indigo-50/70 text-indigo-700 flex flex-col items-center justify-center gap-1.5 transition-all cursor-pointer group"
-            >
-              <FolderOpen className="w-6 h-6 text-indigo-600 group-hover:scale-105 transition-transform" />
-              <span className="text-xs font-bold">浏览并选择本地文件夹...</span>
-              <span className="text-[10px] text-slate-500">
-                打开系统文件夹选择器
-              </span>
-            </button>
-
-            <form
-              onSubmit={handleOpenManualPath}
-              className="md:col-span-8 p-3.5 rounded-xl border border-slate-200 bg-slate-50/60 flex flex-col justify-between gap-2"
-            >
-              <label className="text-[11px] font-semibold text-slate-700 flex items-center justify-between">
-                <span>或直接输入 / 粘贴论文项目文件夹路径：</span>
-                <span className="text-[10px] font-normal text-slate-400">
-                  若不存在将自动创建 {AGENTIKZ_FOLDER_NAME}/
-                </span>
-              </label>
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  value={manualPath}
-                  onChange={(e) => setManualPath(e.target.value)}
-                  placeholder="例如: E:/Papers/NeurIPS2026-AgentTikZ 或 /Users/name/paper"
-                  className="flex-1 px-3 py-2 text-xs font-mono bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 text-slate-800"
-                />
+              <div className="flex items-center justify-between pt-1">
+                <div className="text-[11px] text-slate-500">
+                  将自动生成：<code className="font-mono">main.tex</code>、
+                  <code className="font-mono">sections/</code>、
+                  <code className="font-mono">references.bib</code>、
+                  <code className="font-mono">styles/agentikz-macros.sty</code>、
+                  <code className="font-mono">figures/fig1_overview.tikz</code>
+                </div>
                 <button
                   type="submit"
-                  disabled={isOpening || !manualPath.trim()}
-                  className="px-3.5 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 disabled:opacity-40 text-white text-xs font-medium transition-colors shrink-0 cursor-pointer"
+                  disabled={isOpening || !(manualPath.trim() || projectDir)}
+                  className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white text-xs font-bold flex items-center gap-1.5 shadow-sm cursor-pointer"
                 >
-                  进入文件夹
+                  <Sparkles className="w-4 h-4" />
+                  创建论文工程并进入同屏工作台
                 </button>
               </div>
             </form>
-          </div>
+          ) : (
+            <>
+              {/* Quick Resume Last Folder Card */}
+              {lastProjectDir && (
+                <div className="p-4 rounded-xl bg-indigo-50/70 border border-indigo-200/80 flex items-center justify-between gap-4">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="px-2 py-0.5 rounded-full bg-indigo-600 text-white text-[10px] font-semibold">
+                        上次工作目录
+                      </span>
+                      {projectDir === lastProjectDir && (
+                        <span className="flex items-center gap-1 text-[11px] text-emerald-700 font-medium">
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          当前已打开
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-sm font-bold text-slate-800 mt-1 truncate">
+                      {lastProjectDir.replace(/\\/g, '/').split('/').filter(Boolean).pop() ||
+                        lastProjectDir}
+                    </div>
+                    <div className="text-[11px] font-mono text-slate-500 truncate mt-0.5">
+                      {lastProjectDir}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleOpenRecent(lastProjectDir)}
+                    disabled={isOpening}
+                    className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-all shrink-0 cursor-pointer"
+                  >
+                    <FolderCheck className="w-4 h-4" />
+                    {projectDir === lastProjectDir ? '继续在此目录工作' : '直接进入上次文件夹'}
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+
+              {/* Choose Folder & Direct Path Input */}
+              <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-stretch">
+                <button
+                  type="button"
+                  onClick={handlePickNativeFolder}
+                  disabled={isOpening}
+                  className="md:col-span-4 p-3.5 rounded-xl border-2 border-dashed border-indigo-300 hover:border-indigo-500 bg-indigo-50/30 hover:bg-indigo-50/70 text-indigo-700 flex flex-col items-center justify-center gap-1.5 transition-all cursor-pointer group"
+                >
+                  <FolderOpen className="w-6 h-6 text-indigo-600 group-hover:scale-105 transition-transform" />
+                  <span className="text-xs font-bold">浏览并选择本地文件夹...</span>
+                  <span className="text-[10px] text-slate-500">
+                    打开系统文件夹选择器
+                  </span>
+                </button>
+
+                <form
+                  onSubmit={handleOpenManualPath}
+                  className="md:col-span-8 p-3.5 rounded-xl border border-slate-200 bg-slate-50/60 flex flex-col justify-between gap-2"
+                >
+                  <label className="text-[11px] font-semibold text-slate-700 flex items-center justify-between">
+                    <span>或直接输入 / 粘贴论文项目文件夹路径：</span>
+                    <span className="text-[10px] font-normal text-slate-400">
+                      自动识别 .tex / figures/*.tikz / {AGENTIKZ_FOLDER_NAME}/
+                    </span>
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={manualPath}
+                      onChange={(e) => setManualPath(e.target.value)}
+                      placeholder="例如: E:/Papers/NeurIPS2026-AgentTikZ 或 /Users/name/paper"
+                      className="flex-1 px-3 py-2 text-xs font-mono bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 text-slate-800"
+                    />
+                    <button
+                      type="submit"
+                      disabled={isOpening || !manualPath.trim()}
+                      className="px-3.5 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 disabled:opacity-40 text-white text-xs font-medium transition-colors shrink-0 cursor-pointer"
+                    >
+                      进入文件夹
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </>
+          )}
 
           {/* Startup & Sync Preferences */}
           <div className="flex flex-wrap items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200/80 text-xs text-slate-700">

@@ -2,6 +2,7 @@ import {
   BoxplotStat,
   ChartDataPoint,
   ChartSeries,
+  EdgeLineStyle,
   EdgeRouteType,
   NodeSubtype,
   ParsedTikzDocument,
@@ -12,7 +13,12 @@ import {
   TikzEdgeElement,
   TikzNodeElement,
 } from '../../types/tikz-ast';
-import { registerCustomTikzColors } from '../themes/journal-presets';
+import { JournalThemeId, NodeSalienceRole } from '../../types/theme';
+import {
+  getThemeDefaultPreambleStyles,
+  registerCustomTikzColors,
+} from '../themes/journal-presets';
+import { parsePragmaDirectivesFromSource } from '../agent/figure-contract';
 
 // ── Depth-aware scanning utilities ──────────────────────────────────────
 // These replace naive non-greedy regex matches that would break on nested
@@ -234,69 +240,13 @@ function parseEdgeLabelOffset(
   };
 }
 
-function parsePreambleStyles(source: string): Record<string, Record<string, string>> {
-  const styles: Record<string, Record<string, string>> = {
-    dl_block: {
-      draw: 'nips_blue!85!black',
-      fill: 'nips_blue!14',
-      'rounded corners': '2.5pt',
-      'line width': '0.7pt',
-      'minimum width': '2.8cm',
-      'minimum height': '0.85cm',
-    },
-    mha_block: {
-      draw: 'nips_amber!85!black',
-      fill: 'nips_amber!16',
-      'rounded corners': '2.5pt',
-      'line width': '0.75pt',
-      'minimum width': '3.0cm',
-      'minimum height': '0.95cm',
-    },
-    addnorm_block: {
-      draw: 'nips_sage!85!black',
-      fill: 'nips_sage!15',
-      'rounded corners': '2.0pt',
-      'line width': '0.65pt',
-      'minimum width': '2.8cm',
-      'minimum height': '0.65cm',
-    },
-    conv_block: {
-      draw: 'cvpr_teal!85!black',
-      fill: 'cvpr_teal!14',
-      'rounded corners': '2.0pt',
-      'line width': '0.7pt',
-      'minimum width': '2.6cm',
-      'minimum height': '0.85cm',
-    },
-    feature_cube: {
-      draw: 'cvpr_navy!85!black',
-      fill: 'cvpr_navy!14',
-      'line width': '0.7pt',
-      'minimum width': '1.2cm',
-      'minimum height': '2.2cm',
-    },
-    op_circle: {
-      circle: 'true',
-      draw: 'nips_slate!85!black',
-      fill: 'white',
-      'line width': '0.7pt',
-      'minimum size': '0.65cm',
-    },
-    stage_box: {
-      draw: 'nips_slate!60',
-      fill: 'nips_slate!6',
-      dashed: 'true',
-      'rounded corners': '4pt',
-      'line width': '0.65pt',
-    },
-    subcaption: {
-      subtype: 'caption',
-      draw: 'none',
-      fill: 'none',
-      'minimum width': '4.6cm',
-      'minimum height': '0.55cm',
-    },
-  };
+function parsePreambleStyles(
+  source: string,
+  activeThemeId: JournalThemeId = 'neurips'
+): Record<string, Record<string, string>> {
+  const styles: Record<string, Record<string, string>> =
+    getThemeDefaultPreambleStyles(activeThemeId);
+
 
   const extractStyleDefinitions = (body: string) => {
     const styleKeyRegex = /([a-zA-Z0-9_-]+)\s*\/\.style\s*=\s*\{/g;
@@ -659,6 +609,7 @@ function parseSingleNodeStatement(
     label: mainLabel,
     sublabel,
     styleClass,
+    salienceRole: (mergedOpts['role'] as NodeSalienceRole) || undefined,
     fill: mergedOpts['fill'],
     stroke: mergedOpts['draw'],
     lineWidth: mergedOpts['line width'],
@@ -670,6 +621,27 @@ function parseSingleNodeStatement(
     optionsSpan,
     labelSpan,
   };
+}
+
+function resolveEdgeLineStyle(mergedOpts: Record<string, string>): {
+  dashed: boolean;
+  dotted: boolean;
+  lineStyle: EdgeLineStyle;
+} {
+  const isDenselyDotted = mergedOpts['densely dotted'] === 'true';
+  const isDotted = isDenselyDotted || mergedOpts['dotted'] === 'true';
+  const isDenselyDashed = mergedOpts['densely dashed'] === 'true';
+  const isDashed = !isDotted && (isDenselyDashed || mergedOpts['dashed'] === 'true');
+  const lineStyle: EdgeLineStyle = isDenselyDotted
+    ? 'densely_dotted'
+    : isDotted
+      ? 'dotted'
+      : isDenselyDashed
+        ? 'densely_dashed'
+        : isDashed
+          ? 'dashed'
+          : 'solid';
+  return { dashed: isDashed, dotted: isDotted, lineStyle };
 }
 
 function parseSingleDrawStatement(
@@ -707,6 +679,7 @@ function parseSingleDrawStatement(
     }
   }
   mergedOpts = { ...mergedOpts, ...rawOptions };
+  const { dashed, dotted, lineStyle } = resolveEdgeLineStyle(mergedOpts);
 
   // Find endpoint references `(nodeA.anchor)` or `(nodeA)`
   const bodyAfterOpt = (() => {
@@ -744,7 +717,9 @@ function parseSingleDrawStatement(
       arrowEnd: true,
       stroke: mergedOpts['draw'] || 'nips_slate!85!black',
       lineWidth: mergedOpts['line width'] || '0.7pt',
-      dashed: mergedOpts['dashed'] === 'true' || mergedOpts['densely dashed'] === 'true',
+      dashed,
+      dotted,
+      lineStyle,
       styleClass,
       rawOptions,
       span: makeSpan(source, stmtStart, stmtEnd),
@@ -814,7 +789,9 @@ function parseSingleDrawStatement(
         arrowEnd: hasArrowEnd,
         stroke: mergedOpts['draw'] || 'nips_slate!85!black',
         lineWidth: mergedOpts['line width'] || '0.7pt',
-        dashed: mergedOpts['dashed'] === 'true' || mergedOpts['densely dashed'] === 'true',
+        dashed,
+        dotted,
+        lineStyle,
         styleClass,
         rawOptions,
         span: makeSpan(source, stmtStart, stmtEnd),
@@ -853,7 +830,9 @@ function parseSingleDrawStatement(
     arrowEnd: hasArrowEnd,
     stroke: mergedOpts['draw'] || 'nips_slate!85!black',
     lineWidth: mergedOpts['line width'] || '0.7pt',
-    dashed: mergedOpts['dashed'] === 'true' || mergedOpts['densely dashed'] === 'true',
+    dashed,
+    dotted,
+    lineStyle,
     styleClass,
     rawOptions,
     span: makeSpan(source, stmtStart, stmtEnd),
@@ -893,6 +872,8 @@ function parsePgfAxisBlock(
   const xlabel = axisOpts['xlabel'] || 'Training Steps / Scale';
   const ylabel = axisOpts['ylabel'] || 'Metric Score (%)';
   const subcaption = axisOpts['subcaption'] || '';
+  const uncertaintyNote = axisOpts['uncertainty_note'] || undefined;
+  const directEndLabels = axisOpts['direct_labels'] === 'true';
   const width = parseCmValue(axisOpts['width'], 5.8);
   const height = parseCmValue(axisOpts['height'], 4.2);
   const showGrid = axisOpts['grid'] !== 'none';
@@ -1061,6 +1042,8 @@ function parsePgfAxisBlock(
     xlabel,
     ylabel,
     subcaption,
+    uncertaintyNote,
+    directEndLabels,
     showGrid,
     showLegend: showLegend && (series.length > 0 || chartType === 'line' || chartType === 'bar'),
     legendPos,
@@ -1112,9 +1095,13 @@ function parsePgfAxisBlock(
  * Main lossless parser entry point: parses TikZ + PGFPlots code into a SceneGraph
  * where every node, edge, and chart carries its exact character `SourceSpan`.
  */
-export function parseTikzDocument(source: string): ParsedTikzDocument {
+export function parseTikzDocument(
+  source: string,
+  activeThemeId: JournalThemeId = 'neurips'
+): ParsedTikzDocument {
   registerCustomTikzColors(source);
-  const preambleStyles = parsePreambleStyles(source);
+  const preambleStyles = parsePreambleStyles(source, activeThemeId);
+  const { contract, panels, imageDirectives } = parsePragmaDirectivesFromSource(source);
   const elements: SceneElement[] = [];
   const nodes: TikzNodeElement[] = [];
   const edges: TikzEdgeElement[] = [];
@@ -1208,6 +1195,9 @@ export function parseTikzDocument(source: string): ParsedTikzDocument {
     fullSource: source,
     figureCaption,
     figureLabel,
+    contract,
+    panels,
+    imageDirectives,
     preambleStyles,
     elements,
     nodes,

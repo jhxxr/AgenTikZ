@@ -80,15 +80,19 @@ export const TopToolbar: React.FC = () => {
     setActiveTool, setActiveTheme, setPreviewMode, setCompiledSvg,
     setIsCompilingTex, undo, redo, alignSelectedNodes, toggleAgentPanel,
   } = useWorkspaceStore();
-  const { openSettings, texEngine } = useSettingsStore();
+  const { openSettings, texEngine, texLiveBinDir } = useSettingsStore();
   const {
     projectDir,
     projectName,
     activeCanvasFileName,
+    activePaperFilePath,
     saveStatus,
     lastExportedNotice,
+    workbenchMode,
+    setWorkbenchMode,
+    setInsertFigureModalOpen,
+    quickInsertActiveFigureIntoPaper,
     setPickerOpen,
-    saveActiveCanvasNow,
     exportFileToProject,
   } = useProjectStore();
 
@@ -158,6 +162,7 @@ export const TopToolbar: React.FC = () => {
           texEngine,
           engine: texEngine,
           projectDir: currentProjectDir,
+          texLiveBinDir: texLiveBinDir || undefined,
         });
         if (res.ok && res.svg) {
           setCompiledSvg(res.svg, res.message);
@@ -234,9 +239,7 @@ export const TopToolbar: React.FC = () => {
   const saveDotClass =
     saveStatus === 'saved'
       ? 'bg-emerald-500'
-      : saveStatus === 'dirty'
-      ? 'bg-amber-500'
-      : saveStatus === 'saving'
+      : saveStatus === 'dirty' || saveStatus === 'saving'
       ? 'bg-blue-500 animate-pulse'
       : saveStatus === 'error'
       ? 'bg-rose-500'
@@ -244,7 +247,7 @@ export const TopToolbar: React.FC = () => {
 
   return (
     <header className="h-12 bg-toolbar-gradient border-b border-slate-200/80 px-3 flex items-center justify-between gap-2 shrink-0 select-none z-30">
-      {/* Left: Brand + Project Folder + Save + Undo/Redo */}
+      {/* Left: Brand + Project Pill (with Auto-Sync Dot) + Undo/Redo */}
       <div className="flex items-center gap-2">
         <div className="flex items-center gap-2">
           <img
@@ -262,78 +265,91 @@ export const TopToolbar: React.FC = () => {
 
         <div className="w-px h-5 bg-slate-200/80" />
 
-        <div className="flex items-center gap-1">
-          <button
-            onClick={() => setPickerOpen(true)}
-            title="切换或管理论文/项目文件夹 (Ctrl+O)"
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium bg-white/80 hover:bg-white text-slate-700 border border-slate-200/80 shadow-xs transition-all cursor-pointer max-w-[160px]"
-          >
-            <FolderOpen className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-            <span className="truncate">{projectName || '未关联项目'}</span>
-          </button>
+        <button
+          onClick={() => setPickerOpen(true)}
+          title="切换或新建论文/项目工作区 (Ctrl+O) · 全程自动同步保存"
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium bg-white/80 hover:bg-white text-slate-700 border border-slate-200/80 shadow-xs transition-all cursor-pointer max-w-[175px]"
+        >
+          <FolderOpen className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+          <span className="truncate">{projectName || '未关联项目'}</span>
+          <span
+            className={`w-2 h-2 rounded-full shrink-0 ${saveDotClass}`}
+            title={
+              saveStatus === 'saved'
+                ? '所有更改已自动同步至磁盘'
+                : saveStatus === 'saving' || saveStatus === 'dirty'
+                ? '正在后台自动同步...'
+                : '本地缓存模式'
+            }
+          />
+        </button>
 
-          <button
-            onClick={() => void saveActiveCanvasNow()}
-            title="保存当前画布到 agentikzfile/ (Ctrl+S)"
-            className="relative flex items-center justify-center p-1.5 rounded-lg text-slate-600 hover:text-slate-900 bg-white/70 hover:bg-white border border-slate-200/70 shadow-xs transition-all cursor-pointer"
-          >
-            <Save className="w-3.5 h-3.5" />
-            <span
-              className={`absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full ring-2 ring-white ${saveDotClass}`}
-            />
-          </button>
-        </div>
-
-        <div className="w-px h-5 bg-slate-200/80" />
-
-        <div className="flex items-center gap-0.5">
-          <button onClick={undo} disabled={undoStack.length === 0}
-            className="p-1.5 rounded-md text-slate-500 hover:text-slate-800 hover:bg-white/80 disabled:opacity-30 transition-colors cursor-pointer" title="撤销">
-            <Undo2 className="w-3.5 h-3.5" />
-          </button>
-          <button onClick={redo} disabled={redoStack.length === 0}
-            className="p-1.5 rounded-md text-slate-500 hover:text-slate-800 hover:bg-white/80 disabled:opacity-30 transition-colors cursor-pointer" title="重做">
-            <Redo2 className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      </div>
-
-      {/* Center: Grouped Tools */}
-      <div className="flex items-center gap-0.5 bg-white/60 border border-slate-200/70 rounded-xl p-0.5 shadow-sm">
-        {toolGroups.map((group, gi) => (
-          <React.Fragment key={group.label}>
-            {gi > 0 && <div className="w-px h-5 bg-slate-200/60 mx-0.5" />}
-            {group.tools.map((t) => {
-              const active = activeTool === t.id;
-              return (
-                <button key={t.id} onClick={() => setActiveTool(t.id)} title={t.tip}
-                  className={`flex items-center gap-1 px-2 py-1.5 rounded-lg text-[11px] font-medium transition-all shrink-0 cursor-pointer ${
-                    active
-                      ? 'bg-blue-600 text-white shadow-sm'
-                      : 'text-slate-500 hover:text-slate-800 hover:bg-white'
-                  }`}>
-                  {t.icon}
-                  <span className="hidden xl:inline">{t.label}</span>
-                </button>
-              );
-            })}
-          </React.Fragment>
-        ))}
-
-        {selectedIds.length >= 2 && (
+        {workbenchMode !== 'paper' && (
           <>
-            <div className="w-px h-5 bg-slate-200/60 mx-0.5" />
-            <button onClick={() => alignSelectedNodes('align_x')} className="p-1.5 rounded-lg text-blue-600 bg-blue-50 hover:bg-blue-100 transition-colors" title="水平对齐">
-              <AlignCenterHorizontal className="w-3.5 h-3.5" />
-            </button>
-            <button onClick={() => alignSelectedNodes('align_y')} className="p-1.5 rounded-lg text-blue-600 bg-blue-50 hover:bg-blue-100 transition-colors" title="垂直对齐">
-              <AlignCenterVertical className="w-3.5 h-3.5" />
-            </button>
+            <div className="w-px h-5 bg-slate-200/80" />
+            <div className="flex items-center gap-0.5">
+              <button onClick={undo} disabled={undoStack.length === 0}
+                className="p-1.5 rounded-md text-slate-500 hover:text-slate-800 hover:bg-white/80 disabled:opacity-30 transition-colors cursor-pointer" title="撤销">
+                <Undo2 className="w-3.5 h-3.5" />
+              </button>
+              <button onClick={redo} disabled={redoStack.length === 0}
+                className="p-1.5 rounded-md text-slate-500 hover:text-slate-800 hover:bg-white/80 disabled:opacity-30 transition-colors cursor-pointer" title="重做">
+                <Redo2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </>
         )}
       </div>
 
-      {/* Right: Theme + Preview + Export + Agent Toggle */}
+      {/* Center: Mode-Aware Toolbar (Drawing Tools in Figure/Split Mode vs Manuscript Status in Paper Mode) */}
+      {workbenchMode !== 'paper' ? (
+        <div className="flex items-center gap-0.5 bg-white/60 border border-slate-200/70 rounded-xl p-0.5 shadow-sm">
+          {toolGroups.map((group, gi) => (
+            <React.Fragment key={group.label}>
+              {gi > 0 && <div className="w-px h-5 bg-slate-200/60 mx-0.5" />}
+              {group.tools.map((t) => {
+                const active = activeTool === t.id;
+                return (
+                  <button key={t.id} onClick={() => setActiveTool(t.id)} title={t.tip}
+                    className={`flex items-center gap-1 px-2 py-1.5 rounded-lg text-[11px] font-medium transition-all shrink-0 cursor-pointer ${
+                      active
+                        ? 'bg-blue-600 text-white shadow-sm'
+                        : 'text-slate-500 hover:text-slate-800 hover:bg-white'
+                    }`}>
+                    {t.icon}
+                    <span className="hidden xl:inline">{t.label}</span>
+                  </button>
+                );
+              })}
+            </React.Fragment>
+          ))}
+
+          {selectedIds.length >= 2 && (
+            <>
+              <div className="w-px h-5 bg-slate-200/60 mx-0.5" />
+              <button onClick={() => alignSelectedNodes('align_x')} className="p-1.5 rounded-lg text-blue-600 bg-blue-50 hover:bg-blue-100 transition-colors" title="水平对齐">
+                <AlignCenterHorizontal className="w-3.5 h-3.5" />
+              </button>
+              <button onClick={() => alignSelectedNodes('align_y')} className="p-1.5 rounded-lg text-blue-600 bg-blue-50 hover:bg-blue-100 transition-colors" title="垂直对齐">
+                <AlignCenterVertical className="w-3.5 h-3.5" />
+              </button>
+            </>
+          )}
+        </div>
+      ) : (
+        <div className="hidden md:flex items-center gap-2 bg-white/70 border border-slate-200/80 rounded-xl px-3 py-1 shadow-xs text-xs text-slate-600">
+          <FileCode2 className="w-3.5 h-3.5 text-indigo-600" />
+          <span>
+            当前手稿: <strong className="font-mono text-slate-800">{activePaperFilePath}</strong>
+          </span>
+          <span className="text-slate-300">·</span>
+          <span className="font-mono text-[11px] text-slate-500">
+            活动配图: figures/{stem}.tikz
+          </span>
+        </div>
+      )}
+
+      {/* Right: Workbench Switcher + 1-Click Split-Button Insert + Theme + Preview + Export + Agent Toggle */}
       <div className="flex items-center gap-1.5">
         {lastExportedNotice && (
           <div className="hidden lg:flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-[11px] font-medium shadow-xs animate-fade-in">
@@ -341,6 +357,54 @@ export const TopToolbar: React.FC = () => {
             <span className="max-w-[200px] truncate">{lastExportedNotice}</span>
           </div>
         )}
+
+        {/* One-Stop Workbench Mode Switcher */}
+        <div
+          className="flex items-center bg-slate-200/75 border border-slate-300/70 rounded-lg p-0.5 shadow-2xs"
+          title="切换一站式工作台模式：科研绘图 / 论文与配图同屏联动 / 论文 LaTeX 写作"
+        >
+          {(
+            [
+              { id: 'figure', label: '🎨 绘图' },
+              { id: 'split', label: '⚖️ 同屏' },
+              { id: 'paper', label: '📝 论文' },
+            ] as const
+          ).map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              onClick={() => setWorkbenchMode(m.id)}
+              className={`px-2 py-1 rounded-md text-[11px] font-semibold transition-all cursor-pointer ${
+                workbenchMode === m.id
+                  ? 'bg-indigo-600 text-white shadow-2xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+
+        {/* 1-Click Split-Button: Direct Insert at Cursor + Advanced Dropdown */}
+        <div className="hidden md:flex items-center rounded-lg bg-indigo-50 border border-indigo-200/80 shadow-xs overflow-hidden">
+          <button
+            type="button"
+            onClick={() => void quickInsertActiveFigureIntoPaper()}
+            title="一键将当前配图 (\input{figures/xxx.tikz}) 按当前主题配置直接插入到论文光标处"
+            className="flex items-center gap-1 pl-2.5 pr-2 py-1.5 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100 transition-colors cursor-pointer"
+          >
+            <BookOpenText className="w-3.5 h-3.5 text-indigo-600" />
+            <span>📌 一键插图</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setInsertFigureModalOpen(true)}
+            title="展开高级插图设置（切换单双栏、\includegraphics 外部图模式、自定义 Caption）"
+            className="px-1.5 py-1.5 border-l border-indigo-200/80 text-indigo-600 hover:bg-indigo-100 transition-colors cursor-pointer"
+          >
+            <ChevronDown className="w-3 h-3" />
+          </button>
+        </div>
 
         <div className="flex items-center gap-1.5 bg-white/70 border border-slate-200/70 rounded-lg px-2 py-1 shadow-sm">
           <Palette className="w-3.5 h-3.5 text-slate-400" />
@@ -352,15 +416,17 @@ export const TopToolbar: React.FC = () => {
           </select>
         </div>
 
-        <button onClick={handleCompileTex} disabled={isCompilingTex}
-          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-medium border transition-all cursor-pointer ${
-            previewMode !== 'interactive'
-              ? 'bg-emerald-50 text-emerald-700 border-emerald-200 shadow-sm'
-              : 'bg-white/70 text-slate-600 border-slate-200/70 hover:bg-white shadow-sm'
-          }`}>
-          {previewMode !== 'interactive' ? <Eye className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-          <span>{previewMode !== 'interactive' ? '退出预览' : 'TeX'}</span>
-        </button>
+        {workbenchMode !== 'paper' && (
+          <button onClick={handleCompileTex} disabled={isCompilingTex}
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-medium border transition-all cursor-pointer ${
+              previewMode !== 'interactive'
+                ? 'bg-emerald-50 text-emerald-700 border-emerald-200 shadow-sm'
+                : 'bg-white/70 text-slate-600 border-slate-200/70 hover:bg-white shadow-sm'
+            }`}>
+            {previewMode !== 'interactive' ? <Eye className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+            <span>{previewMode !== 'interactive' ? '退出预览' : 'TeX'}</span>
+          </button>
+        )}
 
         <button
           onClick={() => openSettings('agent')}

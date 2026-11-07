@@ -12,6 +12,7 @@ import { useWorkspaceStore } from './useWorkspaceStore';
 import { FULL_FIGURE_TEMPLATES } from '../core/templates/dl-templates';
 import { buildTemplateReferenceContext } from '../core/templates/template-reference';
 import { buildAgentSkillAndLibraryContext } from '../core/agent/agent-knowledge';
+import { compileUserPromptWithStyleGuide } from '../core/agent/prompt-compiler';
 import {
   computeTikzDiff,
   extractAgentDirectives,
@@ -284,12 +285,29 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
       if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
         throw new Error('本地 ACP 需要 Tauri 桌面应用；浏览器模式不能连接本地 Agent，不会生成模拟回复。');
       }
+      const settings = useSettingsStore.getState();
       const canvasTikz = attachCanvasContext ? workspace.tikzCode : '';
       const selectedIds = attachSelectionContext ? [...workspace.selectedIds] : [];
-      const agentContext = buildAgentSkillAndLibraryContext(activeThemeId, canvasTikz, selectedIds);
+      const agentContext = buildAgentSkillAndLibraryContext(
+        activeThemeId,
+        canvasTikz,
+        selectedIds,
+        {
+          enforcePublicationStyleGuide: settings.enforcePublicationStyleGuide,
+          requireFigureContract: settings.requireFigureContract,
+        }
+      );
+      const compiledPrompt = compileUserPromptWithStyleGuide(
+        promptText,
+        activeThemeId,
+        {
+          enforcePublicationStyleGuide: settings.enforcePublicationStyleGuide,
+          requireFigureContract: settings.requireFigureContract,
+        }
+      );
       await sendViaRealAcp(
         activeAgentId,
-        promptText,
+        compiledPrompt,
         canvasTikz,
         selectedIds,
         activeSessionId,

@@ -125,6 +125,7 @@ export const InteractiveCanvas: React.FC = () => {
     selectedIds,
     showGrid,
     snapToGrid,
+    columnGuideMode,
     canvasWidthCm,
     canvasHeightCm,
     zoom,
@@ -138,6 +139,7 @@ export const InteractiveCanvas: React.FC = () => {
     setActiveTool,
     setShowGrid,
     setSnapToGrid,
+    setColumnGuideMode,
     setCanvasSizeCm,
     fitCanvasToContent,
     setZoom,
@@ -759,7 +761,13 @@ export const InteractiveCanvas: React.FC = () => {
           data-orig-stroke-width={origStrokeW}
           data-orig-marker-end={edge.arrowEnd ? 'url(#tikz-arrow)' : ''}
           strokeLinejoin="round"
-          strokeDasharray={edge.dashed ? '4 2.5' : undefined}
+          strokeDasharray={
+            edge.dotted
+              ? '1.8 3.2'
+              : edge.dashed
+                ? '5.5 3.5'
+                : undefined
+          }
           markerEnd={
             edge.arrowEnd
               ? isSelected
@@ -1853,6 +1861,113 @@ export const InteractiveCanvas: React.FC = () => {
               />
             )}
 
+            {/* Publication Column Width Reference Frame (89mm Single / 183mm Double) */}
+            {columnGuideMode !== 'none' &&
+              (() => {
+                const colWidthCm =
+                  (columnGuideMode === 'single'
+                    ? theme.columnWidthMm.single
+                    : theme.columnWidthMm.double) / 10;
+                const colWidthPx = colWidthCm * CM_TO_PX;
+                const guideLeft = originX - 0.5 * CM_TO_PX;
+                const guideRight = guideLeft + colWidthPx;
+                return (
+                  <g data-export-ignore="true" pointerEvents="none">
+                    <rect
+                      x={guideLeft}
+                      y={pageTop + 8}
+                      width={colWidthPx}
+                      height={pageH - 16}
+                      fill="none"
+                      stroke="#E11D48"
+                      strokeWidth={1.1}
+                      strokeDasharray="6 4"
+                      opacity={0.7}
+                    />
+                    <rect
+                      x={guideRight - 142}
+                      y={pageTop + 12}
+                      width={138}
+                      height={17}
+                      rx={3}
+                      fill="#FFF1F2"
+                      stroke="#FECDD3"
+                      strokeWidth={0.8}
+                    />
+                    <text
+                      x={guideRight - 73}
+                      y={pageTop + 23.5}
+                      textAnchor="middle"
+                      fontSize={8.5}
+                      fontWeight={600}
+                      fill="#BE123C"
+                      fontFamily="sans-serif"
+                    >
+                      {theme.venueBadge}{' '}
+                      {columnGuideMode === 'single' ? '单栏' : '双栏'}参考线 (
+                      {Math.round(colWidthCm * 10)}mm)
+                    </text>
+                  </g>
+                );
+              })()}
+
+            {/* Multi-Panel Pragma Region Guides (% @panel a role=mechanism ...) */}
+            {parsedDoc.panels &&
+              parsedDoc.panels.length > 0 &&
+              parsedDoc.panels.map((panel, pIdx) => {
+                const minX = panel.bbox ? panel.bbox[0] : pIdx * 6.5;
+                const minY = panel.bbox ? panel.bbox[1] : 0;
+                const maxX = panel.bbox ? panel.bbox[2] : minX + 5.8;
+                const maxY = panel.bbox ? panel.bbox[3] : minY + 4.5;
+                const px = originX + minX * CM_TO_PX;
+                const py = originY - maxY * CM_TO_PX;
+                const pw = Math.max(1.0, maxX - minX) * CM_TO_PX;
+                const ph = Math.max(1.0, maxY - minY) * CM_TO_PX;
+                const isHeroPanel =
+                  panel.role === 'mechanism' ||
+                  panel.role === 'primary_quant';
+                return (
+                  <g
+                    key={`panel_${panel.id}`}
+                    data-export-ignore="true"
+                    pointerEvents="none"
+                  >
+                    <rect
+                      x={px}
+                      y={py}
+                      width={pw}
+                      height={ph}
+                      rx={5}
+                      fill="none"
+                      stroke={isHeroPanel ? '#D97706' : '#64748B'}
+                      strokeWidth={1}
+                      strokeDasharray="4 4"
+                      opacity={0.45}
+                    />
+                    <text
+                      x={px + 6}
+                      y={py + 14}
+                      fontSize={12}
+                      fontWeight={700}
+                      fill="#0F172A"
+                      fontFamily={theme.fontFamily}
+                    >
+                      {panel.id}
+                    </text>
+                    <text
+                      x={px + 20}
+                      y={py + 13}
+                      fontSize={8.5}
+                      fontWeight={600}
+                      fill={isHeroPanel ? '#B45309' : '#475569'}
+                      fontFamily="sans-serif"
+                    >
+                      [{panel.role.toUpperCase()}] {panel.title || ''}
+                    </text>
+                  </g>
+                );
+              })}
+
             {/* Layer 1: Background Stage Containers */}
             {sortedNodes
               .filter((n) => n.subtype === 'container')
@@ -1871,6 +1986,7 @@ export const InteractiveCanvas: React.FC = () => {
               <PgfChartRenderer
                 key={chart.id}
                 chart={chart}
+                activeThemeId={activeThemeId}
                 cmToPx={CM_TO_PX}
                 originX={originX}
                 originY={originY}
@@ -2320,6 +2436,30 @@ export const InteractiveCanvas: React.FC = () => {
           >
             <Magnet className="w-3 h-3" />
             吸附
+          </button>
+          <div className="w-px h-3.5 bg-slate-200 mx-0.5" />
+          <button
+            onClick={() =>
+              setColumnGuideMode(
+                columnGuideMode === 'none'
+                  ? 'single'
+                  : columnGuideMode === 'single'
+                    ? 'double'
+                    : 'none'
+              )
+            }
+            className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] ${
+              columnGuideMode !== 'none'
+                ? 'bg-rose-50 text-rose-700 font-medium border border-rose-200'
+                : 'text-slate-500 hover:bg-slate-100'
+            }`}
+            title="切换顶刊单栏 (89mm) / 双栏 (183mm) 版面宽度参考线"
+          >
+            {columnGuideMode === 'none'
+              ? '📏 栏宽参考线'
+              : columnGuideMode === 'single'
+                ? `📏 单栏 ${Math.round(theme.columnWidthMm.single)}mm`
+                : `📏 双栏 ${Math.round(theme.columnWidthMm.double)}mm`}
           </button>
           {selectedIds.length > 0 && (
             <>

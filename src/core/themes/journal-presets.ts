@@ -1,4 +1,5 @@
 import { JournalTheme, JournalThemeId, ThemeColorToken } from '../../types/theme';
+import { AGENT_STYLE_GUIDES } from '../agent/style-guides';
 
 export const JOURNAL_THEMES: Record<JournalThemeId, JournalTheme> = {
   neurips: {
@@ -69,6 +70,32 @@ export const JOURNAL_THEMES: Record<JournalThemeId, JournalTheme> = {
       '\\definecolor{nips_rose}{HTML}{9E3333}',
       '\\definecolor{nips_slate}{HTML}{475569}',
     ].join('\n'),
+    columnWidthMm: { single: 139.7, double: 139.7 }, // NeurIPS single-column textwidth = 5.5in ≈ 139.7mm
+    panelLabelFormat: 'parenthesized',
+    minFontSizeLatex: '\\scriptsize',
+    colorRoles: {
+      hero: { fill: 'nips_amber!16', stroke: 'nips_amber!85!black' },
+      signal: { fill: 'nips_blue!14', stroke: 'nips_blue!85!black' },
+      secondary: { fill: 'nips_sage!15', stroke: 'nips_sage!85!black' },
+      neutral: { fill: 'nips_slate!10', stroke: 'nips_slate!80!black' },
+      container: { fill: 'nips_slate!5', stroke: 'nips_slate!55' },
+      alert: { fill: 'nips_rose!14', stroke: 'nips_rose!85!black' },
+    },
+    lineSemantics: {
+      primaryFlow: 'solid',
+      containerBoundary: 'dashed',
+      feedbackOrAuxFlow: 'dotted',
+    },
+    chartSpec: {
+      spineMode: 'closed_box',
+      defaultShowGrid: true,
+      tickDirection: 'in',
+      preferDirectEndLabels: false,
+      requireDistinctMarkers: false,
+    },
+    preferredPrimitives: ['mha_block', 'dl_block', 'addnorm_block', 'op_circle', 'stage_box', 'residual_skip'],
+    doNotUse: ['drop shadow', 'rainbow colormap', 'red-green contrast', '3D pie chart', '\\tiny'],
+    styleRules: AGENT_STYLE_GUIDES.neurips,
   },
   cvpr: {
     id: 'cvpr',
@@ -138,12 +165,38 @@ export const JOURNAL_THEMES: Record<JournalThemeId, JournalTheme> = {
       '\\definecolor{cvpr_gold}{HTML}{A16207}',
       '\\definecolor{cvpr_gray}{HTML}{334155}',
     ].join('\n'),
+    columnWidthMm: { single: 83.0, double: 174.6 },
+    panelLabelFormat: 'parenthesized',
+    minFontSizeLatex: '\\scriptsize',
+    colorRoles: {
+      hero: { fill: 'cvpr_coral!15', stroke: 'cvpr_coral!85!black' },
+      signal: { fill: 'cvpr_navy!14', stroke: 'cvpr_navy!85!black' },
+      secondary: { fill: 'cvpr_teal!14', stroke: 'cvpr_teal!85!black' },
+      neutral: { fill: 'cvpr_gray!10', stroke: 'cvpr_gray!80!black' },
+      container: { fill: 'cvpr_gray!6', stroke: 'cvpr_gray!60' },
+      alert: { fill: 'cvpr_gold!16', stroke: 'cvpr_gold!85!black' },
+    },
+    lineSemantics: {
+      primaryFlow: 'solid',
+      containerBoundary: 'dashed',
+      feedbackOrAuxFlow: 'dotted',
+    },
+    chartSpec: {
+      spineMode: 'open_left_bottom',
+      defaultShowGrid: false,
+      tickDirection: 'out',
+      preferDirectEndLabels: true,
+      requireDistinctMarkers: false,
+    },
+    preferredPrimitives: ['feature_cube', 'conv_block', 'mha_block', 'op_circle', 'stage_box'],
+    doNotUse: ['drop shadow', 'jet colormap', '\\tiny'],
+    styleRules: AGENT_STYLE_GUIDES.cvpr,
   },
   nature: {
     id: 'nature',
     name: 'Nature / Science Minimal',
     venueBadge: 'Nature · NPG',
-    description: 'NPG 经典高对比度极简色板，0.5pt 纤细轴线与无冗余装饰，最适合机制图与数据图表',
+    description: 'NPG 经典高对比度极简色板，0.55pt 纤细轴线与无冗余装饰，最适合机制图与数据图表',
     defaultLineWidth: '0.55pt',
     defaultRoundedCorners: '1.5pt',
     arrowTip: '-Latex',
@@ -207,6 +260,32 @@ export const JOURNAL_THEMES: Record<JournalThemeId, JournalTheme> = {
       '\\definecolor{npg_sky}{HTML}{4DBBD5}',
       '\\definecolor{npg_dark}{HTML}{333333}',
     ].join('\n'),
+    columnWidthMm: { single: 89.0, double: 183.0 },
+    panelLabelFormat: 'lowercase_bold',
+    minFontSizeLatex: '\\scriptsize',
+    colorRoles: {
+      hero: { fill: 'npg_red!14', stroke: 'npg_red!85!black' },
+      signal: { fill: 'npg_blue!14', stroke: 'npg_blue!90!black' },
+      secondary: { fill: 'npg_teal!14', stroke: 'npg_teal!85!black' },
+      neutral: { fill: 'npg_dark!8', stroke: 'npg_dark!75!black' },
+      container: { fill: 'npg_dark!4', stroke: 'npg_dark!50' },
+      alert: { fill: 'npg_red!18', stroke: 'npg_red!90!black' },
+    },
+    lineSemantics: {
+      primaryFlow: 'solid',
+      containerBoundary: 'dashed',
+      feedbackOrAuxFlow: 'dotted',
+    },
+    chartSpec: {
+      spineMode: 'open_left_bottom',
+      defaultShowGrid: false,
+      tickDirection: 'out',
+      preferDirectEndLabels: true,
+      requireDistinctMarkers: false,
+    },
+    preferredPrimitives: ['op_circle', 'residual_skip', 'error_band', 'stage_box', 'dl_block'],
+    doNotUse: ['grid', 'drop shadow', 'rainbow colormap', 'red-green contrast', '3D bar chart', '\\tiny'],
+    styleRules: AGENT_STYLE_GUIDES.nature,
   },
   ieee: {
     id: 'ieee',
@@ -273,8 +352,187 @@ export const JOURNAL_THEMES: Record<JournalThemeId, JournalTheme> = {
       '\\definecolor{ieee_amber}{HTML}{9A5B13}',
       '\\definecolor{ieee_teal}{HTML}{115E59}',
     ].join('\n'),
+    columnWidthMm: { single: 88.9, double: 181.9 },
+    panelLabelFormat: 'parenthesized',
+    minFontSizeLatex: '\\scriptsize',
+    colorRoles: {
+      hero: { fill: 'ieee_amber!14', stroke: 'ieee_amber!85!black' },
+      signal: { fill: 'ieee_blue!12', stroke: 'ieee_blue!90!black' },
+      secondary: { fill: 'ieee_teal!12', stroke: 'ieee_teal!85!black' },
+      neutral: { fill: 'black!5', stroke: 'black!80' },
+      container: { fill: 'black!3', stroke: 'black!60' },
+      alert: { fill: 'ieee_amber!18', stroke: 'black!90' },
+    },
+    lineSemantics: {
+      primaryFlow: 'solid',
+      containerBoundary: 'dashed',
+      feedbackOrAuxFlow: 'dotted',
+    },
+    chartSpec: {
+      spineMode: 'closed_box',
+      defaultShowGrid: true,
+      tickDirection: 'in',
+      preferDirectEndLabels: false,
+      requireDistinctMarkers: true,
+    },
+    preferredPrimitives: ['dl_block', 'op_circle', 'stage_box', 'residual_skip'],
+    doNotUse: ['drop shadow', 'rainbow colormap', '\\tiny'],
+    styleRules: AGENT_STYLE_GUIDES.ieee,
   },
 };
+
+/**
+ * 动态生成与当前激活主题匹配的默认组件样式字典，彻底消除硬编码 `nips_*` 回退
+ */
+export function getThemeDefaultPreambleStyles(
+  themeId: JournalThemeId = 'neurips'
+): Record<string, Record<string, string>> {
+  const theme = JOURNAL_THEMES[themeId] || JOURNAL_THEMES.neurips;
+  const roles = theme.colorRoles;
+  const lw = theme.defaultLineWidth;
+  const rc = theme.defaultRoundedCorners;
+
+  return {
+    dl_block: {
+      draw: roles.signal.stroke,
+      fill: roles.signal.fill,
+      'rounded corners': rc,
+      'line width': lw,
+      'minimum width': '2.8cm',
+      'minimum height': '0.85cm',
+    },
+    mha_block: {
+      draw: roles.hero.stroke,
+      fill: roles.hero.fill,
+      'rounded corners': rc,
+      'line width': lw,
+      'minimum width': '3.0cm',
+      'minimum height': '0.95cm',
+    },
+    addnorm_block: {
+      draw: roles.neutral.stroke,
+      fill: roles.neutral.fill,
+      'rounded corners': rc,
+      'line width': lw,
+      'minimum width': '2.8cm',
+      'minimum height': '0.65cm',
+    },
+    conv_block: {
+      draw: roles.secondary.stroke,
+      fill: roles.secondary.fill,
+      'rounded corners': rc,
+      'line width': lw,
+      'minimum width': '2.6cm',
+      'minimum height': '0.85cm',
+    },
+    feature_cube: {
+      draw: roles.signal.stroke,
+      fill: roles.signal.fill,
+      'line width': lw,
+      'minimum width': '1.2cm',
+      'minimum height': '2.2cm',
+    },
+    op_circle: {
+      circle: 'true',
+      draw: roles.neutral.stroke,
+      fill: 'white',
+      'line width': lw,
+      'minimum size': '0.65cm',
+    },
+    stage_box: {
+      draw: roles.container.stroke,
+      fill: roles.container.fill,
+      dashed: 'true',
+      'rounded corners': '3.5pt',
+      'line width': lw,
+    },
+    subcaption: {
+      subtype: 'caption',
+      draw: 'none',
+      fill: 'none',
+      'minimum width': '4.6cm',
+      'minimum height': '0.55cm',
+    },
+  };
+}
+
+/**
+ * 自动生成论文工程专属的 `styles/agentikz-macros.sty` 宏包文件内容。
+ * 论文 `main.tex` 只需在导言区添加 `\usepackage{styles/agentikz-macros}`，
+ * 即可在正文中零报错 `\input{figures/xxx.tikz}`。
+ */
+export function generateAgentikzMacrosSty(
+  activeThemeId: JournalThemeId = 'nature',
+  extraHexColors: string[] = []
+): string {
+  const theme = JOURNAL_THEMES[activeThemeId] || JOURNAL_THEMES.nature;
+  const roles = theme.colorRoles;
+  const lw = theme.defaultLineWidth;
+  const rc = theme.defaultRoundedCorners;
+
+  const allThemeColors = Object.values(JOURNAL_THEMES)
+    .map((t) => `% [${t.venueBadge}]\n${t.tikzPreambleColors}`)
+    .join('\n');
+
+  const uniqueHexes = Array.from(
+    new Set(extraHexColors.map((h) => h.replace(/^#/, '').toUpperCase()))
+  ).filter((h) => /^[0-9A-F]{6}$/.test(h));
+
+  const extraHexDefs = uniqueHexes
+    .map((hex) => `\\definecolor{hex_${hex}}{HTML}{${hex}}`)
+    .join('\n');
+
+  return [
+    '\\NeedsTeXFormat{LaTeX2e}',
+    '\\ProvidesPackage{styles/agentikz-macros}[2026/11/07 AgenTikZ Self-Contained Figure Style Package]',
+    '',
+    '\\RequirePackage{tikz}',
+    '\\RequirePackage{pgfplots}',
+    '\\RequirePackage{graphicx}',
+    '\\RequirePackage{amsmath,amssymb}',
+    '\\pgfplotsset{',
+    '  compat=1.18,',
+    '  id/.code={},',
+    '  chart_type/.code={},',
+    '  subcaption/.code={},',
+    '  title_offset/.code={},',
+    '  xlabel_offset/.code={},',
+    '  ylabel_offset/.code={},',
+    '  legend_scale/.code={},',
+    '  legend/.code={},',
+    '  uncertainty_note/.code={}',
+    '}',
+    '\\usepgfplotslibrary{statistics}',
+    '\\usetikzlibrary{arrows.meta,positioning,calc,fit,backgrounds,shapes.geometric}',
+    '',
+    '% --- All Publication Theme Color Tokens ---',
+    allThemeColors,
+    extraHexDefs,
+    '',
+    `% --- Active Theme Canonical Block Styles (${theme.name}) ---`,
+    '\\tikzset{',
+    '  every node/.append style={align=center},',
+    '  subtype/.code={},',
+    '  role/.code={},',
+    '  depth/.code={},',
+    '  channels/.code={},',
+    '  sublabel/.code={},',
+    '  image_path/.code={},',
+    `  dl_block/.style={draw=${roles.signal.stroke}, fill=${roles.signal.fill}, rounded corners=${rc}, line width=${lw}, minimum width=2.8cm, minimum height=0.82cm, align=center},`,
+    `  mha_block/.style={draw=${roles.hero.stroke}, fill=${roles.hero.fill}, rounded corners=${rc}, line width=${lw}, minimum width=3.0cm, minimum height=0.92cm, align=center},`,
+    `  addnorm_block/.style={draw=${roles.neutral.stroke}, fill=${roles.neutral.fill}, rounded corners=${rc}, line width=${lw}, minimum width=2.8cm, minimum height=0.65cm, align=center},`,
+    `  conv_block/.style={draw=${roles.secondary.stroke}, fill=${roles.secondary.fill}, rounded corners=${rc}, line width=${lw}, minimum width=2.6cm, minimum height=0.85cm, align=center},`,
+    `  feature_cube/.style={draw=${roles.signal.stroke}, fill=${roles.signal.fill}, line width=${lw}, minimum width=1.2cm, minimum height=2.0cm, align=center},`,
+    `  op_circle/.style={circle, draw=${roles.neutral.stroke}, fill=white, line width=${lw}, minimum size=0.6cm, inner sep=1pt, align=center},`,
+    `  stage_box/.style={draw=${roles.container.stroke}, fill=${roles.container.fill}, dashed, rounded corners=3.5pt, line width=${lw}, align=center},`,
+    '  subcaption/.style={draw=none, fill=none, align=center}',
+    '}',
+    '\\endinput',
+  ]
+    .filter((line) => line !== undefined)
+    .join('\n');
+}
+
 
 const ALL_COLOR_TOKENS: ThemeColorToken[] = Object.values(JOURNAL_THEMES).flatMap(
   (t) => t.palette

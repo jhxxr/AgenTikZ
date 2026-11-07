@@ -13,6 +13,7 @@ import {
   patchNodeOptions,
 } from '../parser/patcher';
 import { JOURNAL_THEMES } from '../themes/journal-presets';
+import { CANONICAL_ACADEMIC_TERMS } from './style-guides';
 
 export interface LayoutIssue {
   id: string;
@@ -22,7 +23,12 @@ export interface LayoutIssue {
     | 'arrow_clearance'
     | 'container_bounds'
     | 'unstyled_nodes'
-    | 'label_box';
+    | 'label_box'
+    | 'salience_overuse'
+    | 'dashed_conflict'
+    | 'font_floor'
+    | 'term_capitalization'
+    | 'chart_contract';
   elementIds: string[];
   message: string;
   suggestion: string;
@@ -40,6 +46,7 @@ export interface LayoutDiagnosticReport {
 
 export interface AutoRepairResult {
   repairedCode: string;
+  repairedTikz: string;
   appliedFixes: string[];
   reportBefore: LayoutDiagnosticReport;
   reportAfter: LayoutDiagnosticReport;
@@ -134,7 +141,11 @@ function isPlainOrUncolored(node: TikzNodeElement): boolean {
   ) {
     return false;
   }
-  const f = (node.fill || '').trim().toLowerCase();
+  const rawFill = (node.rawOptions?.['fill'] || '').trim().toLowerCase();
+  if (!rawFill) {
+    return true;
+  }
+  const f = (node.fill || rawFill).trim().toLowerCase();
   if (!f || f === 'white' || f === 'none' || f === 'black!2' || f === 'gray!5') {
     return true;
   }
@@ -159,9 +170,26 @@ function looksLikeBorderlessAnnotation(node: TikzNodeElement): boolean {
   return false;
 }
 
+function normalizeAcademicTermsInText(text: string): {
+  normalized: string;
+  changedTerms: string[];
+} {
+  let normalized = text;
+  const changedTerms: string[] = [];
+  for (const { pattern, canonical } of CANONICAL_ACADEMIC_TERMS) {
+    normalized = normalized.replace(pattern, (match) => {
+      if (match !== canonical) {
+        changedTerms.push(`${match}→${canonical}`);
+      }
+      return canonical;
+    });
+  }
+  return { normalized, changedTerms };
+}
+
 /**
  * Analyzes a parsed TikZ document for geometric overlaps, arrow clearance,
- * container framing issues, and missing theme styling.
+ * container framing issues, missing theme styling, and Nature-Skills publication rules.
  */
 export function analyzeTikzLayout(
   docOrSource: ParsedTikzDocument | string,
@@ -169,7 +197,7 @@ export function analyzeTikzLayout(
 ): LayoutDiagnosticReport {
   const doc =
     typeof docOrSource === 'string'
-      ? parseTikzDocument(docOrSource)
+      ? parseTikzDocument(docOrSource, activeThemeId)
       : docOrSource;
   const issues: LayoutIssue[] = [];
   let overlapCount = 0;
@@ -240,8 +268,8 @@ export function analyzeTikzLayout(
         issues.push({
           id: `tight_edge_${edge.id}`,
           severity: gap <= 0.05 ? 'error' : 'warning',
-          kind: 'arrow_clearance',
           elementIds: [from.id, to.id],
+          kind: 'arrow_clearance',
           message: `相连节点 "${from.id} → ${to.id}" 垂直净距仅 ${gap.toFixed(2)}cm，箭头空间不足`,
           suggestion: `将垂直步进 Δy 调整为 ≥ ${((from.height + to.height) / 2 + 0.6).toFixed(2)}cm`,
         });
@@ -254,8 +282,8 @@ export function analyzeTikzLayout(
         issues.push({
           id: `tight_edge_${edge.id}`,
           severity: gap <= 0.05 ? 'error' : 'warning',
-          kind: 'arrow_clearance',
           elementIds: [from.id, to.id],
+          kind: 'arrow_clearance',
           message: `相连节点 "${from.id} → ${to.id}" 水平净距仅 ${gap.toFixed(2)}cm，箭头过短`,
           suggestion: `将水平步进 Δx 调整为 ≥ ${((from.width + to.width) / 2 + 0.65).toFixed(2)}cm`,
         });
@@ -311,7 +339,55 @@ export function analyzeTikzLayout(
       kind: 'unstyled_nodes',
       elementIds: unstyled.map((n) => n.id),
       message: `${unstyled.length} 个功能模块未应用 ${JOURNAL_THEMES[activeThemeId]?.name || activeThemeId} 科研主题配色（显示为纯白框）`,
-      suggestion: `按模块语义（注意力/前馈/归一化/输入输出）分配主题色板填充与描边`,
+      suggestion: `按视觉显著度预算（1 Neutral + 1 Signal + 1 Hero Accent）分配主题色板填充与描边`,
+    });
+  }
+
+  // 6. Check Single-Meaning Dashed Rule (Nature Skills: dashed for containers OR edges, not both)
+  const dashedEdges = doc.edges.filter((e) => e.dashed && !e.dotted);
+  if (containers.length > 0 && dashedEdges.length > 0) {
+    issues.push({
+      id: 'dashed_conflict',
+      severity: 'info',
+      kind: 'dashed_conflict',
+      elementIds: dashedEdges.map((e) => e.id),
+      message: `图中已使用 dashed 虚线作为容器框 (${containers.length} 个)，同时又有 ${dashedEdges.length} 条连线使用 dashed，违反「单一线型语义」规范`,
+      suggestion: `将反馈/残差/辅助连线自动转换为 dotted 点线，保持 dashed 仅代表分组容器边界`,
+    });
+  }
+
+  // 7. Check Minimum Font Floor (\tiny is <5pt after column reduction)
+  if (/\\tiny\b/.test(doc.fullSource)) {
+    issues.push({
+      id: 'font_floor_tiny',
+      severity: 'warning',
+      kind: 'font_floor',
+      elementIds: [],
+      message: `检测到 \\tiny 字号指令，缩印至单栏 (89mm) 后将低于 5pt 出版可读下限`,
+      suggestion: `自动升级 \\tiny 为 \\scriptsize，确保印刷字号 ≥ 5.5pt`,
+    });
+  }
+
+  // 8. Check Canonical Academic Term Capitalization
+  const termErrors: string[] = [];
+  const termNodeIds: string[] = [];
+  for (const n of doc.nodes) {
+    const { changedTerms } = normalizeAcademicTermsInText(
+      `${n.label} ${n.sublabel || ''}`
+    );
+    if (changedTerms.length > 0) {
+      termErrors.push(...changedTerms);
+      termNodeIds.push(n.id);
+    }
+  }
+  if (termErrors.length > 0) {
+    issues.push({
+      id: 'term_capitalization',
+      severity: 'info',
+      kind: 'term_capitalization',
+      elementIds: termNodeIds,
+      message: `学术专有名词大小写不规范：${Array.from(new Set(termErrors)).slice(0, 4).join(', ')}`,
+      suggestion: `一键规范化专有名词拼写（如 XGBoost, DeepSeek, ResNet, LoRA）`,
     });
   }
 
@@ -334,72 +410,82 @@ export function analyzeTikzLayout(
   };
 }
 
-function pickSemanticColorForNode(
+/**
+ * Salience-driven color assignment (Nature Skills 3-color budget:
+ * 1 Neutral + 1-2 Signal + at most 1-2 Hero Accent modules).
+ */
+function pickSalienceColorForNode(
   node: TikzNodeElement,
-  palette: SemanticThemePalette
-): { fill: string; stroke: string; styleClass?: string } {
+  palette: SemanticThemePalette,
+  heroCountSoFar: number
+): {
+  fill: string;
+  stroke: string;
+  styleClass?: string;
+  isHero: boolean;
+} {
   const text = `${node.id} ${node.label} ${node.sublabel || ''} ${node.styleClass || ''}`.toLowerCase();
 
-  if (
+  // Explicit hero role or core innovative/attention mechanism (capped at 2 hero blocks per figure)
+  const wantsHero =
+    node.salienceRole === 'hero' ||
     node.subtype === 'mha' ||
-    /attention|mha|self-attn|cross-attn|softmax|query/i.test(text)
-  ) {
+    /attention|mha|self-attn|cross-attn|hero|ours|novel|core|fusion|routing/i.test(
+      text
+    );
+
+  if (wantsHero && heroCountSoFar < 2) {
     return {
       fill: palette.attention.fill,
       stroke: palette.attention.stroke,
       styleClass: 'mha_block',
+      isHero: true,
     };
   }
+
+  // Secondary signal (Norm / Conv / Neck / Feature)
   if (
+    node.salienceRole === 'secondary' ||
     node.subtype === 'addnorm' ||
-    /add\s*\\?&\s*norm|layernorm|rmsnorm|norm|condition|adaln|positional/i.test(
+    node.subtype === 'conv' ||
+    /add\s*\\?&\s*norm|layernorm|rmsnorm|norm|condition|adaln|conv|pool|fpn|neck/i.test(
       text
     )
   ) {
     return {
       fill: palette.norm.fill,
       stroke: palette.norm.stroke,
-      styleClass: 'addnorm_block',
+      styleClass: node.subtype === 'conv' ? 'conv_block' : 'addnorm_block',
+      isHero: false,
     };
   }
+
+  // Input / Output / Baseline / Context -> Neutral low-saturation framing
   if (
-    node.subtype === 'conv' ||
-    /conv|pool|downsample|upsample|neck|fpn|patch/i.test(text)
+    node.salienceRole === 'neutral' ||
+    /input|output|baseline|frozen|prior|source|target|token|embed/i.test(text)
   ) {
     return {
-      fill: palette.norm.fill,
-      stroke: palette.norm.stroke,
-      styleClass: 'conv_block',
-    };
-  }
-  if (
-    /embed|token|source|target|input|latent|memory|prompt/i.test(text)
-  ) {
-    return {
-      fill: palette.embedding.fill,
-      stroke: palette.embedding.stroke,
-      styleClass: node.subtype === 'cuboid' ? 'feature_cube' : 'dl_block',
-    };
-  }
-  if (
-    /output|head|probabilit|loss|logit|prediction|linear projection/i.test(text)
-  ) {
-    return {
-      fill: palette.output.fill,
-      stroke: palette.output.stroke,
+      fill: palette.neutral.fill,
+      stroke: palette.neutral.stroke,
       styleClass: 'dl_block',
+      isHero: false,
     };
   }
+
+  // Primary Signal (Backbone / FFN / Encoder / Decoder)
   return {
     fill: palette.backbone.fill,
     stroke: palette.backbone.stroke,
     styleClass: node.subtype === 'cuboid' ? 'feature_cube' : 'dl_block',
+    isHero: false,
   };
 }
 
 /**
  * Deterministically repairs layout overlaps, tight vertical/horizontal arrow spacing,
- * container framing, borderless annotations, and semantic journal theme colors.
+ * container framing, borderless annotations, salience-driven theme colors,
+ * single-meaning dashed/dotted lines, font floor, and academic term capitalization.
  */
 export function autoRepairTikzLayout(
   source: string,
@@ -420,12 +506,13 @@ export function autoRepairTikzLayout(
 
   let currentSource = source;
   const appliedFixes: string[] = [];
-  const docBefore = parseTikzDocument(currentSource);
+  const docBefore = parseTikzDocument(currentSource, activeThemeId);
   const reportBefore = analyzeTikzLayout(docBefore, activeThemeId);
 
-  if (docBefore.nodes.length === 0) {
+  if (docBefore.nodes.length === 0 && docBefore.charts.length === 0) {
     return {
       repairedCode: currentSource,
+      repairedTikz: currentSource,
       appliedFixes,
       reportBefore,
       reportAfter: reportBefore,
@@ -436,11 +523,18 @@ export function autoRepairTikzLayout(
     };
   }
 
+  const theme = JOURNAL_THEMES[activeThemeId] || JOURNAL_THEMES.neurips;
   const palette = getThemeSemanticPalette(activeThemeId);
+
+  // ── Step 0: Upgrade \tiny font floor & normalize canonical academic terms ──
+  if (/\\tiny\b/.test(currentSource)) {
+    currentSource = currentSource.replace(/\\tiny\b/g, '\\scriptsize');
+    appliedFixes.push('将 \\tiny 过小字号升级为 \\scriptsize (保障缩印后 ≥5.5pt)');
+  }
 
   // ── Step 1: Merge duplicate container title/repeat badges & upgrade components ──
   if (upgradeComponents) {
-    let doc = parseTikzDocument(currentSource);
+    let doc = parseTikzDocument(currentSource, activeThemeId);
     const containers = doc.nodes.filter((n) => n.subtype === 'container');
     const spansToDelete: Array<{ start: number; end: number }> = [];
     const containerTitleUpdates = new Map<string, string>();
@@ -488,20 +582,41 @@ export function autoRepairTikzLayout(
     }
 
     for (const [cId, newTitle] of containerTitleUpdates.entries()) {
-      doc = parseTikzDocument(currentSource);
+      doc = parseTikzDocument(currentSource, activeThemeId);
       const cNode = doc.nodes.find((n) => n.id === cId);
       if (cNode) {
         currentSource = patchNodeLabel(currentSource, cNode, newTitle);
       }
     }
 
-    // Upgrade borderless annotation nodes & containers
-    doc = parseTikzDocument(currentSource);
+    // Upgrade borderless annotation nodes, containers, op_circles & canonical term casing
+    doc = parseTikzDocument(currentSource, activeThemeId);
     let upgradedCount = 0;
+    let termFixedCount = 0;
     for (const node of doc.nodes) {
-      const freshDoc = parseTikzDocument(currentSource);
-      const freshNode = freshDoc.nodes.find((n) => n.id === node.id);
+      let freshDoc = parseTikzDocument(currentSource, activeThemeId);
+      let freshNode = freshDoc.nodes.find((n) => n.id === node.id);
       if (!freshNode) continue;
+
+      const lblNorm = normalizeAcademicTermsInText(freshNode.label);
+      const subNorm = freshNode.sublabel
+        ? normalizeAcademicTermsInText(freshNode.sublabel)
+        : { normalized: freshNode.sublabel, changedTerms: [] };
+      if (
+        lblNorm.changedTerms.length > 0 ||
+        subNorm.changedTerms.length > 0
+      ) {
+        currentSource = patchNodeLabel(
+          currentSource,
+          freshNode,
+          lblNorm.normalized,
+          subNorm.normalized
+        );
+        termFixedCount++;
+        freshDoc = parseTikzDocument(currentSource, activeThemeId);
+        freshNode = freshDoc.nodes.find((n) => n.id === node.id);
+        if (!freshNode) continue;
+      }
 
       if (looksLikeBorderlessAnnotation(freshNode)) {
         const isWideNote = freshNode.width >= 5.5;
@@ -538,7 +653,7 @@ export function autoRepairTikzLayout(
             'minimum width': undefined,
             'minimum height': undefined,
           });
-          const afterOptsDoc = parseTikzDocument(currentSource);
+          const afterOptsDoc = parseTikzDocument(currentSource, activeThemeId);
           const afterNode = afterOptsDoc.nodes.find((n) => n.id === freshNode.id);
           if (afterNode && (afterNode.label === '+' || afterNode.label === '$+$')) {
             currentSource = patchNodeLabel(currentSource, afterNode, '$\\oplus$');
@@ -550,25 +665,36 @@ export function autoRepairTikzLayout(
     if (upgradedCount > 0) {
       appliedFixes.push(`规范化升级 ${upgradedCount} 个标准组件与无边框公式标注`);
     }
+    if (termFixedCount > 0) {
+      appliedFixes.push(`规范化 ${termFixedCount} 个节点的学术专有名词大小写`);
+    }
   }
 
-  // ── Step 2: Apply Semantic Journal Theme Colors to Uncolored Nodes & Edges ──
+  // ── Step 2: Apply Salience-Driven Journal Theme Colors & Single-Meaning Line Semantics ──
   if (applyThemeColors) {
-    let doc = parseTikzDocument(currentSource);
+    let doc = parseTikzDocument(currentSource, activeThemeId);
     let coloredNodeCount = 0;
+    let heroCountSoFar = 0;
 
     for (const node of doc.nodes) {
       if (!isPlainOrUncolored(node)) continue;
-      const freshDoc = parseTikzDocument(currentSource);
+      const freshDoc = parseTikzDocument(currentSource, activeThemeId);
       const freshNode = freshDoc.nodes.find((n) => n.id === node.id);
       if (!freshNode) continue;
 
-      const sem = pickSemanticColorForNode(freshNode, palette);
+      const sem = pickSalienceColorForNode(
+        freshNode,
+        palette,
+        heroCountSoFar
+      );
+      if (sem.isHero) heroCountSoFar++;
+
       const patches: Record<string, string | undefined> = {
         fill: sem.fill,
         draw: sem.stroke,
-        'rounded corners': freshNode.roundedCorners || '2.5pt',
-        'line width': freshNode.lineWidth || '0.7pt',
+        'rounded corners':
+          freshNode.roundedCorners || theme.defaultRoundedCorners,
+        'line width': freshNode.lineWidth || theme.defaultLineWidth,
       };
       if (sem.styleClass === 'mha_block' && freshNode.subtype === 'mha') {
         patches['subtype'] = 'mha';
@@ -582,10 +708,13 @@ export function autoRepairTikzLayout(
       coloredNodeCount++;
     }
 
-    // Also colorize edges with semantic strokes
-    doc = parseTikzDocument(currentSource);
+    // Colorize edges & enforce Single-Meaning Dashed vs Dotted rule
+    doc = parseTikzDocument(currentSource, activeThemeId);
+    const hasContainerBox = doc.nodes.some((n) => n.subtype === 'container');
+    let dottedConvertedCount = 0;
+
     for (const edge of doc.edges) {
-      const freshDoc = parseTikzDocument(currentSource);
+      const freshDoc = parseTikzDocument(currentSource, activeThemeId);
       const freshEdge = freshDoc.edges.find((e) => e.id === edge.id);
       if (!freshEdge) continue;
       const isResidual =
@@ -593,7 +722,7 @@ export function autoRepairTikzLayout(
         freshEdge.routeType === 'residual_right' ||
         /residual|skip/i.test(freshEdge.styleClass || '');
       const isCross =
-        /memory|cross/i.test(freshEdge.styleClass || '') ||
+        /memory|cross|feedback|aux/i.test(freshEdge.styleClass || '') ||
         Math.abs(
           (freshDoc.nodes.find((n) => n.id === freshEdge.from)?.x ?? 0) -
             (freshDoc.nodes.find((n) => n.id === freshEdge.to)?.x ?? 0)
@@ -605,24 +734,40 @@ export function autoRepairTikzLayout(
           : isCross
             ? palette.attention.stroke
             : palette.neutral.stroke;
+        const shouldBeDotted = hasContainerBox && (isResidual || freshEdge.dashed);
+        if (shouldBeDotted && freshEdge.dashed) {
+          dottedConvertedCount++;
+        }
         currentSource = patchEdgeElement(currentSource, freshEdge, {
           stroke: strokeColor,
-          lineWidth: freshEdge.lineWidth || '0.7pt',
-          dashed: isResidual ? true : freshEdge.dashed,
+          lineWidth: freshEdge.lineWidth || theme.defaultLineWidth,
+          dashed: shouldBeDotted ? false : isResidual ? true : freshEdge.dashed,
+          dotted: shouldBeDotted ? true : freshEdge.dotted,
         });
+      } else if (hasContainerBox && freshEdge.dashed && !freshEdge.dotted) {
+        currentSource = patchEdgeElement(currentSource, freshEdge, {
+          dashed: false,
+          dotted: true,
+        });
+        dottedConvertedCount++;
       }
     }
 
     if (coloredNodeCount > 0) {
       appliedFixes.push(
-        `为 ${coloredNodeCount} 个模块应用 ${JOURNAL_THEMES[activeThemeId]?.name || activeThemeId} 语义配色方案`
+        `按显著度预算 (1 Neutral + 1 Signal + 1 Hero Accent) 为 ${coloredNodeCount} 个模块应用 ${theme.name} 配色`
+      );
+    }
+    if (dottedConvertedCount > 0) {
+      appliedFixes.push(
+        `将 ${dottedConvertedCount} 条辅助/残差虚线转为 dotted 点线，保持 dashed 仅代表容器边界`
       );
     }
   }
 
   // ── Step 3: Vertical Column Spacing & Anti-Overlap Solver ──
   if (fixOverlaps) {
-    const doc = parseTikzDocument(currentSource);
+    const doc = parseTikzDocument(currentSource, activeThemeId);
     const regularNodes = doc.nodes.filter((n) => n.subtype !== 'container');
 
     // Remember which nodes were originally inside each container BEFORE we shift y coordinates
@@ -766,7 +911,7 @@ export function autoRepairTikzLayout(
       let containerAdjusted = 0;
       for (const [cId, memberIds] of containerMembership.entries()) {
         if (memberIds.length === 0) continue;
-        const freshDoc = parseTikzDocument(currentSource);
+        const freshDoc = parseTikzDocument(currentSource, activeThemeId);
         const cNode = freshDoc.nodes.find((n) => n.id === cId);
         if (!cNode) continue;
 
@@ -802,7 +947,7 @@ export function autoRepairTikzLayout(
           ]);
         }
 
-        const freshDoc2 = parseTikzDocument(currentSource);
+        const freshDoc2 = parseTikzDocument(currentSource, activeThemeId);
         const cNode2 = freshDoc2.nodes.find((n) => n.id === cId);
         if (
           cNode2 &&
@@ -825,11 +970,12 @@ export function autoRepairTikzLayout(
     }
   }
 
-  const docAfter = parseTikzDocument(currentSource);
+  const docAfter = parseTikzDocument(currentSource, activeThemeId);
   const reportAfter = analyzeTikzLayout(docAfter, activeThemeId);
 
   return {
     repairedCode: currentSource,
+    repairedTikz: currentSource,
     appliedFixes,
     reportBefore,
     reportAfter,
@@ -839,3 +985,6 @@ export function autoRepairTikzLayout(
     afterReport: reportAfter,
   };
 }
+
+export const validateTikzLayout = analyzeTikzLayout;
+

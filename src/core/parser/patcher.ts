@@ -191,6 +191,8 @@ export function patchEdgeElement(
     stroke?: string;
     lineWidth?: string;
     dashed?: boolean;
+    dotted?: boolean;
+    lineStyle?: 'solid' | 'dashed' | 'dotted' | 'densely_dashed' | 'densely_dotted';
   }
 ): string {
   const nextRoute = updates.routeType ?? edge.routeType;
@@ -203,14 +205,42 @@ export function patchEdgeElement(
   const opts: Record<string, string> = { ...edge.rawOptions };
   if (updates.stroke !== undefined) opts['draw'] = updates.stroke;
   if (updates.lineWidth !== undefined) opts['line width'] = updates.lineWidth;
-  if (updates.dashed !== undefined) {
-    if (updates.dashed) opts['dashed'] = 'true';
-    else delete opts['dashed'];
+  if (updates.lineStyle !== undefined) {
+    delete opts['dashed'];
+    delete opts['densely dashed'];
+    delete opts['dotted'];
+    delete opts['densely dotted'];
+    if (updates.lineStyle === 'dashed') opts['dashed'] = 'true';
+    else if (updates.lineStyle === 'densely_dashed') opts['densely dashed'] = 'true';
+    else if (updates.lineStyle === 'dotted') opts['dotted'] = 'true';
+    else if (updates.lineStyle === 'densely_dotted') opts['densely dotted'] = 'true';
+  } else {
+    if (updates.dashed !== undefined) {
+      if (updates.dashed) {
+        opts['dashed'] = 'true';
+        delete opts['dotted'];
+        delete opts['densely dotted'];
+      } else {
+        delete opts['dashed'];
+        delete opts['densely dashed'];
+      }
+    }
+    if (updates.dotted !== undefined) {
+      if (updates.dotted) {
+        opts['dotted'] = 'true';
+        delete opts['dashed'];
+        delete opts['densely dashed'];
+      } else {
+        delete opts['dotted'];
+        delete opts['densely dotted'];
+      }
+    }
   }
   if (Object.keys(opts).length === 0) {
     opts['-Stealth'] = 'true';
     opts['line width'] = '0.7pt';
   }
+
 
   const optStr = formatTikzOptions(opts);
   const fromRef = edge.fromAnchor ? `${edge.from}.${edge.fromAnchor}` : edge.from;
@@ -306,6 +336,8 @@ export function patchChartElement(
       | 'xlabel'
       | 'ylabel'
       | 'subcaption'
+      | 'uncertaintyNote'
+      | 'directEndLabels'
       | 'chartType'
       | 'width'
       | 'height'
@@ -365,6 +397,12 @@ export function generatePgfChartTikz(chart: TikzChartElement): string {
   const optionalMetaLines: string[] = [];
   if (chart.subcaption && chart.subcaption.trim()) {
     optionalMetaLines.push(`      subcaption={${chart.subcaption.trim()}},`);
+  }
+  if (chart.uncertaintyNote && chart.uncertaintyNote.trim()) {
+    optionalMetaLines.push(`      uncertainty_note={${chart.uncertaintyNote.trim()}},`);
+  }
+  if (chart.directEndLabels) {
+    optionalMetaLines.push(`      direct_labels=true,`);
   }
   if (!chart.showLegend) {
     optionalMetaLines.push(`      legend=none,`);

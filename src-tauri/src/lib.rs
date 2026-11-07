@@ -1,4 +1,5 @@
 pub mod acp;
+pub mod image_gen;
 pub mod mcp;
 pub mod project;
 pub mod tex {
@@ -18,7 +19,11 @@ pub fn run() {
             acp::acp_send_prompt,
             acp::sys_probe_environment,
             mcp::mcp_get_manifest,
+            image_gen::img_generate_illustration,
+            image_gen::img_save_processed_asset,
             tex::compiler::tex_compile_preview,
+            tex::compiler::tex_scan_installations,
+            tex::compiler::tex_compile_paper,
             project::project_pick_directory,
             project::project_open_workspace,
             project::project_load_canvas,
@@ -30,6 +35,10 @@ pub fn run() {
             project::project_import_asset,
             project::project_export_file,
             project::project_reveal_in_explorer,
+            project::project_init_paper_workspace,
+            project::project_list_paper_files,
+            project::project_read_text_file,
+            project::project_write_text_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running AgenTikZ tauri application");

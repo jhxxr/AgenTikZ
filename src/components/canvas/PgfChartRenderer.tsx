@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { TikzChartElement } from '../../types/tikz-ast';
+import { JournalThemeId } from '../../types/theme';
+import { JOURNAL_THEMES } from '../../core/themes/journal-presets';
 import { LatexLabel } from './LatexLabel';
 
 export type ChartSubTarget =
@@ -11,6 +13,7 @@ export type ChartSubTarget =
 
 interface PgfChartRendererProps {
   chart: TikzChartElement;
+  activeThemeId?: JournalThemeId;
   cmToPx: number;
   originX: number;
   originY: number;
@@ -32,6 +35,7 @@ interface PgfChartRendererProps {
 
 export const PgfChartRenderer: React.FC<PgfChartRendererProps> = ({
   chart,
+  activeThemeId = 'neurips',
   cmToPx,
   originX,
   originY,
@@ -42,6 +46,11 @@ export const PgfChartRenderer: React.FC<PgfChartRendererProps> = ({
   onUpdateChart,
   onEditSubTarget,
 }) => {
+  const theme = JOURNAL_THEMES[activeThemeId] || JOURNAL_THEMES.neurips;
+  const isOpenSpine =
+    theme.chartSpec.spineMode === 'open_left_bottom' &&
+    chart.chartType !== 'heatmap';
+
   // Independent drag state for Legend, Legend Scale, Title, XLabel, YLabel, or Resize Handle
   const [subDrag, setSubDrag] = useState<{
     part:
@@ -287,39 +296,57 @@ export const PgfChartRenderer: React.FC<PgfChartRendererProps> = ({
         </foreignObject>
       </g>
 
-      {/* Plot Area Background & Grid */}
+      {/* Plot Area Background & Spine (Open L-spine for Nature/CVPR vs Closed Box) */}
       <rect
         x={padL}
         y={padT}
         width={plotW}
         height={plotH}
         fill="#FFFFFF"
-        stroke="#1E293B"
+        stroke={isOpenSpine ? 'none' : '#1E293B'}
         strokeWidth={1.1}
       />
+      {isOpenSpine && (
+        <path
+          d={`M ${padL} ${padT} L ${padL} ${padT + plotH} L ${padL + plotW} ${padT + plotH}`}
+          fill="none"
+          stroke="#1E293B"
+          strokeWidth={1.15}
+        />
+      )}
 
-      {chart.showGrid &&
-        chart.chartType !== 'heatmap' &&
+      {/* Y-Axis Ticks, Tick Numbers (ALWAYS visible even when showGrid=false), and Optional Grid */}
+      {chart.chartType !== 'heatmap' &&
         yTicks.map((tv, idx) => {
           const py = yToPx(tv);
           return (
             <g key={idx}>
+              {chart.showGrid && (
+                <line
+                  x1={padL}
+                  y1={py}
+                  x2={padL + plotW}
+                  y2={py}
+                  stroke="#CBD5E1"
+                  strokeWidth={0.75}
+                  strokeDasharray="3 2.5"
+                />
+              )}
               <line
-                x1={padL}
+                x1={padL - 3.5}
                 y1={py}
-                x2={padL + plotW}
+                x2={padL}
                 y2={py}
-                stroke="#CBD5E1"
-                strokeWidth={0.75}
-                strokeDasharray="3 2.5"
+                stroke="#1E293B"
+                strokeWidth={0.95}
               />
               <text
-                x={padL - 5}
+                x={padL - 6}
                 y={py + 3}
                 textAnchor="end"
                 fontSize={9.5}
                 fill="#475569"
-                fontFamily="serif"
+                fontFamily={theme.fontFamily}
               >
                 {tv}
               </text>
@@ -327,7 +354,7 @@ export const PgfChartRenderer: React.FC<PgfChartRendererProps> = ({
           );
         })}
 
-      {/* 1. LINE CHART (+ Error Band) */}
+      {/* 1. LINE CHART (+ Error Band + Direct End Labels) */}
       {chart.chartType === 'line' &&
         chart.series.map((s) => {
           const n = Math.max(1, s.points.length);
@@ -351,6 +378,11 @@ export const PgfChartRenderer: React.FC<PgfChartRendererProps> = ({
           const linePath = s.points
             .map((p, i) => `${i === 0 ? 'M' : 'L'} ${getX(i)} ${yToPx(p.y)}`)
             .join(' ');
+          const lastPt = s.points[s.points.length - 1];
+          const showDirectEndLabel =
+            (chart.directEndLabels ||
+              (!chart.showLegend && theme.chartSpec.preferDirectEndLabels)) &&
+            lastPt !== undefined;
 
           return (
             <g key={s.id}>
@@ -395,6 +427,18 @@ export const PgfChartRenderer: React.FC<PgfChartRendererProps> = ({
                   />
                 );
               })}
+              {showDirectEndLabel && (
+                <text
+                  x={getX(s.points.length - 1) + 5}
+                  y={yToPx(lastPt.y) + 3}
+                  fontSize={8.5}
+                  fontWeight={600}
+                  fill={s.color}
+                  fontFamily={theme.fontFamily}
+                >
+                  {s.name}
+                </text>
+              )}
             </g>
           );
         })}
@@ -541,7 +585,7 @@ export const PgfChartRenderer: React.FC<PgfChartRendererProps> = ({
           );
         })}
 
-      {/* X-Axis Tick Labels */}
+      {/* X-Axis Tick Marks & Tick Labels */}
       {xLabels.map((lbl, idx) => {
         const n = Math.max(1, xLabels.length);
         const tx =
@@ -549,19 +593,45 @@ export const PgfChartRenderer: React.FC<PgfChartRendererProps> = ({
             ? padL + 14 + (idx / Math.max(1, n - 1)) * (plotW - 28)
             : padL + (idx + 0.5) * (plotW / n);
         return (
-          <text
-            key={idx}
-            x={tx}
-            y={padT + plotH + 13}
-            textAnchor="middle"
-            fontSize={9.5}
-            fill="#334155"
-            fontFamily="serif"
-          >
-            {lbl}
-          </text>
+          <g key={idx}>
+            {chart.chartType !== 'heatmap' && (
+              <line
+                x1={tx}
+                y1={padT + plotH}
+                x2={tx}
+                y2={padT + plotH + 3.5}
+                stroke="#1E293B"
+                strokeWidth={0.95}
+              />
+            )}
+            <text
+              x={tx}
+              y={padT + plotH + 13.5}
+              textAnchor="middle"
+              fontSize={9.5}
+              fill="#334155"
+              fontFamily={theme.fontFamily}
+            >
+              {lbl}
+            </text>
+          </g>
         );
       })}
+
+      {/* Uncertainty Note Badge (Nature / Publication statistical definition) */}
+      {chart.uncertaintyNote && (
+        <text
+          x={padL + plotW - 4}
+          y={padT + plotH - 5}
+          textAnchor="end"
+          fontSize={7.8}
+          fontStyle="italic"
+          fill="#64748B"
+          fontFamily={theme.fontFamily}
+        >
+          {chart.uncertaintyNote}
+        </text>
+      )}
 
       {/* Draggable & Double-Click Editable X-Axis Label */}
       <g

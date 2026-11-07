@@ -2,9 +2,27 @@ import { create } from 'zustand';
 import { JournalThemeId } from '../types/theme';
 import { FULL_FIGURE_TEMPLATES } from '../core/templates/dl-templates';
 import { EMPTY_TIKZ_CODE } from '../core/templates/blank-document';
+import {
+  buildFigureLaTeXSnippet,
+  buildPaperTemplateFiles,
+  generateAgentikzMacrosSty,
+  InsertFigureSnippetOptions,
+  PAPER_VENUE_TEMPLATES,
+  PaperVenueTemplateId,
+} from '../core/paper/paper-templates';
 import { useWorkspaceStore } from './useWorkspaceStore';
 
 export const AGENTIKZ_FOLDER_NAME = 'agentikzfile';
+
+export type WorkbenchMode = 'figure' | 'paper' | 'split';
+
+export interface PaperFileItem {
+  relativePath: string;
+  fileName: string;
+  category: 'main' | 'section' | 'bib' | 'style' | 'figure_tikz' | 'other';
+  sizeBytes: number;
+  modifiedAt: number;
+}
 
 export interface CanvasFileDocument {
   schema: 1;
@@ -136,24 +154,40 @@ interface VirtualProjectStorage {
   canvases: Record<string, CanvasFileDocument>;
   assets: ProjectAssetItem[];
   assetDataUrls: Record<string, string>;
+  paperFiles?: Record<string, string>;
+}
+
+function classifyPaperFileCategory(
+  relPath: string
+): PaperFileItem['category'] {
+  const clean = relPath.replace(/\\/g, '/').toLowerCase();
+  if (clean === 'main.tex' || clean === 'paper.tex' || clean === 'manuscript.tex') {
+    return 'main';
+  }
+  if (clean.endsWith('.bib')) return 'bib';
+  if (clean.endsWith('.sty') || clean.endsWith('.cls')) return 'style';
+  if (clean.endsWith('.tikz')) return 'figure_tikz';
+  if (clean.endsWith('.tex')) return 'section';
+  return 'other';
 }
 
 function readVirtualProject(projectDir: string): VirtualProjectStorage {
   if (typeof window === 'undefined') {
-    return { canvases: {}, assets: [], assetDataUrls: {} };
+    return { canvases: {}, assets: [], assetDataUrls: {}, paperFiles: {} };
   }
   try {
     const raw = window.localStorage.getItem(`${VIRTUAL_FS_PREFIX}${projectDir}`);
-    if (!raw) return { canvases: {}, assets: [], assetDataUrls: {} };
+    if (!raw) return { canvases: {}, assets: [], assetDataUrls: {}, paperFiles: {} };
     const parsed = JSON.parse(raw);
     return {
       lastActiveCanvas: parsed.lastActiveCanvas,
       canvases: parsed.canvases || {},
       assets: parsed.assets || [],
       assetDataUrls: parsed.assetDataUrls || {},
+      paperFiles: parsed.paperFiles || {},
     };
   } catch {
-    return { canvases: {}, assets: [], assetDataUrls: {} };
+    return { canvases: {}, assets: [], assetDataUrls: {}, paperFiles: {} };
   }
 }
 
@@ -213,6 +247,15 @@ interface ProjectState {
   lastProjectDir: string | null;
   recentProjects: RecentProjectEntry[];
 
+  // One-Stop Paper + Figure Workbench Mode
+  workbenchMode: WorkbenchMode;
+  paperFiles: PaperFileItem[];
+  activePaperFilePath: string;
+  paperFileContents: Record<string, string>;
+  paperDirtyFiles: Record<string, boolean>;
+  lastPaperCursorOffset: number | null;
+  isInsertFigureModalOpen: boolean;
+
   canvases: CanvasFileSummary[];
   localCanvases: Record<string, CanvasFileDocument>;
   activeCanvasFileName: string;
@@ -229,12 +272,39 @@ interface ProjectState {
   // Actions
   initOnStartup: () => Promise<void>;
   setPickerOpen: (open: boolean) => void;
+  setWorkbenchMode: (mode: WorkbenchMode) => void;
+  setInsertFigureModalOpen: (open: boolean) => void;
+  setLastPaperCursorOffset: (offset: number | null) => void;
   setAutoOpenLastProject: (autoOpen: boolean) => void;
   setAutoSyncTikz: (autoSync: boolean) => void;
   pickAndOpenDirectory: () => Promise<boolean>;
   openProjectDirectory: (dirPath: string) => Promise<boolean>;
+  initPaperWorkspace: (
+    dirPath: string,
+    templateId: PaperVenueTemplateId,
+    paperTitle?: string
+  ) => Promise<boolean>;
   togglePinRecentProject: (dirPath: string) => void;
   removeRecentProject: (dirPath: string) => void;
+
+  // Paper File Actions
+  refreshPaperFiles: () => Promise<void>;
+  openPaperFile: (relativePath: string) => Promise<string>;
+  updatePaperFileContent: (relativePath: string, content: string) => void;
+  savePaperFileNow: (relativePath?: string) => Promise<boolean>;
+  createNewPaperFile: (relativePath: string, initialContent?: string) => Promise<boolean>;
+  ensureAgentikzMacrosSty: () => Promise<void>;
+  insertFigureIntoPaper: (
+    opts: InsertFigureSnippetOptions & {
+      targetTexFile?: string;
+      insertAtCursor?: boolean;
+    }
+  ) => Promise<{ ok: boolean; snippet: string; targetFile: string }>;
+  quickInsertActiveFigureIntoPaper: () => Promise<{
+    ok: boolean;
+    snippet: string;
+    targetFile: string;
+  }>;
 
   switchCanvasFile: (fileName: string) => Promise<void>;
   createNewCanvasFile: (
@@ -252,7 +322,14 @@ interface ProjectState {
 
   refreshProjectAssets: () => Promise<void>;
   ensureAssetDataUrl: (relativePath: string) => Promise<string | null>;
-  registerLocalBrowserAssetFiles: (files: FileList | File[]) => Promise<void>;
+  registerLocalBrowserAssetFiles: (
+    files: FileList | File[],
+    targetFolder?: string
+  ) => Promise<ProjectAssetItem[]>;
+  registerGeneratedAsset: (
+    relativePath: string,
+    dataUrl: string
+  ) => Promise<string>;
   exportFileToProject: (
     fileName: string,
     content: string,
@@ -288,6 +365,7 @@ function buildCurrentCanvasDoc(
 }
 
 let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
+const paperAutoSaveTimers: Record<string, ReturnType<typeof setTimeout>> = {};
 let isApplyingCanvasSwitch = false;
 let inFlightSavePromise: Promise<boolean> | null = null;
 let inFlightSaveTarget: {
@@ -329,6 +407,14 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     lastProjectDir: initialPrefs.lastProjectDir,
     recentProjects: initialPrefs.recentProjects,
 
+    workbenchMode: 'figure',
+    paperFiles: [],
+    activePaperFilePath: 'main.tex',
+    paperFileContents: {},
+    paperDirtyFiles: {},
+    lastPaperCursorOffset: null,
+    isInsertFigureModalOpen: false,
+
     canvases: [
       {
         fileName: 'fig1-architecture.canvas.json',
@@ -363,6 +449,24 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     },
 
     setPickerOpen: (isPickerOpen) => set({ isPickerOpen, errorMessage: null }),
+
+    setWorkbenchMode: (workbenchMode) => {
+      set({ workbenchMode });
+      if (workbenchMode === 'split') {
+        useWorkspaceStore.getState().setLeftSidebarCollapsed(true);
+      } else if (workbenchMode === 'figure') {
+        useWorkspaceStore.getState().setLeftSidebarCollapsed(false);
+      }
+      if (workbenchMode !== 'figure' && get().paperFiles.length === 0) {
+        void get().refreshPaperFiles();
+      }
+    },
+
+    setInsertFigureModalOpen: (isInsertFigureModalOpen) =>
+      set({ isInsertFigureModalOpen }),
+
+    setLastPaperCursorOffset: (lastPaperCursorOffset) =>
+      set({ lastPaperCursorOffset }),
 
     setAutoOpenLastProject: (autoOpenLastProject) => {
       set({ autoOpenLastProject });
@@ -556,6 +660,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
             }
           }
 
+          void get().refreshPaperFiles();
           return true;
         } catch (err) {
           set({ errorMessage: String(err) });
@@ -665,7 +770,353 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         recentProjects: nextRecents,
       });
 
+      void get().refreshPaperFiles();
       return true;
+    },
+
+    initPaperWorkspace: async (dirPath, templateId, paperTitle) => {
+      const trimmed = dirPath.trim();
+      if (!trimmed) return false;
+      const tpl =
+        PAPER_VENUE_TEMPLATES.find((t) => t.id === templateId) ||
+        PAPER_VENUE_TEMPLATES[0];
+      const filesMap = buildPaperTemplateFiles(
+        tpl.id,
+        paperTitle?.trim() || 'Title of Your Scientific Paper'
+      );
+
+      // Apply the venue's default theme on the active canvas
+      useWorkspaceStore.getState().setActiveTheme(tpl.defaultThemeId);
+
+      if (isTauriRuntime()) {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          await invoke('project_init_paper_workspace', {
+            projectDir: trimmed,
+            files: filesMap,
+          });
+        } catch (err) {
+          set({ errorMessage: String(err) });
+          return false;
+        }
+      } else {
+        const cleanDir = trimmed.replace(/\\/g, '/').replace(/\/+$/, '');
+        const vfs = readVirtualProject(cleanDir);
+        vfs.paperFiles = { ...(vfs.paperFiles || {}), ...filesMap };
+        writeVirtualProject(cleanDir, vfs);
+      }
+
+      const opened = await get().openProjectDirectory(trimmed);
+      if (opened) {
+        await get().refreshPaperFiles();
+        await get().openPaperFile('main.tex');
+      }
+      return opened;
+    },
+
+    refreshPaperFiles: async () => {
+      const { projectDir } = get();
+      if (!projectDir) {
+        // Provide default in-memory paper files when no project folder is bound yet
+        const currentContents = get().paperFileContents;
+        if (Object.keys(currentContents).length === 0) {
+          const defaultMap = buildPaperTemplateFiles('neurips');
+          const items: PaperFileItem[] = Object.entries(defaultMap).map(
+            ([relPath, content]) => ({
+              relativePath: relPath,
+              fileName: relPath.split('/').pop() || relPath,
+              category: classifyPaperFileCategory(relPath),
+              sizeBytes: content.length,
+              modifiedAt: Date.now(),
+            })
+          );
+          set({
+            paperFiles: items,
+            paperFileContents: defaultMap,
+            activePaperFilePath: 'main.tex',
+          });
+        }
+        return;
+      }
+
+      if (isTauriRuntime()) {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          const list = await invoke<PaperFileItem[]>(
+            'project_list_paper_files',
+            { projectDir }
+          );
+          set({ paperFiles: list });
+          if (list.length > 0) {
+            const curActive = get().activePaperFilePath;
+            const target = list.some((f) => f.relativePath === curActive)
+              ? curActive
+              : list.find((f) => f.category === 'main')?.relativePath ||
+                list[0].relativePath;
+            await get().openPaperFile(target);
+          }
+          return;
+        } catch {
+          // Fall through to VFS if Tauri command fails
+        }
+      }
+
+      const vfs = readVirtualProject(projectDir);
+      let paperMap = vfs.paperFiles || {};
+      if (Object.keys(paperMap).length === 0) {
+        paperMap = buildPaperTemplateFiles('neurips');
+        vfs.paperFiles = paperMap;
+        writeVirtualProject(projectDir, vfs);
+      }
+      const items: PaperFileItem[] = Object.entries(paperMap).map(
+        ([relPath, content]) => ({
+          relativePath: relPath,
+          fileName: relPath.split('/').pop() || relPath,
+          category: classifyPaperFileCategory(relPath),
+          sizeBytes: content.length,
+          modifiedAt: Date.now(),
+        })
+      );
+      set({
+        paperFiles: items,
+        paperFileContents: { ...get().paperFileContents, ...paperMap },
+      });
+    },
+
+    openPaperFile: async (relativePath) => {
+      const cleanRel = relativePath.replace(/\\/g, '/').trim();
+      if (!cleanRel) return '';
+      set({ activePaperFilePath: cleanRel });
+
+      const cached = get().paperFileContents[cleanRel];
+      if (typeof cached === 'string') {
+        return cached;
+      }
+
+      const { projectDir } = get();
+      if (projectDir && isTauriRuntime()) {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          const content = await invoke<string>('project_read_text_file', {
+            projectDir,
+            relativePath: cleanRel,
+          });
+          set((s) => ({
+            paperFileContents: { ...s.paperFileContents, [cleanRel]: content },
+          }));
+          return content;
+        } catch {
+          return '';
+        }
+      }
+
+      if (projectDir) {
+        const vfs = readVirtualProject(projectDir);
+        const content = vfs.paperFiles?.[cleanRel] || '';
+        set((s) => ({
+          paperFileContents: { ...s.paperFileContents, [cleanRel]: content },
+        }));
+        return content;
+      }
+      return '';
+    },
+
+    updatePaperFileContent: (relativePath, content) => {
+      const cleanRel = relativePath.replace(/\\/g, '/').trim();
+      set((s) => ({
+        paperFileContents: { ...s.paperFileContents, [cleanRel]: content },
+        paperDirtyFiles: { ...s.paperDirtyFiles, [cleanRel]: true },
+      }));
+      if (paperAutoSaveTimers[cleanRel]) {
+        clearTimeout(paperAutoSaveTimers[cleanRel]);
+      }
+      paperAutoSaveTimers[cleanRel] = setTimeout(() => {
+        delete paperAutoSaveTimers[cleanRel];
+        void get().savePaperFileNow(cleanRel);
+      }, 500);
+    },
+
+    savePaperFileNow: async (relativePath) => {
+      const targetRel = (
+        relativePath || get().activePaperFilePath || 'main.tex'
+      )
+        .replace(/\\/g, '/')
+        .trim();
+      if (paperAutoSaveTimers[targetRel]) {
+        clearTimeout(paperAutoSaveTimers[targetRel]);
+        delete paperAutoSaveTimers[targetRel];
+      }
+      const content = get().paperFileContents[targetRel] ?? '';
+      const { projectDir } = get();
+
+      if (projectDir && isTauriRuntime()) {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          await invoke('project_write_text_file', {
+            projectDir,
+            relativePath: targetRel,
+            content,
+          });
+          set((s) => ({
+            paperDirtyFiles: { ...s.paperDirtyFiles, [targetRel]: false },
+          }));
+          return true;
+        } catch (err) {
+          set({ errorMessage: String(err) });
+          return false;
+        }
+      }
+
+      if (projectDir) {
+        const vfs = readVirtualProject(projectDir);
+        vfs.paperFiles = { ...(vfs.paperFiles || {}), [targetRel]: content };
+        writeVirtualProject(projectDir, vfs);
+      }
+      set((s) => ({
+        paperDirtyFiles: { ...s.paperDirtyFiles, [targetRel]: false },
+      }));
+      return true;
+    },
+
+    createNewPaperFile: async (relativePath, initialContent = '') => {
+      const cleanRel = relativePath.replace(/\\/g, '/').trim();
+      if (!cleanRel) return false;
+      get().updatePaperFileContent(cleanRel, initialContent);
+      const ok = await get().savePaperFileNow(cleanRel);
+      await get().refreshPaperFiles();
+      set({ activePaperFilePath: cleanRel });
+      return ok;
+    },
+
+    ensureAgentikzMacrosSty: async () => {
+      const styContent = generateAgentikzMacrosSty();
+      const styPath = 'styles/agentikz-macros.sty';
+      get().updatePaperFileContent(styPath, styContent);
+      await get().savePaperFileNow(styPath);
+    },
+
+    insertFigureIntoPaper: async (opts) => {
+      // 1. Ensure current canvas is saved (and synced to figures/<stem>.tikz) and macros sty is up-to-date
+      await get().saveActiveCanvasNow();
+      await get().ensureAgentikzMacrosSty();
+
+      const snippet = buildFigureLaTeXSnippet(opts);
+      const targetFile = (
+        opts.targetTexFile ||
+        get().activePaperFilePath ||
+        'main.tex'
+      )
+        .replace(/\\/g, '/')
+        .trim();
+
+      let currentTex = await get().openPaperFile(targetFile);
+      if (!currentTex.trim()) {
+        currentTex =
+          get().paperFileContents['main.tex'] ||
+          buildPaperTemplateFiles('neurips')['main.tex'];
+      }
+
+      // If inserting into main.tex, ensure \usepackage{styles/agentikz-macros} is present before \begin{document}
+      let preambleOffsetDelta = 0;
+      if (
+        targetFile.endsWith('main.tex') &&
+        !currentTex.includes('agentikz-macros')
+      ) {
+        const injectStr = '\\usepackage{styles/agentikz-macros}\n\n';
+        const docIdx = currentTex.indexOf('\\begin{document}');
+        if (docIdx !== -1) {
+          currentTex =
+            currentTex.slice(0, docIdx) +
+            injectStr +
+            currentTex.slice(docIdx);
+          preambleOffsetDelta = injectStr.length;
+        }
+      }
+
+      const cursorOffset = get().lastPaperCursorOffset;
+      const shouldInsertAtCursor =
+        opts.insertAtCursor !== false &&
+        cursorOffset !== null &&
+        targetFile === get().activePaperFilePath;
+
+      let updatedTex: string;
+      const adjustedCursor =
+        cursorOffset !== null ? cursorOffset + preambleOffsetDelta : null;
+      const beginDocIdx = currentTex.indexOf('\\begin{document}');
+      const endDocIdx = currentTex.indexOf('\\end{document}');
+
+      if (
+        shouldInsertAtCursor &&
+        adjustedCursor !== null &&
+        adjustedCursor >= 0 &&
+        adjustedCursor <= currentTex.length &&
+        (beginDocIdx === -1 ||
+          adjustedCursor >= beginDocIdx + '\\begin{document}'.length) &&
+        (endDocIdx === -1 || adjustedCursor <= endDocIdx)
+      ) {
+        const before = currentTex.slice(0, adjustedCursor);
+        const after = currentTex.slice(adjustedCursor);
+        updatedTex = `${before.trimEnd()}\n\n${snippet}\n\n${after.trimStart()}`;
+      } else if (currentTex.includes('\\end{document}')) {
+        updatedTex = currentTex.replace(
+          /\\end\{document\}/,
+          `\n${snippet}\n\n\\end{document}`
+        );
+      } else {
+        updatedTex = `${currentTex.trimEnd()}\n\n${snippet}\n`;
+      }
+
+      get().updatePaperFileContent(targetFile, updatedTex);
+      await get().savePaperFileNow(targetFile);
+      await get().refreshPaperFiles();
+      set({
+        activePaperFilePath: targetFile,
+        lastExportedNotice: `已将配图插入至 ${targetFile}`,
+      });
+      setTimeout(() => {
+        if (get().lastExportedNotice === `已将配图插入至 ${targetFile}`) {
+          set({ lastExportedNotice: null });
+        }
+      }, 4000);
+      return { ok: true, snippet, targetFile };
+    },
+
+    quickInsertActiveFigureIntoPaper: async () => {
+      const ws = useWorkspaceStore.getState();
+      const s = get();
+      const stem =
+        s.activeCanvasFileName.replace(/\.canvas\.json$/i, '') ||
+        'fig1-overview';
+      const targetTex = s.activePaperFilePath.endsWith('.tex')
+        ? s.activePaperFilePath
+        : 'main.tex';
+      const contractClaim = ws.parsedDoc.contract?.claim;
+      const caption =
+        ws.parsedDoc.figureCaption ||
+        contractClaim ||
+        `${s.activeCanvasName || stem}: Architecture and experimental analysis.`;
+      const label =
+        ws.parsedDoc.figureLabel ||
+        `fig:${stem.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+      const columnSpan =
+        ws.canvasWidthCm >= 12 ? 'double_column' : 'single_column';
+
+      const res = await get().insertFigureIntoPaper({
+        mode: 'tikz_package',
+        figureRelPath: `figures/${stem}.tikz`,
+        caption,
+        label,
+        columnSpan,
+        widthRatio: 0.98,
+        placement: 't',
+        targetTexFile: targetTex,
+        insertAtCursor: true,
+      });
+
+      if (get().workbenchMode === 'figure') {
+        get().setWorkbenchMode('split');
+      }
+      return res;
     },
 
     togglePinRecentProject: (dirPath) => {
@@ -1321,6 +1772,14 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       const vfs = readVirtualProject(projectDir);
       vfs.canvases[activeCanvasFileName] = doc;
       vfs.lastActiveCanvas = activeCanvasFileName;
+      const stem = activeCanvasFileName.replace(/\.canvas\.json$/i, '') || 'figure';
+      const figRelPath = `figures/${stem}.tikz`;
+      if (autoSyncTikz) {
+        vfs.paperFiles = {
+          ...(vfs.paperFiles || {}),
+          [figRelPath]: doc.tikzCode,
+        };
+      }
       const writeRes = writeVirtualProject(projectDir, vfs);
       if (!writeRes.ok) {
         set({
@@ -1345,11 +1804,14 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         : [...canvases, nextSummary];
 
       savedEditVersion = editVersion;
-      set({
+      set((s) => ({
         canvases: nextCanvases,
+        paperFileContents: autoSyncTikz
+          ? { ...s.paperFileContents, [figRelPath]: doc.tikzCode }
+          : s.paperFileContents,
         saveStatus: 'saved',
         lastSavedAt: doc.updatedAt,
-      });
+      }));
       return true;
     },
 
@@ -1366,7 +1828,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       autoSaveTimer = setTimeout(() => {
         autoSaveTimer = null;
         void get().saveActiveCanvasNow();
-      }, 750);
+      }, 500);
     },
 
     refreshProjectAssets: async () => {
@@ -1432,10 +1894,11 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       return url;
     },
 
-    registerLocalBrowserAssetFiles: async (files) => {
+    registerLocalBrowserAssetFiles: async (files, targetFolder = 'figs') => {
       const fileArray = Array.from(files);
-      if (fileArray.length === 0) return;
+      if (fileArray.length === 0) return [];
 
+      const cleanFolder = targetFolder.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '') || 'figs';
       const { projectDir } = get();
       const newAssets: ProjectAssetItem[] = [];
       const newUrls: Record<string, string> = {};
@@ -1445,7 +1908,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         if (!['png', 'jpg', 'jpeg', 'svg', 'webp', 'pdf'].includes(ext)) {
           continue;
         }
-        const relPath = `figs/${file.name}`;
+        const relPath = `${cleanFolder}/${file.name}`;
         const dataUrl = await readFileAsDataUrl(file);
 
         if (projectDir && isTauriRuntime()) {
@@ -1466,7 +1929,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
               savedAsset || {
                 relativePath: relPath,
                 fileName: file.name,
-                folder: 'figs',
+                folder: cleanFolder,
                 ext,
                 sizeBytes: file.size,
                 modifiedAt: file.lastModified || Date.now(),
@@ -1475,7 +1938,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
             newUrls[effectiveRelPath] = dataUrl;
           } catch (err) {
             set({ saveStatus: 'error', errorMessage: String(err) });
-            return;
+            return [];
           }
         } else {
           if (projectDir) {
@@ -1484,7 +1947,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
           newAssets.push({
             relativePath: relPath,
             fileName: file.name,
-            folder: 'figs',
+            folder: cleanFolder,
             ext,
             sizeBytes: file.size,
             modifiedAt: file.lastModified || Date.now(),
@@ -1493,7 +1956,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         }
       }
 
-      if (newAssets.length === 0) return;
+      if (newAssets.length === 0) return [];
 
       const currentState = get();
       const mergedAssets = [
@@ -1514,11 +1977,67 @@ export const useProjectStore = create<ProjectState>((set, get) => {
             saveStatus: 'error',
             errorMessage: `浏览器本地存储空间不足或不可用: ${writeRes.error}`,
           });
-          return;
+          return [];
         }
       }
 
       set({ assets: mergedAssets, assetDataUrls: mergedUrls });
+      return newAssets;
+    },
+
+    registerGeneratedAsset: async (relativePath, dataUrl) => {
+      const cleanRel = relativePath.replace(/\\/g, '/').replace(/^\/+/, '');
+      const parts = cleanRel.split('/');
+      const fileName = parts[parts.length - 1] || 'ai_cutout.png';
+      const folder = parts.length > 1 ? parts.slice(0, -1).join('/') : 'figures/assets/ai';
+      const ext = (fileName.split('.').pop() || 'png').toLowerCase();
+      const { projectDir } = get();
+
+      if (projectDir && isTauriRuntime()) {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          await invoke('img_save_processed_asset', {
+            projectDir,
+            relativePath: cleanRel,
+            dataUrl,
+          });
+        } catch {
+          // Even if disk save fails or already saved by img_generate_illustration, still cache in memory
+        }
+      }
+
+      if (projectDir) {
+        failedAssetLookupCache.delete(`${projectDir}::${cleanRel}`);
+      }
+
+      const item: ProjectAssetItem = {
+        relativePath: cleanRel,
+        fileName,
+        folder,
+        ext,
+        sizeBytes: Math.round((dataUrl.length * 3) / 4),
+        modifiedAt: Date.now(),
+      };
+
+      const currentState = get();
+      const mergedAssets = [
+        ...currentState.assets.filter((a) => a.relativePath !== cleanRel),
+        item,
+      ];
+      const mergedUrls = {
+        ...currentState.assetDataUrls,
+        [cleanRel]: dataUrl,
+      };
+
+      if (projectDir && !isTauriRuntime()) {
+        const vfs = readVirtualProject(projectDir);
+        vfs.assets = mergedAssets;
+        vfs.assetDataUrls = mergedUrls;
+        writeVirtualProject(projectDir, vfs);
+      }
+
+      set({ assets: mergedAssets, assetDataUrls: mergedUrls });
+      return cleanRel;
     },
 
     exportFileToProject: async (fileName, content, isBase64 = false) => {
@@ -1586,5 +2105,11 @@ useWorkspaceStore.subscribe((state, prev) => {
     state.canvasHeightCm !== prev.canvasHeightCm
   ) {
     useProjectStore.getState().markCanvasDirty();
+  }
+  if (
+    state.activeThemeId !== prev.activeThemeId &&
+    useProjectStore.getState().projectDir
+  ) {
+    void useProjectStore.getState().ensureAgentikzMacrosSty();
   }
 });

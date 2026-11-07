@@ -1,9 +1,11 @@
 import { create } from 'zustand';
 import { AcpAgentId } from '../types/acp';
+import { ImageGenProviderId } from '../core/agent/illustration-prompt';
 
 export type SettingsSection =
   | 'general'
   | 'agent'
+  | 'illustration'
   | 'editor'
   | 'doctor'
   | 'shortcuts'
@@ -11,6 +13,7 @@ export type SettingsSection =
 
 export type AgentResponseLanguage = 'auto' | 'zh-CN' | 'en';
 export type TexEngineId = 'latex' | 'pdflatex' | 'xelatex';
+export type PaperCompileEngineId = 'xelatex' | 'pdflatex';
 export type UserAgentPreset = 'default' | 'claude-cli' | 'codex-cli' | 'custom';
 
 export interface PersistedSettings {
@@ -21,10 +24,24 @@ export interface PersistedSettings {
   nudgeStepCm: number;
   coordPrecision: number;
 
-  // Code Editor & TeX
+  // Publication Style Guide & Figure Contract (Nature Skills)
+  enforcePublicationStyleGuide: boolean;
+  requireFigureContract: boolean;
+
+  // Code Editor, Custom TeX Live Path & Paper Compiler
   codeFontSize: number;
   showLineNumbers: boolean;
   texEngine: TexEngineId;
+  texLiveBinDir: string;
+  paperCompileEngine: PaperCompileEngineId;
+
+  // Multi-Provider AI Cutout Illustration Engine (OpenAI gpt-image-2 / Gemini / OpenRouter)
+  imageGenProvider: ImageGenProviderId;
+  imageGenBaseUrl: string;
+  imageGenApiKey: string;
+  imageGenModel: string;
+  imageGenAutoRemoveWhiteBg: boolean;
+  imageGenAutoTrimAlpha: boolean;
 
   // Agent (BYOA · ACP)
   defaultAgentId: AcpAgentId;
@@ -52,9 +69,21 @@ export const DEFAULT_SETTINGS: PersistedSettings = {
   nudgeStepCm: 0.25,
   coordPrecision: 2,
 
+  enforcePublicationStyleGuide: true,
+  requireFigureContract: true,
+
   codeFontSize: 12,
   showLineNumbers: true,
   texEngine: 'latex',
+  texLiveBinDir: '',
+  paperCompileEngine: 'xelatex',
+
+  imageGenProvider: 'openai',
+  imageGenBaseUrl: 'https://api.openai.com/v1',
+  imageGenApiKey: '',
+  imageGenModel: 'gpt-image-2',
+  imageGenAutoRemoveWhiteBg: true,
+  imageGenAutoTrimAlpha: true,
 
   defaultAgentId: 'claude-code',
   responseLanguage: 'zh-CN',
@@ -154,7 +183,7 @@ interface SettingsState extends PersistedSettings {
   resetSettings: () => void;
 }
 
-export const useSettingsStore = create<SettingsState>((set, get) => {
+export const useSettingsStore = create<SettingsState>((set) => {
   const initial = loadInitialSettings();
 
   return {
@@ -180,9 +209,23 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
           snapToGridByDefault: patch.snapToGridByDefault ?? state.snapToGridByDefault,
           nudgeStepCm: patch.nudgeStepCm ?? state.nudgeStepCm,
           coordPrecision: patch.coordPrecision ?? state.coordPrecision,
+          enforcePublicationStyleGuide:
+            patch.enforcePublicationStyleGuide ?? state.enforcePublicationStyleGuide,
+          requireFigureContract:
+            patch.requireFigureContract ?? state.requireFigureContract,
           codeFontSize: patch.codeFontSize ?? state.codeFontSize,
           showLineNumbers: patch.showLineNumbers ?? state.showLineNumbers,
           texEngine: patch.texEngine ?? state.texEngine,
+          texLiveBinDir: patch.texLiveBinDir ?? state.texLiveBinDir,
+          paperCompileEngine: patch.paperCompileEngine ?? state.paperCompileEngine,
+          imageGenProvider: patch.imageGenProvider ?? state.imageGenProvider,
+          imageGenBaseUrl: patch.imageGenBaseUrl ?? state.imageGenBaseUrl,
+          imageGenApiKey: patch.imageGenApiKey ?? state.imageGenApiKey,
+          imageGenModel: patch.imageGenModel ?? state.imageGenModel,
+          imageGenAutoRemoveWhiteBg:
+            patch.imageGenAutoRemoveWhiteBg ?? state.imageGenAutoRemoveWhiteBg,
+          imageGenAutoTrimAlpha:
+            patch.imageGenAutoTrimAlpha ?? state.imageGenAutoTrimAlpha,
           defaultAgentId: patch.defaultAgentId ?? state.defaultAgentId,
           responseLanguage: patch.responseLanguage ?? state.responseLanguage,
           defaultAttachCanvas: patch.defaultAttachCanvas ?? state.defaultAttachCanvas,

@@ -1,3 +1,10 @@
+import { NodeSalienceRole } from './theme';
+import {
+  AgentImageDirective,
+  FigureContract,
+  TikzPanelRegion,
+} from '../core/agent/figure-contract';
+
 export interface SourceSpan {
   start: number;
   end: number;
@@ -24,6 +31,13 @@ export type EdgeRouteType =
   | 'residual_right' // (a.east) -- ++(dx,0) |- (b.east)
   | 'residual_left'  // (a.west) -- ++(-dx,0) |- (b.west)
   | 'curved';        // (a) to[bend left=25] (b)
+
+export type EdgeLineStyle =
+  | 'solid'
+  | 'dashed'
+  | 'dotted'
+  | 'densely_dashed'
+  | 'densely_dotted';
 
 export type PgfChartType = 'line' | 'bar' | 'heatmap' | 'boxplot';
 
@@ -57,6 +71,7 @@ export interface TikzNodeElement {
   id: string;
   namedInSource: boolean;
   subtype: NodeSubtype;
+  salienceRole?: NodeSalienceRole;
   x: number; // TikZ cm (1cm = 50px on canvas at 100% zoom)
   y: number; // TikZ cm (Y-axis points UP in TikZ!)
   width: number; // cm
@@ -97,6 +112,8 @@ export interface TikzEdgeElement {
   stroke?: string;
   lineWidth?: string;
   dashed?: boolean;
+  dotted?: boolean;
+  lineStyle?: EdgeLineStyle;
   styleClass?: string;
   rawOptions: Record<string, string>;
   span: SourceSpan;
@@ -116,6 +133,8 @@ export interface TikzChartElement {
   xlabel: string;
   ylabel: string;
   subcaption?: string; // Optional subfigure caption below chart e.g. "(b) Scaling Curve"
+  uncertaintyNote?: string; // e.g. "Mean ± SD (n=5)"
+  directEndLabels?: boolean;
   showGrid: boolean;
   showLegend: boolean;
   legendPos: { x: number; y: number }; // Normalized axis description cs (0..1, 0..1) for top-left of legend
@@ -150,6 +169,9 @@ export interface ParsedTikzDocument {
   fullSource: string;
   figureCaption: string;
   figureLabel: string;
+  contract?: FigureContract;
+  panels?: TikzPanelRegion[];
+  imageDirectives?: AgentImageDirective[];
   preambleStyles: Record<string, Record<string, string>>;
   elements: SceneElement[];
   nodes: TikzNodeElement[];
@@ -161,3 +183,4 @@ export interface ParsedTikzDocument {
     severity: 'warning' | 'error';
   }>;
 }
+

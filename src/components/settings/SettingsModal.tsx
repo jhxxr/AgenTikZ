@@ -29,10 +29,15 @@ import {
   useSettingsStore,
   AgentResponseLanguage,
   TexEngineId,
+  PaperCompileEngineId,
   UserAgentPreset,
   DEFAULT_SETTINGS,
   buildCustomAcpCommandSpec,
 } from '../../store/useSettingsStore';
+import {
+  IMAGE_GEN_PROVIDER_PRESETS,
+  ImageGenProviderId,
+} from '../../core/agent/illustration-prompt';
 import { useAgentStore } from '../../store/useAgentStore';
 import { useWorkspaceStore } from '../../store/useWorkspaceStore';
 import { JOURNAL_THEMES } from '../../core/themes/journal-presets';
@@ -56,8 +61,14 @@ const NAV_ITEMS: Array<{
   {
     id: 'agent',
     label: 'Agent (ACP)',
-    sublabel: 'BYOA 适配器与本地 CLI',
+    sublabel: 'BYOA 适配器与投稿规范',
     icon: <Bot className="w-4 h-4" />,
+  },
+  {
+    id: 'illustration',
+    label: 'AI 透明插图引擎',
+    sublabel: 'GPT Image 2 / Gemini / OpenRouter',
+    icon: <Sparkles className="w-4 h-4" />,
   },
   {
     id: 'general',
@@ -67,8 +78,8 @@ const NAV_ITEMS: Array<{
   },
   {
     id: 'editor',
-    label: '代码与 TeX',
-    sublabel: '编辑器字号与编译引擎',
+    label: '代码与 TeX Live',
+    sublabel: 'TeX 安装路径与论文编译',
     icon: <Code2 className="w-4 h-4" />,
   },
   {
@@ -102,9 +113,19 @@ export const SettingsModal: React.FC = () => {
     snapToGridByDefault,
     nudgeStepCm,
     coordPrecision,
+    enforcePublicationStyleGuide,
+    requireFigureContract,
     codeFontSize,
     showLineNumbers,
     texEngine,
+    texLiveBinDir,
+    paperCompileEngine,
+    imageGenProvider,
+    imageGenBaseUrl,
+    imageGenApiKey,
+    imageGenModel,
+    imageGenAutoRemoveWhiteBg,
+    imageGenAutoTrimAlpha,
     defaultAgentId,
     responseLanguage,
     defaultAttachCanvas,
@@ -147,6 +168,10 @@ export const SettingsModal: React.FC = () => {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [diagnostics, setDiagnostics] = useState<EnvironmentDiagnostics | null>(null);
   const [isLoadingDiag, setIsLoadingDiag] = useState(false);
+  const [scannedTexDirs, setScannedTexDirs] = useState<
+    Array<{ binDir: string; label: string; hasXelatex: boolean; hasDvisvgm: boolean }>
+  >([]);
+  const [isScanningTex, setIsScanningTex] = useState(false);
 
   // Sync Escape key to close modal
   useEffect(() => {
@@ -431,6 +456,30 @@ export const SettingsModal: React.FC = () => {
                       checked={autoSelectAffectedNodes}
                       onChange={(checked) =>
                         updateSettings({ autoSelectAffectedNodes: checked })
+                      }
+                    />
+                  </SettingsRow>
+
+                  <SettingsRow
+                    label="强制注入顶刊投稿级常驻风格规范 (Nature Skills)"
+                    description="在发给 ACP Agent 的每条提示词最前部自动注入当前主题的色彩显著度预算 (1 Neutral + 1 Signal + 1 Hero)、线型单一语义与反垃圾装饰约束"
+                  >
+                    <SettingsToggle
+                      checked={enforcePublicationStyleGuide}
+                      onChange={(checked) =>
+                        updateSettings({ enforcePublicationStyleGuide: checked })
+                      }
+                    />
+                  </SettingsRow>
+
+                  <SettingsRow
+                    label="强制执行 5 点图件契约 (% @figure-contract)"
+                    description="要求 Agent 生成或重绘架构图/实验图时先输出科学问题、主证据角色与色彩预算契约注释"
+                  >
+                    <SettingsToggle
+                      checked={requireFigureContract}
+                      onChange={(checked) =>
+                        updateSettings({ requireFigureContract: checked })
                       }
                     />
                   </SettingsRow>
@@ -807,6 +856,172 @@ export const SettingsModal: React.FC = () => {
               </div>
             )}
 
+            {/* ==================== 1.5 AI ILLUSTRATION ENGINE PANE ==================== */}
+            {activeSection === 'illustration' && (
+              <div>
+                <SettingsPageTitle
+                  title="AI 透明抠图插图引擎 (GPT Image 2 / Gemini / OpenRouter)"
+                  subtitle="支持将立体器官、3D 硬件、分子结构、显微镜/实验装置等无法手写 TikZ 的复杂视觉元素生成为无背景透明 PNG，并自动通过 \includegraphics 嵌入当前 TikZ 架构图。"
+                />
+
+                <SettingsSectionLabel
+                  title="多供应商绘图模型接入"
+                  description="切换供应商时会自动填充对应的标准 API Base URL 与推荐生图模型，也支持填写任意兼容接口。"
+                />
+                <SettingsGroup>
+                  <SettingsRow
+                    label="绘图模型供应商 (Provider)"
+                    description={
+                      IMAGE_GEN_PROVIDER_PRESETS[imageGenProvider]?.description
+                    }
+                  >
+                    <select
+                      value={imageGenProvider}
+                      onChange={(e) => {
+                        const nextProv = e.target.value as ImageGenProviderId;
+                        const preset = IMAGE_GEN_PROVIDER_PRESETS[nextProv];
+                        updateSettings({
+                          imageGenProvider: nextProv,
+                          imageGenBaseUrl: preset.defaultBaseUrl,
+                          imageGenModel: preset.defaultModel,
+                        });
+                      }}
+                      className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[12px] font-medium text-slate-800 outline-none focus:border-blue-500"
+                    >
+                      {(
+                        Object.entries(IMAGE_GEN_PROVIDER_PRESETS) as Array<
+                          [
+                            ImageGenProviderId,
+                            (typeof IMAGE_GEN_PROVIDER_PRESETS)[ImageGenProviderId],
+                          ]
+                        >
+                      ).map(([id, p]) => (
+                        <option key={id} value={id}>
+                          {p.label}
+                        </option>
+                      ))}
+                    </select>
+                  </SettingsRow>
+
+                  <div className="px-4 py-3 space-y-3 border-t border-slate-100">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[11px] font-medium text-slate-700 mb-1">
+                          API Base URL
+                        </label>
+                        <input
+                          type="text"
+                          value={imageGenBaseUrl}
+                          onChange={(e) =>
+                            updateSettings({ imageGenBaseUrl: e.target.value })
+                          }
+                          placeholder={
+                            IMAGE_GEN_PROVIDER_PRESETS[imageGenProvider]
+                              .defaultBaseUrl
+                          }
+                          className="w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[12px] font-mono text-slate-800 outline-none focus:border-blue-500 focus:bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-medium text-slate-700 mb-1">
+                          API Key ({IMAGE_GEN_PROVIDER_PRESETS[imageGenProvider].label})
+                        </label>
+                        <input
+                          type="password"
+                          value={imageGenApiKey}
+                          onChange={(e) =>
+                            updateSettings({ imageGenApiKey: e.target.value })
+                          }
+                          placeholder={
+                            imageGenProvider === 'gemini'
+                              ? 'AIzaSy...'
+                              : imageGenProvider === 'openrouter'
+                                ? 'sk-or-v1-...'
+                                : 'sk-...'
+                          }
+                          className="w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[12px] font-mono text-slate-800 outline-none focus:border-blue-500 focus:bg-white"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-medium text-slate-700 mb-1">
+                        生图模型 ID (可点击下方推荐芯片或手动输入任意模型名)
+                      </label>
+                      <input
+                        type="text"
+                        value={imageGenModel}
+                        onChange={(e) =>
+                          updateSettings({ imageGenModel: e.target.value })
+                        }
+                        placeholder={
+                          IMAGE_GEN_PROVIDER_PRESETS[imageGenProvider]
+                            .defaultModel
+                        }
+                        className="w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[12px] font-mono text-slate-800 outline-none focus:border-blue-500 focus:bg-white"
+                      />
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {IMAGE_GEN_PROVIDER_PRESETS[
+                          imageGenProvider
+                        ].recommendedModels.map((m) => {
+                          const active = imageGenModel === m.id;
+                          return (
+                            <button
+                              key={m.id}
+                              type="button"
+                              onClick={() =>
+                                updateSettings({ imageGenModel: m.id })
+                              }
+                              className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] cursor-pointer transition-colors ${
+                                active
+                                  ? 'border-blue-600 bg-blue-50 text-blue-700 font-semibold'
+                                  : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                              }`}
+                            >
+                              <span className="font-mono">{m.id}</span>
+                              <span className="rounded bg-slate-100 px-1 py-0.2 text-[9.5px] text-slate-500">
+                                {m.badge}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                </SettingsGroup>
+
+                <SettingsSectionLabel
+                  title="双阶段自动抠图与 Alpha 紧凑裁切管线"
+                  description="确保不同供应商（包括不直接支持透明通道的 Gemini / OpenRouter 模型）输出的科研插图都能无缝融入 TikZ 矢量画布。"
+                />
+                <SettingsGroup>
+                  <SettingsRow
+                    label="Stage A · 边缘连通漫水填充自动去白底 (Flood-Fill White BG Removal)"
+                    description="从图像四边向内漫水填充识别纯白/浅灰背景并置为完全透明 (Alpha=0)，同时完整保留主体内部的高光与白色结构"
+                  >
+                    <SettingsToggle
+                      checked={imageGenAutoRemoveWhiteBg}
+                      onChange={(checked) =>
+                        updateSettings({ imageGenAutoRemoveWhiteBg: checked })
+                      }
+                    />
+                  </SettingsRow>
+
+                  <SettingsRow
+                    label="Stage B · Alpha 非透明像素紧致包围盒自动裁切 (Tight Alpha Crop)"
+                    description="自动切除四周多余透明空白，使 TikZ \\includegraphics[width=W] 100% 贴合插图视觉主体，消除箭头悬空"
+                  >
+                    <SettingsToggle
+                      checked={imageGenAutoTrimAlpha}
+                      onChange={(checked) =>
+                        updateSettings({ imageGenAutoTrimAlpha: checked })
+                      }
+                    />
+                  </SettingsRow>
+                </SettingsGroup>
+              </div>
+            )}
+
             {/* ==================== 2. GENERAL & CANVAS PANE ==================== */}
             {activeSection === 'general' && (
               <div>
@@ -944,13 +1159,172 @@ export const SettingsModal: React.FC = () => {
             {activeSection === 'editor' && (
               <div>
                 <SettingsPageTitle
-                  title="代码编辑器与本地 TeX 引擎"
-                  subtitle="配置左侧 TikZ 源码面板 (CodeMirror 6) 的显示效果，以及本地 TeX Live 真实编译预览的参数。"
+                  title="代码编辑器与本地 TeX Live 路径配置"
+                  subtitle="支持手动指定或自动扫描自定义位置的 TeX Live / MiKTeX / MacTeX 安装目录，解决未加入系统 PATH 导致无法编译论文与预览的问题。"
                 />
 
                 <SettingsSectionLabel
-                  title="TikZ 源码编辑器 (CodeMirror 6)"
-                  description="修改后将实时应用于左侧代码面板。"
+                  title="自定义 TeX Live 安装目录 (Custom TeX Live Bin Path)"
+                  description="若您的 TeX Live 安装在自定义磁盘（如 D:\texlive\2025\bin\windows 或 /usr/local/texlive/2025/bin/x86_64-linux），请在此指定或点击自动扫描。编译时将自动注入子进程 PATH 首部。"
+                />
+                <SettingsGroup>
+                  <div className="p-4 space-y-3">
+                    <div>
+                      <label className="block text-[11px] font-medium text-slate-700 mb-1">
+                        TeX Live 可执行文件目录 (bin 目录路径，留空则使用系统默认 PATH)
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={texLiveBinDir}
+                          onChange={(e) =>
+                            updateSettings({ texLiveBinDir: e.target.value })
+                          }
+                          placeholder="例如: D:\texlive\2025\bin\windows 或 /usr/local/texlive/2025/bin/x86_64-linux"
+                          className="flex-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[12px] font-mono text-slate-800 outline-none focus:border-blue-500 focus:bg-white"
+                        />
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (
+                              typeof window !== 'undefined' &&
+                              '__TAURI_INTERNALS__' in window
+                            ) {
+                              const { invoke } = await import(
+                                '@tauri-apps/api/core'
+                              );
+                              const picked = await invoke<string | null>(
+                                'project_pick_directory',
+                                { initialDir: texLiveBinDir || null }
+                              );
+                              if (picked) {
+                                updateSettings({ texLiveBinDir: picked });
+                              }
+                            }
+                          }}
+                          className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11.5px] font-medium text-slate-700 hover:bg-slate-50 cursor-pointer shrink-0"
+                        >
+                          📂 浏览目录
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isScanningTex}
+                          onClick={async () => {
+                            setIsScanningTex(true);
+                            try {
+                              if (
+                                typeof window !== 'undefined' &&
+                                '__TAURI_INTERNALS__' in window
+                              ) {
+                                const { invoke } = await import(
+                                  '@tauri-apps/api/core'
+                                );
+                                const list = await invoke<
+                                  Array<{
+                                    binDir: string;
+                                    label: string;
+                                    hasXelatex: boolean;
+                                    hasDvisvgm: boolean;
+                                  }>
+                                >('tex_scan_installations');
+                                setScannedTexDirs(list || []);
+                                if (list && list.length > 0 && !texLiveBinDir) {
+                                  updateSettings({
+                                    texLiveBinDir: list[0].binDir,
+                                  });
+                                }
+                              }
+                            } catch {
+                              // ignore
+                            } finally {
+                              setIsScanningTex(false);
+                            }
+                          }}
+                          className="inline-flex items-center gap-1 rounded-lg bg-blue-600 px-3 py-1.5 text-[11.5px] font-medium text-white hover:bg-blue-700 disabled:opacity-50 cursor-pointer shrink-0"
+                        >
+                          <RefreshCw
+                            className={`h-3 w-3 ${isScanningTex ? 'animate-spin' : ''}`}
+                          />
+                          <span>自动扫描 TeX Live</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {scannedTexDirs.length > 0 && (
+                      <div className="space-y-1.5 pt-1">
+                        <div className="text-[11px] font-medium text-slate-600">
+                          扫描到的本机 TeX 安装位置（点击即可选用）：
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {scannedTexDirs.map((item) => {
+                            const active = texLiveBinDir === item.binDir;
+                            return (
+                              <button
+                                key={item.binDir}
+                                type="button"
+                                onClick={() =>
+                                  updateSettings({ texLiveBinDir: item.binDir })
+                                }
+                                className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] cursor-pointer ${
+                                  active
+                                    ? 'border-blue-600 bg-blue-50 text-blue-700 font-semibold'
+                                    : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                                }`}
+                              >
+                                <span className="font-mono">{item.binDir}</span>
+                                <span className="rounded bg-emerald-50 px-1.5 py-0.2 text-[9.5px] text-emerald-700">
+                                  {item.label}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <SettingsRow
+                    label="单图画布实时预览编译器"
+                    description="点击顶栏「TeX」按钮时调用的 standalone + dvisvgm 矢量编译器"
+                  >
+                    <select
+                      value={texEngine}
+                      onChange={(e) =>
+                        updateSettings({
+                          texEngine: e.target.value as TexEngineId,
+                        })
+                      }
+                      className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[12px] font-medium text-slate-800 outline-none focus:border-blue-500"
+                    >
+                      <option value="latex">latex + dvisvgm (DVI 极速模式 · 默认)</option>
+                      <option value="pdflatex">pdflatex + dvisvgm --pdf (PDF 标准模式)</option>
+                      <option value="xelatex">xelatex -no-pdf + dvisvgm (Unicode / CJK 支持)</option>
+                    </select>
+                  </SettingsRow>
+
+                  <SettingsRow
+                    label="一站式论文主文档编译器 (main.tex)"
+                    description="在「论文写作台」编译完整论文 PDF 时使用的主引擎"
+                  >
+                    <select
+                      value={paperCompileEngine}
+                      onChange={(e) =>
+                        updateSettings({
+                          paperCompileEngine: e.target
+                            .value as PaperCompileEngineId,
+                        })
+                      }
+                      className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[12px] font-medium text-slate-800 outline-none focus:border-blue-500"
+                    >
+                      <option value="xelatex">xelatex (推荐 · 原生支持 UTF-8 / 中英文学术模板)</option>
+                      <option value="pdflatex">pdflatex (英文顶会标准 arXiv / IEEE / NeurIPS)</option>
+                    </select>
+                  </SettingsRow>
+                </SettingsGroup>
+
+                <SettingsSectionLabel
+                  title="TikZ 与 LaTeX 源码编辑器 (CodeMirror 6)"
+                  description="修改后将实时应用于代码面板与论文写作编辑器。"
                 />
                 <SettingsGroup>
                   <SettingsRow
@@ -984,31 +1358,6 @@ export const SettingsModal: React.FC = () => {
                         updateSettings({ showLineNumbers: checked })
                       }
                     />
-                  </SettingsRow>
-                </SettingsGroup>
-
-                <SettingsSectionLabel
-                  title="本地 TeX Live 编译引擎偏好"
-                  description="画布平时使用内置零延迟 SVG+KaTeX 引擎实时交互；点击顶栏「TeX」按钮时调用此处选择的本地编译器。"
-                />
-                <SettingsGroup>
-                  <SettingsRow
-                    label="首选本地 LaTeX 编译器"
-                    description="配合 dvisvgm 将编译产物转换为高保真矢量 SVG"
-                  >
-                    <select
-                      value={texEngine}
-                      onChange={(e) =>
-                        updateSettings({
-                          texEngine: e.target.value as TexEngineId,
-                        })
-                      }
-                      className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[12px] font-medium text-slate-800 outline-none focus:border-blue-500"
-                    >
-                      <option value="latex">latex + dvisvgm (DVI 极速模式 · 默认)</option>
-                      <option value="pdflatex">pdflatex + dvisvgm --pdf (PDF 标准模式)</option>
-                      <option value="xelatex">xelatex -no-pdf + dvisvgm (Unicode / CJK 支持)</option>
-                    </select>
                   </SettingsRow>
                 </SettingsGroup>
               </div>
