@@ -18,7 +18,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-${{ inputs.tag || github.ref_name }}
+  group: release-pipeline
   cancel-in-progress: false
 
 jobs:
@@ -89,14 +89,9 @@ jobs:
           # Check if a published (non-draft) GitHub Release for this tag already exists
           if existing_draft="$(gh release view "$tag" --json isDraft --jq '.isDraft' 2>/dev/null)"; then
             if [ "$existing_draft" != "true" ]; then
-              if [ "$REF_TYPE" = "branch" ] && [ -z "$INPUT_TAG" ]; then
-                echo "Release ${tag} is already published. Skipping automatic branch release."
-                echo "should_release=false" >> "$GITHUB_OUTPUT"
-                exit 0
-              else
-                echo "::error::Release ${tag} is already published; refusing to overwrite."
-                exit 1
-              fi
+              echo "Release ${tag} is already published. Skipping duplicate release workflow."
+              echo "should_release=false" >> "$GITHUB_OUTPUT"
+              exit 0
             fi
           fi
 
@@ -293,8 +288,8 @@ jobs:
 
           if existing="$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft' 2>/dev/null)"; then
             if [ "$existing" != "true" ]; then
-              echo "::error::A published release ${RELEASE_TAG} already exists; refusing to overwrite."
-              exit 1
+              echo "Release ${RELEASE_TAG} is already published. Skipping duplicate publish."
+              exit 0
             fi
           else
             gh release create "$RELEASE_TAG" --draft --title "AgenTikZ ${RELEASE_TAG}" "${flags[@]}"
