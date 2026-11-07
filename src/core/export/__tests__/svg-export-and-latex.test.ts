@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { renderMixedLatexToHtml } from '../../../components/canvas/LatexLabel';
+import { buildStandaloneLatexDocument } from '../../../components/editor/TikzCodePanel';
+import { FULL_FIGURE_TEMPLATES } from '../../templates/dl-templates';
+import { computeSceneTightBounds } from '../svg-exporter';
 
 describe('LatexLabel & KaTeX Formula Rendering (renderMixedLatexToHtml)', () => {
   it('renders inline $...$ formulas with output:"html" and zero duplicate .katex-mathml nodes', () => {
@@ -40,5 +43,70 @@ describe('LatexLabel & KaTeX Formula Rendering (renderMixedLatexToHtml)', () => 
     expect(html).not.toContain('\\scriptsize');
     expect(html).toContain('Transformer Block');
     expect(html).toContain('class="katex"');
+  });
+
+  it('generates valid standalone LaTeX documents with hex color hoisting, PGFPlots key declarations, and CJK support', () => {
+    const sampleTikz = `${FULL_FIGURE_TEMPLATES[0].tikzCode}\n% 中文节点测试: 线性输出头 $\\hat{Y}$`;
+    const standalone = buildStandaloneLatexDocument(sampleTikz, 'neurips');
+
+    expect(standalone).toContain('\\IfFileExists{ctex.sty}{\\usepackage[UTF8]{ctex}}{}');
+    expect(standalone).toContain('\\definecolor{hex_2B5B84}{HTML}{2B5B84}');
+    expect(standalone).toContain('color=hex_2B5B84');
+    expect(standalone).not.toContain('color=#2B5B84');
+    expect(standalone).toContain('chart_type/.code={}');
+    expect(standalone).toContain('every node/.append style={align=center}');
+  });
+
+  it('computes tight centered bounds without distortion from nested KaTeX radical SVGs or relative path commands', () => {
+    const mkEl = (
+      tagName: string,
+      attrs: Record<string, string>,
+      children: any[] = [],
+      textContent = ''
+    ): any => {
+      const node: any = {
+        tagName,
+        textContent,
+        children,
+        getAttribute: (k: string) => attrs[k] ?? null,
+        closest: () => null,
+      };
+      return node;
+    };
+
+    const mockSceneRoot = mkEl('g', { id: 'agentikz-scene-root' }, [
+      mkEl('rect', {
+        x: '200',
+        y: '150',
+        width: '300',
+        height: '200',
+        fill: '#EFF6FF',
+        stroke: '#1E40AF',
+      }),
+      mkEl('g', { class: 'agentikz-vector-label' }, [
+        mkEl(
+          'svg',
+          {
+            x: '260',
+            y: '210',
+            width: '22',
+            height: '14',
+            viewBox: '0 0 1620 1080',
+          },
+          [
+            mkEl('path', {
+              d: 'M263,681c340,-704.7,510.7,-1060.3,512,-1067s-271.3,567,-271.3,567 M1001 80H1620v40H1012z',
+              fill: '#0F172A',
+            }),
+          ]
+        ),
+      ]),
+    ]);
+
+    const bounds = computeSceneTightBounds(null, mockSceneRoot);
+    expect(bounds.minX).toBe(200);
+    expect(bounds.minY).toBe(150);
+    expect(bounds.maxX).toBe(500);
+    expect(bounds.maxY).toBe(350);
   });
 });

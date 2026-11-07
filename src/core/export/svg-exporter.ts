@@ -129,6 +129,45 @@ function screenRectToLocalBox(
   };
 }
 
+function resolveLatexLineContainers(
+  liveFo: SVGForeignObjectElement
+): HTMLElement[] {
+  const taggedLines = Array.from(
+    liveFo.querySelectorAll('[data-latex-line="true"]')
+  ).filter((el): el is HTMLElement => el instanceof HTMLElement);
+  if (taggedLines.length > 0) {
+    return taggedLines;
+  }
+
+  let root: HTMLElement | null =
+    (liveFo.querySelector('[data-latex-root="true"]') as HTMLElement | null) ||
+    (liveFo.firstElementChild as HTMLElement | null);
+
+  while (
+    root &&
+    root.children.length === 1 &&
+    root.firstElementChild instanceof HTMLElement &&
+    root.firstElementChild.tagName === 'DIV' &&
+    !root.firstElementChild.classList.contains('katex')
+  ) {
+    root = root.firstElementChild;
+  }
+
+  if (root && root.children.length > 0) {
+    const childLines = Array.from(root.children).filter(
+      (c): c is HTMLElement =>
+        c instanceof HTMLElement &&
+        (c.tagName === 'DIV' || c.tagName === 'SPAN') &&
+        !c.classList.contains('katex')
+    );
+    if (childLines.length > 0) {
+      return childLines;
+    }
+  }
+
+  return root ? [root] : [liveFo as unknown as HTMLElement];
+}
+
 /**
  * Fallback conversion when DOM layout metrics (getBoundingClientRect / getScreenCTM)
  * are unavailable (e.g., headless unit tests or detached SVG).
@@ -145,20 +184,17 @@ function convertForeignObjectFallback(
   const w = parseFloat(liveFo.getAttribute('width') || '100');
   const h = parseFloat(liveFo.getAttribute('height') || '28');
 
-  const rootDiv = liveFo.firstElementChild as HTMLElement | null;
+  const latexRoot =
+    (liveFo.querySelector('[data-latex-root="true"]') as HTMLElement | null) ||
+    (liveFo.firstElementChild as HTMLElement | null);
   const baseColor =
-    rootDiv?.style?.color ||
+    latexRoot?.style?.color ||
     liveFo.getAttribute('color') ||
     '#0F172A';
-  const baseFontSize = parseFloat(rootDiv?.style?.fontSize || '11') || 11;
+  const baseFontSize = parseFloat(latexRoot?.style?.fontSize || '11') || 11;
 
   // Gather lines inside LatexLabel
-  const lineDivs = rootDiv
-    ? Array.from(rootDiv.children).filter(
-        (c) => c.tagName === 'DIV' || c.tagName === 'SPAN'
-      )
-    : [];
-  const targets = lineDivs.length > 0 ? lineDivs : [liveFo];
+  const targets = resolveLatexLineContainers(liveFo);
 
   const totalLines = targets.length;
   const lineStep = baseFontSize * 1.25;
@@ -526,13 +562,7 @@ function convertForeignObjectToNativeSvg(
   });
 
   // 6. Export text & math runs
-  const rootDiv = liveFo.firstElementChild as HTMLElement | null;
-  const lineContainers: HTMLElement[] =
-    rootDiv && rootDiv.children.length > 0
-      ? (Array.from(rootDiv.children).filter(
-          (el): el is HTMLElement => el instanceof HTMLElement
-        ) as HTMLElement[])
-      : [liveFo as unknown as HTMLElement];
+  const lineContainers: HTMLElement[] = resolveLatexLineContainers(liveFo);
 
   const emitStyledTextElement = (
     content: string,
@@ -567,7 +597,7 @@ function convertForeignObjectToNativeSvg(
     textEl.setAttribute(
       'font-family',
       isKatex && !isSansText
-        ? '"Latin Modern Math", "Cambria Math", "Computer Modern", "Times New Roman", serif'
+        ? 'KaTeX_Main, KaTeX_Math, KaTeX_AMS, "Latin Modern Math", "Cambria Math", "Computer Modern", "Times New Roman", serif'
         : cs.fontFamily || '"Times New Roman", serif'
     );
     if (isItalic) {
@@ -654,12 +684,11 @@ function convertForeignObjectToNativeSvg(
 
     // Case B: Line contains .katex math (either standalone math or mixed text + math).
     // Walk text nodes inside lineContainer, grouping multi-char math words (.mord.text, multi-char .mop)
-    // and anchoring plain text outside .katex cleanly against adjacent math.
+    // and anchoring plain text outside .katex cleanly against adjacent math in local coordinates.
     const processedGroupedElements = new Set<Element>();
-    const katexElements = Array.from(lineContainer.querySelectorAll('.katex'));
-    const firstKatexRect = katexElements[0]?.getBoundingClientRect();
-    const lastKatexRect =
-      katexElements[katexElements.length - 1]?.getBoundingClientRect();
+    const katexBoxes = Array.from(lineContainer.querySelectorAll('.katex'))
+      .map((el) => screenRectToLocalBox(el.getBoundingClientRect(), invMatrix))
+      .filter((b): b is LocalBox => b !== null);
 
     const walker = document.createTreeWalker(
       lineContainer,
@@ -670,14 +699,17 @@ function convertForeignObjectToNativeSvg(
       const parentEl = tNode.parentElement;
       if (!parentEl) continue;
 
-      // Skip hidden accessibility MathML, strut spacers, accent bodies, and vector-drawn delimiters
+      // Skip hidden accessibility MathML, strut spacers, accent bodies, vector-drawn delimiters,
+      // and inline SVGs inside liveFo (note: must check liveFo.contains(closestSvg) so we never
+      // match the outer #agentikz-canvas-svg ancestor!).
+      const closestSvg = parentEl.closest('svg');
       if (
         parentEl.closest('.katex-mathml') ||
         parentEl.closest('.vlist-s') ||
         parentEl.closest('.accent-body') ||
         parentEl.closest('.delimsizing') ||
         parentEl.closest('.delimcenter') ||
-        parentEl.closest('svg')
+        (closestSvg && liveFo.contains(closestSvg))
       ) {
         continue;
       }
@@ -753,11 +785,16 @@ function convertForeignObjectToNativeSvg(
         const baselineY = box.minY + box.height * 0.78;
         const trimmedText = rawVal.slice(leadSpaces, trimmedRightLen);
 
-        // If this text precedes a .katex formula, right-align at box.maxX so it never collides with math
-        if (
-          firstKatexRect &&
-          screenRect.right <= firstKatexRect.left + 4
-        ) {
+        // If this text immediately precedes a .katex formula in local X coordinates,
+        // right-align at box.maxX so it never collides with math.
+        const precedesMath = katexBoxes.some(
+          (kb) => box.maxX <= kb.minX + 4 && kb.minX - box.maxX <= 10
+        );
+        const followsMath = katexBoxes.some(
+          (kb) => box.minX >= kb.maxX - 4 && box.minX - kb.maxX <= 10
+        );
+
+        if (precedesMath && !followsMath) {
           emitStyledTextElement(
             trimmedText,
             box.maxX,
@@ -765,11 +802,7 @@ function convertForeignObjectToNativeSvg(
             'end',
             parentEl
           );
-        } else if (
-          lastKatexRect &&
-          screenRect.left >= lastKatexRect.right - 4
-        ) {
-          // If this text follows a .katex formula, left-align at box.minX
+        } else if (followsMath && !precedesMath) {
           emitStyledTextElement(
             trimmedText,
             box.minX,
@@ -797,7 +830,7 @@ function convertForeignObjectToNativeSvg(
  * Computes a tight bounding box (in scene-root coordinates) around all visible figure elements.
  * Combines live DOM measurement (when available) with SVG attribute inspection fallback.
  */
-function computeSceneTightBounds(
+export function computeSceneTightBounds(
   liveSceneRoot: SVGGElement | null,
   clonedSceneRoot: SVGGElement
 ): { minX: number; minY: number; maxX: number; maxY: number } {
@@ -822,6 +855,7 @@ function computeSceneTightBounds(
   };
 
   // 1. Live DOM bounding box measurement in scene-root coordinates
+  let hasLiveMeasurement = false;
   if (
     liveSceneRoot &&
     typeof liveSceneRoot.getScreenCTM === 'function'
@@ -832,8 +866,51 @@ function computeSceneTightBounds(
         const invScene = sceneCtm.inverse();
         const measureEl = (el: Element) => {
           if (el.getAttribute('data-export-ignore') === 'true') return;
-          if (el.tagName.toLowerCase() === 'title') return;
           const tag = el.tagName.toLowerCase();
+          if (tag === 'title' || tag === 'defs') return;
+
+          if (tag === 'foreignobject') {
+            // Measure actual rendered content inside foreignObject rather than its oversized layout box
+            const lineEls = resolveLatexLineContainers(
+              el as SVGForeignObjectElement
+            );
+            for (const lineEl of lineEls) {
+              const range = document.createRange();
+              range.selectNodeContents(lineEl);
+              const box = screenRectToLocalBox(
+                range.getBoundingClientRect(),
+                invScene
+              );
+              if (box && (box.width > 0.1 || box.height > 0.1)) {
+                includeRect(box.minX, box.minY, box.maxX, box.maxY);
+                hasLiveMeasurement = true;
+              }
+            }
+            const htmlNodes = [el, ...Array.from(el.querySelectorAll('*'))];
+            for (const hNode of htmlNodes) {
+              if (!(hNode instanceof HTMLElement)) continue;
+              if (hNode.closest('.katex')) continue;
+              const cs = window.getComputedStyle(hNode);
+              const hasBg = !isTransparentColor(cs.backgroundColor);
+              const borderW = parseFloat(cs.borderTopWidth || '0');
+              const hasBorder =
+                borderW > 0 &&
+                cs.borderTopStyle !== 'none' &&
+                !isTransparentColor(cs.borderTopColor);
+              if (hasBg || hasBorder) {
+                const box = screenRectToLocalBox(
+                  hNode.getBoundingClientRect(),
+                  invScene
+                );
+                if (box && box.width > 1 && box.height > 1) {
+                  includeRect(box.minX, box.minY, box.maxX, box.maxY);
+                  hasLiveMeasurement = true;
+                }
+              }
+            }
+            return;
+          }
+
           if (
             tag === 'rect' ||
             tag === 'path' ||
@@ -842,13 +919,13 @@ function computeSceneTightBounds(
             tag === 'polygon' ||
             tag === 'line' ||
             tag === 'text' ||
-            tag === 'foreignobject'
+            tag === 'image'
           ) {
             const fill = el.getAttribute('fill');
             const stroke = el.getAttribute('stroke');
             if (
               tag !== 'text' &&
-              tag !== 'foreignobject' &&
+              tag !== 'image' &&
               isTransparentColor(fill) &&
               isTransparentColor(stroke)
             ) {
@@ -858,6 +935,7 @@ function computeSceneTightBounds(
             const box = screenRectToLocalBox(r, invScene);
             if (box && (box.width > 0.1 || box.height > 0.1)) {
               includeRect(box.minX, box.minY, box.maxX, box.maxY);
+              hasLiveMeasurement = true;
             }
           }
           Array.from(el.children).forEach(measureEl);
@@ -879,6 +957,21 @@ function computeSceneTightBounds(
     const curTy = ty + (trMatch ? parseFloat(trMatch[2]) || 0 : 0);
 
     const tag = el.tagName.toLowerCase();
+    if (tag === 'defs' || tag === 'title') return;
+
+    // Nested <svg> (e.g. KaTeX \sqrt radical) has its own internal viewBox coordinate system;
+    // measure its outer x/y/width/height placement in scene coordinates and do NOT recurse into its internal paths!
+    if (tag === 'svg' && el !== (clonedSceneRoot as unknown as Element)) {
+      const x = parseFloat(el.getAttribute('x') || '0');
+      const y = parseFloat(el.getAttribute('y') || '0');
+      const w = parseFloat(el.getAttribute('width') || '0');
+      const h = parseFloat(el.getAttribute('height') || '0');
+      if (w > 0 && h > 0 && w < 5000 && h < 5000) {
+        includeRect(curTx + x, curTy + y, curTx + x + w, curTy + y + h);
+      }
+      return;
+    }
+
     const fill = el.getAttribute('fill');
     const stroke = el.getAttribute('stroke');
     const isVisibleShape =
@@ -920,7 +1013,8 @@ function computeSceneTightBounds(
       includeRect(curTx + x1, curTy + y1, curTx + x2, curTy + y2);
     } else if (tag === 'path' && isVisibleShape && !el.closest('defs')) {
       const d = el.getAttribute('d') || '';
-      const coordRegex = /[MLCQTS]\s*([-\d.]+)[\s,]+([-\d.]+)/gi;
+      // Match ONLY uppercase (absolute) SVG path commands so relative lowercase (c, s, l, m) offsets are never treated as absolute coordinates
+      const coordRegex = /[MLCQTS]\s*([-\d.]+)[\s,]+([-\d.]+)/g;
       let m: RegExpExecArray | null;
       while ((m = coordRegex.exec(d)) !== null) {
         const px = parseFloat(m[1]);
@@ -929,18 +1023,34 @@ function computeSceneTightBounds(
           includeRect(curTx + px, curTy + py, curTx + px, curTy + py);
         }
       }
-    } else if (tag === 'text') {
+    } else if (tag === 'image') {
+      const x = parseFloat(el.getAttribute('x') || '0');
+      const y = parseFloat(el.getAttribute('y') || '0');
+      const w = parseFloat(el.getAttribute('width') || '0');
+      const h = parseFloat(el.getAttribute('height') || '0');
+      if (w > 0 && h > 0 && w < 5000 && h < 5000) {
+        includeRect(curTx + x, curTy + y, curTx + x + w, curTy + y + h);
+      }
+    } else if (tag === 'text' && !hasLiveMeasurement) {
       const x = parseFloat(el.getAttribute('x') || '0');
       const y = parseFloat(el.getAttribute('y') || '0');
       const fs = parseFloat(el.getAttribute('font-size') || '11') || 11;
       const len = (el.textContent || '').length;
-      const approxHalfW = Math.max(12, len * fs * 0.32);
-      includeRect(
-        curTx + x - approxHalfW,
-        curTy + y - fs,
-        curTx + x + approxHalfW,
-        curTy + y + fs * 0.35
-      );
+      const approxW = Math.max(8, len * fs * 0.58);
+      const anchor = el.getAttribute('text-anchor') || 'start';
+      const minTx =
+        anchor === 'middle'
+          ? curTx + x - approxW / 2
+          : anchor === 'end'
+            ? curTx + x - approxW
+            : curTx + x;
+      const maxTx =
+        anchor === 'middle'
+          ? curTx + x + approxW / 2
+          : anchor === 'end'
+            ? curTx + x
+            : curTx + x + approxW;
+      includeRect(minTx, curTy + y - fs, maxTx, curTy + y + fs * 0.35);
     }
 
     Array.from(el.children).forEach((child) =>

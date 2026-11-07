@@ -14,7 +14,8 @@ export type NodeSubtype =
   | 'cuboid'      // 3D Feature Map / Tensor Volume (C x H x W)
   | 'container'   // Dashed Group / Stage container box
   | 'caption'     // Subfigure caption / Figure note e.g. "(a) Architecture Overview"
-  | 'math';       // Standalone formula / annotation text
+  | 'math'        // Standalone formula / annotation text
+  | 'image';      // Same-directory figure / image asset (\includegraphics)
 
 export type EdgeRouteType =
   | 'direct'         // (a) -- (b)
@@ -62,6 +63,7 @@ export interface TikzNodeElement {
   height: number; // cm
   depth?: number; // cm (for 3D cuboid tensor blocks)
   channels?: string; // Dimension label e.g. "64×64×128"
+  imagePath?: string; // Relative path to image asset in project folder (for subtype === 'image')
   label: string;
   sublabel?: string;
   styleClass?: string;
@@ -89,6 +91,7 @@ export interface TikzEdgeElement {
   residualOffset?: number; // cm
   bendAngle?: number;
   label?: string;
+  labelOffset?: { x: number; y: number }; // TikZ cm offset (xshift, yshift) relative to edge midpoint
   arrowStart?: boolean;
   arrowEnd: boolean;
   stroke?: string;
@@ -116,6 +119,7 @@ export interface TikzChartElement {
   showGrid: boolean;
   showLegend: boolean;
   legendPos: { x: number; y: number }; // Normalized axis description cs (0..1, 0..1) for top-left of legend
+  legendScale?: number; // Scale factor for legend box & font size (default 1.0, range 0.5..2.0)
   titleOffset?: { x: number; y: number }; // Pixel/relative offset for draggable chart title
   xlabelOffset?: { x: number; y: number }; // Offset for draggable xlabel
   ylabelOffset?: { x: number; y: number }; // Offset for draggable ylabel

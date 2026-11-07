@@ -8,6 +8,7 @@ import {
   patchEdgeElement,
   patchElementsCoordinates,
   patchFigureCaptionAndLabel,
+  patchImageNodePath,
   patchNodeLabel,
   patchNodeOptions,
 } from '../patcher';
@@ -107,6 +108,19 @@ describe('Lossless TikZ CST/AST Parser & Surgical Patcher', () => {
     });
     expect(patched).toContain('% Chart test');
     expect(patched).toContain('legend style={at={(0.52, 0.36)}, anchor=north west');
+
+    // Also verify legendScale updates and round-trips cleanly
+    const docAfterMove = parseTikzDocument(patched);
+    const scaledSource = patchChartElement(
+      docAfterMove.fullSource,
+      docAfterMove.charts[0],
+      { legendScale: 0.8 }
+    );
+    expect(scaledSource).toContain('legend_scale=0.8');
+    expect(scaledSource).toContain('nodes={scale=0.8, transform shape}');
+
+    const docAfterScale = parseTikzDocument(scaledSource);
+    expect(docAfterScale.charts[0].legendScale).toBeCloseTo(0.8);
   });
 
   it('parses and updates subfigure captions, overall figure caption, and element duplication', () => {
@@ -215,5 +229,87 @@ describe('Lossless TikZ CST/AST Parser & Surgical Patcher', () => {
     useSettingsStore.getState().updateSettings({ coordPrecision: 2 });
     expect(formatCoordNum(2.46)).toBe('2.45');
     expect(formatCoordNum(3)).toBe('3.0');
+  });
+
+  it('parses, resizes, and updates paths on project image asset (\\includegraphics) nodes losslessly', () => {
+    const imgTikz = `% Image asset node test
+\\begin{tikzpicture}
+  \\node[draw=none, inner sep=0pt, minimum width=3.2cm, minimum height=2.2cm] (img1) at (3.5, 4.0) {\\includegraphics[width=3.2cm, height=2.2cm]{figs/overview.png}}; % keep comment
+\\end{tikzpicture}`;
+
+    const doc = parseTikzDocument(imgTikz);
+    expect(doc.nodes.length).toBe(1);
+    const imgNode = doc.nodes[0];
+    expect(imgNode.id).toBe('img1');
+    expect(imgNode.subtype).toBe('image');
+    expect(imgNode.imagePath).toBe('figs/overview.png');
+    expect(imgNode.width).toBeCloseTo(3.2);
+    expect(imgNode.height).toBeCloseTo(2.2);
+    expect(imgNode.label).toBe('overview.png');
+
+    // Resize image node via patchNodeOptions and verify both node options and \includegraphics are updated
+    const resizedSource = patchNodeOptions(imgTikz, imgNode, {
+      'minimum width': '4.5cm',
+      'minimum height': '3.0cm',
+    });
+    expect(resizedSource).toContain('% Image asset node test');
+    expect(resizedSource).toContain('% keep comment');
+    expect(resizedSource).toContain('minimum width=4.5cm, minimum height=3.0cm');
+    expect(resizedSource).toContain(
+      '\\includegraphics[width=4.5cm, height=3.0cm]{figs/overview.png}'
+    );
+
+    const docAfterResize = parseTikzDocument(resizedSource);
+    const resizedNode = docAfterResize.nodes[0];
+    expect(resizedNode.width).toBeCloseTo(4.5);
+    expect(resizedNode.height).toBeCloseTo(3.0);
+
+    // Update image path via patchImageNodePath and verify re-parsing
+    const pathUpdatedSource = patchImageNodePath(
+      resizedSource,
+      resizedNode,
+      'assets/new_teaser.svg'
+    );
+    expect(pathUpdatedSource).toContain(
+      '\\includegraphics[width=4.5cm, height=3.0cm]{assets/new_teaser.svg}'
+    );
+
+    const docAfterPath = parseTikzDocument(pathUpdatedSource);
+    const updatedImgNode = docAfterPath.nodes[0];
+    expect(updatedImgNode.subtype).toBe('image');
+    expect(updatedImgNode.imagePath).toBe('assets/new_teaser.svg');
+    expect(updatedImgNode.label).toBe('new_teaser.svg');
+  });
+
+  it('parses and patches draggable edge label offsets (xshift, yshift) losslessly', () => {
+    const src = `\\begin{tikzpicture}
+  \\node (cond_emb) at (6.2, 5.6) {Conditioning};
+  \\node (mod_gate) at (6.2, 3.6) {$\\otimes$};
+  \\draw[-Stealth, line width=0.7pt] (cond_emb) -- node[pos=0.4, fill=white, inner sep=1.5pt, font=\\scriptsize] {$\\gamma, \\beta$} (mod_gate);
+\\end{tikzpicture}`;
+
+    const doc = parseTikzDocument(src);
+    expect(doc.edges.length).toBe(1);
+    const edge = doc.edges[0]!;
+    expect(edge.label).toBe('$\\gamma, \\beta$');
+    expect(edge.labelOffset).toBeUndefined();
+
+    const shiftedSrc = patchEdgeElement(src, edge, {
+      labelOffset: { x: 0.45, y: -0.2 },
+    });
+    expect(shiftedSrc).toContain('xshift=0.45cm, yshift=-0.2cm');
+
+    const reparsed = parseTikzDocument(shiftedSrc);
+    expect(reparsed.edges[0]!.label).toBe('$\\gamma, \\beta$');
+    expect(reparsed.edges[0]!.labelOffset).toEqual({ x: 0.45, y: -0.2 });
+
+    // Resetting offset to (0, 0) removes xshift/yshift cleanly
+    const resetSrc = patchEdgeElement(shiftedSrc, reparsed.edges[0]!, {
+      labelOffset: { x: 0, y: 0 },
+    });
+    expect(resetSrc).not.toContain('xshift=');
+    expect(resetSrc).not.toContain('yshift=');
+    const resetDoc = parseTikzDocument(resetSrc);
+    expect(resetDoc.edges[0]!.labelOffset).toBeUndefined();
   });
 });

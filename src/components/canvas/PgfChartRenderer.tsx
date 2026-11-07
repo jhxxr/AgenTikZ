@@ -42,15 +42,26 @@ export const PgfChartRenderer: React.FC<PgfChartRendererProps> = ({
   onUpdateChart,
   onEditSubTarget,
 }) => {
-  // Independent drag state for Legend, Title, XLabel, YLabel, or Resize Handle
+  // Independent drag state for Legend, Legend Scale, Title, XLabel, YLabel, or Resize Handle
   const [subDrag, setSubDrag] = useState<{
-    part: 'legend' | 'title' | 'xlabel' | 'ylabel' | 'resize_e' | 'resize_n' | 'resize_ne';
+    part:
+      | 'legend'
+      | 'legend_resize'
+      | 'title'
+      | 'xlabel'
+      | 'ylabel'
+      | 'resize_e'
+      | 'resize_n'
+      | 'resize_ne';
     startClientX: number;
     startClientY: number;
     initX: number;
     initY: number;
     initW: number;
     initH: number;
+    initScale?: number;
+    baseLegW?: number;
+    baseLegH?: number;
   } | null>(null);
 
   const totalW = chart.width * cmToPx;
@@ -120,7 +131,8 @@ export const PgfChartRenderer: React.FC<PgfChartRendererProps> = ({
     e: React.PointerEvent,
     part: NonNullable<typeof subDrag>['part'],
     initX: number,
-    initY: number
+    initY: number,
+    extra?: { initScale?: number; baseLegW?: number; baseLegH?: number }
   ) => {
     e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -132,6 +144,7 @@ export const PgfChartRenderer: React.FC<PgfChartRendererProps> = ({
       initY,
       initW: chart.width,
       initH: chart.height,
+      ...extra,
     });
   };
 
@@ -151,6 +164,17 @@ export const PgfChartRenderer: React.FC<PgfChartRendererProps> = ({
         Math.min(1.18, subDrag.initY - dyPx / plotH)
       );
       onMoveLegend(chart.id, { x: nextX, y: nextY }, false);
+    } else if (subDrag.part === 'legend_resize') {
+      const initScale = subDrag.initScale ?? 1.0;
+      const baseW = Math.max(48, subDrag.baseLegW ?? 88);
+      const baseH = Math.max(24, subDrag.baseLegH ?? 38);
+      const deltaScale =
+        Math.abs(dxPx) >= Math.abs(dyPx) ? dxPx / baseW : dyPx / baseH;
+      const nextScale = Math.max(
+        0.5,
+        Math.min(2.0, Number((initScale + deltaScale).toFixed(2)))
+      );
+      onUpdateChart(chart.id, { legendScale: nextScale }, false);
     } else if (subDrag.part === 'title') {
       onUpdateChart(
         chart.id,
@@ -672,17 +696,44 @@ export const PgfChartRenderer: React.FC<PgfChartRendererProps> = ({
         </g>
       )}
 
-      {/* Draggable & Double-Click Editable Publication Legend Box */}
+      {/* Draggable, Resizable & Double-Click Editable Publication Legend Box */}
       {chart.showLegend &&
         chart.chartType !== 'heatmap' &&
         chart.chartType !== 'boxplot' &&
         (() => {
           const lx = chart.legendPos?.x ?? 0.04;
           const ly = chart.legendPos?.y ?? 0.94;
+          const legScale = Math.max(
+            0.5,
+            Math.min(2.0, chart.legendScale ?? 1.0)
+          );
           const legX = padL + lx * plotW;
           const legY = padT + (1 - ly) * plotH;
-          const legW = Math.min(144, plotW - 8);
-          const legH = chart.series.length * 15 + 8;
+
+          // Compute natural tight width from longest series name so legend box hugs its contents
+          const maxNameChars = chart.series.reduce(
+            (max, s) => Math.max(max, (s.name || '').length),
+            4
+          );
+          const baseLegW = Math.max(58, Math.min(148, maxNameChars * 5.2 + 28));
+          const baseRowH = 14.5;
+          const basePadY = 4;
+          const baseLegH = chart.series.length * baseRowH + basePadY * 2;
+
+          const legW = Math.max(
+            42,
+            Math.min(plotW - 6, Math.round(baseLegW * legScale))
+          );
+          const rowH = baseRowH * legScale;
+          const padY = basePadY * legScale;
+          const padX = 6 * legScale;
+          const legH = Math.round(chart.series.length * rowH + padY * 2);
+          const fontSize = Number((8.8 * legScale).toFixed(2));
+          const sampleW = 13 * legScale;
+          const markerR = 2.1 * legScale;
+          const textX = Math.round(18 * legScale);
+          const isLegendActive =
+            subDrag?.part === 'legend' || subDrag?.part === 'legend_resize';
 
           return (
             <g
@@ -696,7 +747,7 @@ export const PgfChartRenderer: React.FC<PgfChartRendererProps> = ({
               onPointerUp={handlePartUp}
             >
               <title data-export-ignore="true">
-                拖拽自由移动图例位置 · 双击任意图例项可直接修改图例名称
+                拖拽自由移动图例位置 · 拖拽图例右下角缩放点调节图例大小 · 双击图例项修改名称
               </title>
               <rect
                 x={0}
@@ -705,15 +756,17 @@ export const PgfChartRenderer: React.FC<PgfChartRendererProps> = ({
                 height={legH}
                 fill="#FFFFFF"
                 fillOpacity={0.95}
-                stroke={subDrag?.part === 'legend' ? '#2563EB' : '#CBD5E1'}
-                strokeWidth={subDrag?.part === 'legend' ? 1.5 : 0.85}
-                rx={2.5}
+                stroke={isLegendActive ? '#2563EB' : '#CBD5E1'}
+                strokeWidth={isLegendActive ? 1.5 : 0.85}
+                rx={Math.max(1.5, Number((2.5 * legScale).toFixed(1)))}
                 className="group-hover/legend:stroke-blue-500 transition-colors"
               />
               {chart.series.map((s, idx) => (
                 <g
                   key={s.id}
-                  transform={`translate(6, ${11 + idx * 15})`}
+                  transform={`translate(${Number(padX.toFixed(1))}, ${Number(
+                    (padY + rowH * (idx + 0.52)).toFixed(1)
+                  )})`}
                   onDoubleClick={(e) => {
                     e.stopPropagation();
                     onEditSubTarget(chart.id, {
@@ -727,18 +780,55 @@ export const PgfChartRenderer: React.FC<PgfChartRendererProps> = ({
                   <line
                     x1={0}
                     y1={0}
-                    x2={14}
+                    x2={Number(sampleW.toFixed(1))}
                     y2={0}
                     stroke={s.color}
-                    strokeWidth={1.6}
+                    strokeWidth={Number((1.6 * legScale).toFixed(2))}
                     strokeDasharray={s.dashed ? '3 2' : undefined}
                   />
-                  <circle cx={7} cy={0} r={2.2} fill={s.color} />
-                  <text x={19} y={3} fontSize={8.8} fill="#1E293B">
+                  <circle
+                    cx={Number((sampleW / 2).toFixed(1))}
+                    cy={0}
+                    r={Number(markerR.toFixed(2))}
+                    fill={s.color}
+                  />
+                  <text
+                    x={textX}
+                    y={Number((fontSize * 0.34).toFixed(2))}
+                    fontSize={fontSize}
+                    fill="#1E293B"
+                  >
                     {s.name}
                   </text>
                 </g>
               ))}
+
+              {/* Dedicated Legend Corner Resize Handle when Chart is Selected */}
+              {selected && (
+                <rect
+                  data-export-ignore="true"
+                  x={legW - 3.5}
+                  y={legH - 3.5}
+                  width={7}
+                  height={7}
+                  rx={1.5}
+                  fill="#F59E0B"
+                  stroke="#FFFFFF"
+                  strokeWidth={1.2}
+                  className="cursor-nwse-resize opacity-85 group-hover/legend:opacity-100"
+                  onPointerDown={(e) =>
+                    startPartDrag(e, 'legend_resize', lx, ly, {
+                      initScale: legScale,
+                      baseLegW,
+                      baseLegH,
+                    })
+                  }
+                  onPointerMove={handlePartMove}
+                  onPointerUp={handlePartUp}
+                >
+                  <title>拖拽此控点直接缩放图例框大小 ({Math.round(legScale * 100)}%)</title>
+                </rect>
+              )}
             </g>
           );
         })()}

@@ -1,5 +1,6 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useWorkspaceStore } from '../../store/useWorkspaceStore';
+import { useProjectStore } from '../../store/useProjectStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import { TikzEdgeElement, TikzNodeElement } from '../../types/tikz-ast';
 import {
@@ -7,6 +8,7 @@ import {
   ptToPx,
   resolveTikzColor,
 } from '../../core/themes/journal-presets';
+import { exportCleanCanvasSvg } from '../../core/export/svg-exporter';
 import { LatexLabel } from './LatexLabel';
 import { ChartSubTarget, PgfChartRenderer } from './PgfChartRenderer';
 import {
@@ -115,26 +117,34 @@ function computeSmartBoundaryPoint(
 
 export const InteractiveCanvas: React.FC = () => {
   const {
+    tikzCode,
     parsedDoc,
     activeThemeId,
     activeTool,
     selectedIds,
     showGrid,
     snapToGrid,
+    canvasWidthCm,
+    canvasHeightCm,
     zoom,
     pan,
     previewMode,
     compiledSvg,
+    texCompilerStatus,
     setSelectedIds,
     setActiveTool,
     setShowGrid,
     setSnapToGrid,
+    setCanvasSizeCm,
+    fitCanvasToContent,
     setZoom,
     setPan,
+    setCompiledSvg,
     moveElementsByPosition,
     moveChartLegend,
     updateChartById,
     addPrimitiveToCanvas,
+    addImageAssetToCanvas,
     addEdgeBetweenNodes,
     updateNodeLabelById,
     updateNodeOptionsById,
@@ -147,12 +157,49 @@ export const InteractiveCanvas: React.FC = () => {
     redo,
   } = useWorkspaceStore();
 
+  const { activeCanvasName, assetDataUrls, ensureAssetDataUrl } =
+    useProjectStore();
+
   const svgRef = useRef<SVGSVGElement | null>(null);
   const theme = JOURNAL_THEMES[activeThemeId];
 
-  // Unified drag state: move, pan, connect, resize_node, or route_edge
+  // Keep built-in vector preview synchronized when editing while preview pane is open
+  useEffect(() => {
+    if (previewMode === 'interactive') return;
+    if (texCompilerStatus?.startsWith('本地 TeX Live')) return;
+    const raf = requestAnimationFrame(() => {
+      if (svgRef.current) {
+        setCompiledSvg(
+          exportCleanCanvasSvg(svgRef.current),
+          '内置高保真矢量引擎渲染 (无背景/纯矢量公式)'
+        );
+      }
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [tikzCode, activeThemeId, previewMode, texCompilerStatus, setCompiledSvg]);
+
+  // Preload image data URLs for any `\includegraphics` nodes in the parsed AST
+  useEffect(() => {
+    for (const node of parsedDoc.nodes) {
+      if (node.subtype === 'image' && node.imagePath) {
+        const cleanPath = node.imagePath.replace(/\\/g, '/').trim();
+        if (cleanPath && !assetDataUrls[cleanPath]) {
+          void ensureAssetDataUrl(cleanPath);
+        }
+      }
+    }
+  }, [parsedDoc.nodes, assetDataUrls, ensureAssetDataUrl]);
+
+  // Unified drag state: move, pan, connect, resize_node, route_edge, move_edge_label, or resize_canvas
   const [dragState, setDragState] = useState<{
-    mode: 'move' | 'pan' | 'connect' | 'resize_node' | 'route_edge';
+    mode:
+      | 'move'
+      | 'pan'
+      | 'connect'
+      | 'resize_node'
+      | 'route_edge'
+      | 'move_edge_label'
+      | 'resize_canvas';
     startClientX: number;
     startClientY: number;
     initialPan: { x: number; y: number };
@@ -173,6 +220,16 @@ export const InteractiveCanvas: React.FC = () => {
       routeType: TikzEdgeElement['routeType'];
       initOffset: number;
       initBend: number;
+    };
+    edgeLabelTarget?: {
+      id: string;
+      initX: number;
+      initY: number;
+    };
+    canvasResizeTarget?: {
+      dir: 'e' | 's' | 'se';
+      initW: number;
+      initH: number;
     };
   } | null>(null);
 
@@ -320,6 +377,25 @@ export const InteractiveCanvas: React.FC = () => {
     });
   };
 
+  const handleStartCanvasResize = (
+    e: React.PointerEvent,
+    dir: 'e' | 's' | 'se'
+  ) => {
+    e.stopPropagation();
+    setDragState({
+      mode: 'resize_canvas',
+      startClientX: e.clientX,
+      startClientY: e.clientY,
+      initialPan: { ...pan },
+      initialPositions: [],
+      canvasResizeTarget: {
+        dir,
+        initW: canvasWidthCm,
+        initH: canvasHeightCm,
+      },
+    });
+  };
+
   const handlePortPointerDown = (e: React.PointerEvent, nodeId: string) => {
     e.stopPropagation();
     const pt = clientToTikzCm(e.clientX, e.clientY);
@@ -395,6 +471,23 @@ export const InteractiveCanvas: React.FC = () => {
       return;
     }
 
+    if (dragState.mode === 'resize_canvas' && dragState.canvasResizeTarget) {
+      const { dir, initW, initH } = dragState.canvasResizeTarget;
+      const dxCm = (e.clientX - dragState.startClientX) / zoom / CM_TO_PX;
+      const dyCm = (e.clientY - dragState.startClientY) / zoom / CM_TO_PX;
+
+      let nextW = initW;
+      let nextH = initH;
+      if (dir === 'e' || dir === 'se') {
+        nextW = Math.max(4.0, Math.min(40.0, Math.round((initW + dxCm) * 10) / 10));
+      }
+      if (dir === 's' || dir === 'se') {
+        nextH = Math.max(4.0, Math.min(40.0, Math.round((initH + dyCm) * 10) / 10));
+      }
+      setCanvasSizeCm(nextW, nextH);
+      return;
+    }
+
     if (dragState.mode === 'resize_node' && dragState.resizeTarget) {
       const { id, dir, initW, initH, initDepth } = dragState.resizeTarget;
       const dxCm = (e.clientX - dragState.startClientX) / zoom / CM_TO_PX;
@@ -447,6 +540,18 @@ export const InteractiveCanvas: React.FC = () => {
         );
         updateEdgeById(id, { bendAngle: nextBend }, false);
       }
+      return;
+    }
+
+    if (dragState.mode === 'move_edge_label' && dragState.edgeLabelTarget) {
+      const { id, initX, initY } = dragState.edgeLabelTarget;
+      const dxCm = (e.clientX - dragState.startClientX) / zoom / CM_TO_PX;
+      const dyCm = -(e.clientY - dragState.startClientY) / zoom / CM_TO_PX;
+      let nextX = Number((initX + dxCm).toFixed(2));
+      let nextY = Number((initY + dyCm).toFixed(2));
+      if (Math.abs(nextX) < 0.04) nextX = 0;
+      if (Math.abs(nextY) < 0.04) nextY = 0;
+      updateEdgeById(id, { labelOffset: { x: nextX, y: nextY } }, false);
       return;
     }
 
@@ -660,26 +765,81 @@ export const InteractiveCanvas: React.FC = () => {
               : undefined
           }
         />
-        {edge.label && (
-          <g transform={`translate(${labelPos.x}, ${labelPos.y})`}>
-            <foreignObject
-              x={-90}
-              y={-15}
-              width={180}
-              height={30}
-              style={{ overflow: 'visible' }}
-            >
-              <div className="w-full h-full flex items-center justify-center">
-                <LatexLabel
-                  text={edge.label}
-                  fontSize={10}
-                  color="#334155"
-                  className="bg-white/95 px-1.5 py-0.5 rounded-xs"
+        {edge.label && (() => {
+          const offsetX = edge.labelOffset?.x ?? 0;
+          const offsetY = edge.labelOffset?.y ?? 0;
+          const shiftedX = labelPos.x + offsetX * CM_TO_PX;
+          const shiftedY = labelPos.y - offsetY * CM_TO_PX;
+          const hasOffset = Math.abs(offsetX) >= 0.01 || Math.abs(offsetY) >= 0.01;
+          return (
+            <>
+              {isSelected && hasOffset && (
+                <line
+                  data-export-ignore="true"
+                  x1={labelPos.x}
+                  y1={labelPos.y}
+                  x2={shiftedX}
+                  y2={shiftedY}
+                  stroke="#3B82F6"
+                  strokeWidth={1}
+                  strokeDasharray="2.5 2.5"
                 />
-              </div>
-            </foreignObject>
-          </g>
-        )}
+              )}
+              <g transform={`translate(${shiftedX}, ${shiftedY})`}>
+                <foreignObject
+                  x={-90}
+                  y={-15}
+                  width={180}
+                  height={30}
+                  style={{ overflow: 'visible', pointerEvents: 'none' }}
+                >
+                  <div className="w-full h-full flex items-center justify-center pointer-events-none">
+                    <div
+                      onPointerDown={(e) => {
+                        e.stopPropagation();
+                        setSelectedIds([edge.id]);
+                        useWorkspaceStore.getState().pushUndoSnapshot();
+                        setDragState({
+                          mode: 'move_edge_label',
+                          startClientX: e.clientX,
+                          startClientY: e.clientY,
+                          initialPan: { ...pan },
+                          initialPositions: [],
+                          edgeLabelTarget: {
+                            id: edge.id,
+                            initX: offsetX,
+                            initY: offsetY,
+                          },
+                        });
+                      }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedIds([edge.id]);
+                      }}
+                      onDoubleClick={(e) => {
+                        e.stopPropagation();
+                        setInlineEditor({
+                          type: 'edge',
+                          id: edge.id,
+                          label: edge.label || '',
+                        });
+                      }}
+                      title="按住直接拖拽移动连线文字位置 · 双击编辑公式/文字"
+                      className="pointer-events-auto cursor-grab active:cursor-grabbing rounded-xs hover:ring-1 hover:ring-blue-500/60 transition-shadow"
+                    >
+                      <LatexLabel
+                        text={edge.label}
+                        fontSize={10}
+                        color="#334155"
+                        className="bg-white/95 px-1.5 py-0.5 rounded-xs"
+                      />
+                    </div>
+                  </div>
+                </foreignObject>
+              </g>
+            </>
+          );
+        })()}
 
         {/* Draggable Route Offset Handle when Edge is Selected */}
         {isSelected &&
@@ -817,24 +977,6 @@ export const InteractiveCanvas: React.FC = () => {
                   strokeWidth={isSelected ? 1.7 : strokeW}
                   data-orig-stroke={strokeHex}
                   data-orig-stroke-width={strokeW}
-                />
-                <line
-                  x1={left + w * 0.33}
-                  y1={top}
-                  x2={left + w * 0.33}
-                  y2={top + h}
-                  stroke={strokeHex}
-                  strokeOpacity={0.22}
-                  strokeWidth={0.7}
-                />
-                <line
-                  x1={left + w * 0.66}
-                  y1={top}
-                  x2={left + w * 0.66}
-                  y2={top + h}
-                  stroke={strokeHex}
-                  strokeOpacity={0.22}
-                  strokeWidth={0.7}
                 />
                 <foreignObject
                   x={left}
@@ -1038,6 +1180,105 @@ export const InteractiveCanvas: React.FC = () => {
           </g>
         )}
 
+        {/* 7. PROJECT IMAGE ASSET NODE (\includegraphics) */}
+        {node.subtype === 'image' &&
+          (() => {
+            const cleanPath = (node.imagePath || '').replace(/\\/g, '/').trim();
+            const dataUrl = cleanPath ? assetDataUrls[cleanPath] : undefined;
+            return (
+              <g>
+                <rect
+                  x={left}
+                  y={top}
+                  width={w}
+                  height={h}
+                  rx={rx}
+                  fill="#F8FAFC"
+                  stroke={isSelected ? '#2563EB' : strokeHex}
+                  strokeWidth={isSelected ? 1.8 : strokeW}
+                  data-orig-stroke={strokeHex}
+                  data-orig-stroke-width={strokeW}
+                  strokeDasharray={node.dashed ? '4 2.5' : undefined}
+                />
+                {dataUrl ? (
+                  <image
+                    x={left + 1}
+                    y={top + 1}
+                    width={Math.max(2, w - 2)}
+                    height={Math.max(2, h - 2)}
+                    href={dataUrl}
+                    preserveAspectRatio="none"
+                  />
+                ) : (
+                  <g>
+                    <rect
+                      x={left + 4}
+                      y={top + 4}
+                      width={Math.max(8, w - 8)}
+                      height={Math.max(8, h - 8)}
+                      rx={Math.max(1, rx - 1)}
+                      fill="#F1F5F9"
+                      stroke="#CBD5E1"
+                      strokeWidth={0.8}
+                      strokeDasharray="3 2"
+                    />
+                    <g
+                      transform={`translate(${cx}, ${cy - 8})`}
+                      fill="none"
+                      stroke="#64748B"
+                      strokeWidth={1.3}
+                    >
+                      <rect x={-11} y={-9} width={22} height={16} rx={2} />
+                      <circle cx={-5} cy={-4} r={1.8} fill="#64748B" />
+                      <path d="M -9 5 L -3 -1 L 2 3 L 5 0 L 9 5" />
+                    </g>
+                    <text
+                      x={cx}
+                      y={cy + 12}
+                      textAnchor="middle"
+                      fontSize={9.5}
+                      fontWeight={600}
+                      fill="#334155"
+                      fontFamily="sans-serif"
+                    >
+                      {node.label || 'Image'}
+                    </text>
+                    <text
+                      x={cx}
+                      y={cy + 23}
+                      textAnchor="middle"
+                      fontSize={8}
+                      fill="#64748B"
+                      fontFamily="monospace"
+                    >
+                      {cleanPath || '\\includegraphics'}
+                    </text>
+                  </g>
+                )}
+                {node.sublabel && (
+                  <foreignObject
+                    x={cx - Math.max(w / 2 + 30, 120)}
+                    y={top + h + 2}
+                    width={Math.max(w + 60, 240)}
+                    height={26}
+                    style={{ overflow: 'visible' }}
+                  >
+                    <div
+                      className="w-full h-full flex items-center justify-center"
+                      style={{ fontFamily: theme.fontFamily }}
+                    >
+                      <LatexLabel
+                        text={node.sublabel}
+                        fontSize={10.5}
+                        color="#334155"
+                      />
+                    </div>
+                  </foreignObject>
+                )}
+              </g>
+            );
+          })()}
+
         {/* Selection Bounding Frame + 8-Way Resize Handles */}
         {isSelected && (
           <g data-export-ignore="true">
@@ -1142,9 +1383,26 @@ export const InteractiveCanvas: React.FC = () => {
     );
   };
 
+  // Tavotto-style bounded Paper Artboard geometry in SVG coordinates:
+  // Top-left anchored at (-1.0 cm, 8.5 cm) so resizing width/height expands rightward & downward cleanly
+  const pageLeft = originX - 1.0 * CM_TO_PX;
+  const pageTop = originY - 8.5 * CM_TO_PX;
+  const pageW = canvasWidthCm * CM_TO_PX;
+  const pageH = canvasHeightCm * CM_TO_PX;
+  const pagePresetTag =
+    Math.abs(canvasWidthCm - 8.5) < 0.2 && Math.abs(canvasHeightCm - 6.5) < 0.2
+      ? '单栏插图'
+      : Math.abs(canvasWidthCm - 16.0) < 0.2 &&
+          Math.abs(canvasHeightCm - 10.0) < 0.2
+        ? '双栏跨栏'
+        : Math.abs(canvasWidthCm - 20.0) < 0.2 &&
+            Math.abs(canvasHeightCm - 12.0) < 0.2
+          ? '宽幅海报'
+          : '可调画幅';
+
   return (
     <div
-      className="relative flex-1 h-full bg-white overflow-hidden select-none flex flex-col"
+      className="relative flex-1 h-full bg-slate-200/80 overflow-hidden select-none flex flex-col"
       onKeyDown={(e) => {
         if (inlineEditor) return;
         if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -1181,7 +1439,7 @@ export const InteractiveCanvas: React.FC = () => {
       }}
       tabIndex={0}
     >
-      {/* Main Interactive Vector Canvas (Pure White #FFFFFF) */}
+      {/* Main Interactive Vector Canvas (Tavotto Studio Stage + Bounded Paper Artboard) */}
       <div className="relative flex-1 w-full h-full flex">
         <svg
           id="agentikz-canvas-svg"
@@ -1189,7 +1447,23 @@ export const InteractiveCanvas: React.FC = () => {
           onPointerDown={handleCanvasPointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
-          className="w-full h-full bg-white"
+          onDragOver={(e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            const relPath = e.dataTransfer.getData(
+              'application/x-agentikz-asset'
+            );
+            if (relPath) {
+              const pt = clientToTikzCm(e.clientX, e.clientY);
+              const snapX = snapToGrid ? Math.round(pt.x * 5) / 5 : pt.x;
+              const snapY = snapToGrid ? Math.round(pt.y * 5) / 5 : pt.y;
+              addImageAssetToCanvas(relPath, snapX, snapY);
+            }
+          }}
+          className="w-full h-full bg-slate-200/80"
           style={{
             cursor:
               dragState?.mode === 'pan'
@@ -1230,6 +1504,33 @@ export const InteractiveCanvas: React.FC = () => {
               />
             </pattern>
 
+            <clipPath id="tikz-page-clip" data-export-ignore="true">
+              <rect
+                x={pageLeft}
+                y={pageTop}
+                width={pageW}
+                height={pageH}
+                rx={4}
+              />
+            </clipPath>
+
+            <filter
+              id="tikz-page-shadow"
+              x="-8%"
+              y="-8%"
+              width="120%"
+              height="120%"
+              data-export-ignore="true"
+            >
+              <feDropShadow
+                dx="0"
+                dy="4"
+                stdDeviation="8"
+                floodColor="#0F172A"
+                floodOpacity="0.09"
+              />
+            </filter>
+
             <marker
               id="tikz-arrow"
               viewBox="0 0 10 8"
@@ -1255,55 +1556,262 @@ export const InteractiveCanvas: React.FC = () => {
             </marker>
           </defs>
 
+          {/* Studio Desk Backdrop */}
           <rect
             width="100%"
             height="100%"
-            fill="#FFFFFF"
+            fill="#E2E8F0"
             data-export-ignore="true"
+            data-canvas-ui="true"
           />
 
           <g id="agentikz-scene-root" transform={`scale(${zoom})`}>
-            {showGrid && (
+            {/* Bounded Paper Artboard Frame & Clipped Grid */}
+            <g data-export-ignore="true" data-canvas-ui="true">
               <rect
-                width={9999}
-                height={9999}
-                fill="url(#tikz-grid)"
-                data-export-ignore="true"
+                x={pageLeft}
+                y={pageTop}
+                width={pageW}
+                height={pageH}
+                rx={4}
+                fill="#FFFFFF"
+                stroke={
+                  dragState?.mode === 'resize_canvas' ? '#2563EB' : '#CBD5E1'
+                }
+                strokeWidth={dragState?.mode === 'resize_canvas' ? 2 : 1.5}
+                filter="url(#tikz-page-shadow)"
               />
-            )}
-            {showGrid && (
-              <g
-                opacity={0.45}
-                pointerEvents="none"
-                data-export-ignore="true"
-              >
-                <line
-                  x1={originX - 10}
-                  y1={originY}
-                  x2={originX + 10}
-                  y2={originY}
-                  stroke="#94A3B8"
-                  strokeWidth={1}
-                />
-                <line
-                  x1={originX}
-                  y1={originY - 10}
-                  x2={originX}
-                  y2={originY + 10}
-                  stroke="#94A3B8"
+
+              {showGrid && (
+                <g clipPath="url(#tikz-page-clip)">
+                  <rect
+                    x={pageLeft}
+                    y={pageTop}
+                    width={pageW}
+                    height={pageH}
+                    fill="url(#tikz-grid)"
+                  />
+                  <g opacity={0.45} pointerEvents="none">
+                    <line
+                      x1={originX - 10}
+                      y1={originY}
+                      x2={originX + 10}
+                      y2={originY}
+                      stroke="#94A3B8"
+                      strokeWidth={1}
+                    />
+                    <line
+                      x1={originX}
+                      y1={originY - 10}
+                      x2={originX}
+                      y2={originY + 10}
+                      stroke="#94A3B8"
+                      strokeWidth={1}
+                    />
+                    <text
+                      x={originX + 4}
+                      y={originY + 12}
+                      fontSize={8.5}
+                      fill="#94A3B8"
+                      fontFamily="monospace"
+                    >
+                      (0,0)
+                    </text>
+                  </g>
+                </g>
+              )}
+
+              {/* Tavotto-style Top-Left Artboard Header Badge + Quick Size Preset Pills */}
+              <g transform={`translate(${pageLeft}, ${pageTop - 26})`}>
+                <rect
+                  x={0}
+                  y={0}
+                  width={238}
+                  height={20}
+                  rx={4}
+                  fill="#FFFFFF"
+                  fillOpacity={0.92}
+                  stroke="#CBD5E1"
                   strokeWidth={1}
                 />
                 <text
-                  x={originX + 4}
-                  y={originY + 12}
-                  fontSize={8.5}
-                  fill="#94A3B8"
-                  fontFamily="monospace"
+                  x={8}
+                  y={13.5}
+                  fontSize={9.5}
+                  fontWeight={600}
+                  fill="#334155"
+                  fontFamily="sans-serif"
                 >
-                  (0,0)
+                  📄 {activeCanvasName.slice(0, 14)} ·{' '}
+                  {canvasWidthCm.toFixed(1)}×{canvasHeightCm.toFixed(1)} cm (
+                  {pagePresetTag})
                 </text>
+
+                {/* Quick Preset Pills on Artboard Header */}
+                {[
+                  { label: '单栏 8.5×6.5', w: 8.5, h: 6.5, xOff: 244, wPx: 72 },
+                  {
+                    label: '双栏 16×10',
+                    w: 16.0,
+                    h: 10.0,
+                    xOff: 320,
+                    wPx: 66,
+                  },
+                  {
+                    label: '宽幅 20×12',
+                    w: 20.0,
+                    h: 12.0,
+                    xOff: 390,
+                    wPx: 66,
+                  },
+                ].map((preset) => {
+                  const isActive =
+                    Math.abs(canvasWidthCm - preset.w) < 0.15 &&
+                    Math.abs(canvasHeightCm - preset.h) < 0.15;
+                  return (
+                    <g
+                      key={preset.label}
+                      transform={`translate(${preset.xOff}, 0)`}
+                      className="cursor-pointer"
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setCanvasSizeCm(preset.w, preset.h);
+                      }}
+                    >
+                      <rect
+                        x={0}
+                        y={0}
+                        width={preset.wPx}
+                        height={20}
+                        rx={4}
+                        fill={isActive ? '#2563EB' : '#FFFFFF'}
+                        fillOpacity={isActive ? 1 : 0.85}
+                        stroke={isActive ? '#1D4ED8' : '#CBD5E1'}
+                        strokeWidth={1}
+                      />
+                      <text
+                        x={preset.wPx / 2}
+                        y={13.5}
+                        textAnchor="middle"
+                        fontSize={9}
+                        fontWeight={500}
+                        fill={isActive ? '#FFFFFF' : '#475569'}
+                        fontFamily="sans-serif"
+                      >
+                        {preset.label}
+                      </text>
+                    </g>
+                  );
+                })}
+
+                {/* Fit to Content Pill */}
+                <g
+                  transform="translate(460, 0)"
+                  className="cursor-pointer"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    fitCanvasToContent();
+                  }}
+                >
+                  <rect
+                    x={0}
+                    y={0}
+                    width={76}
+                    height={20}
+                    rx={4}
+                    fill="#F8FAFC"
+                    stroke="#94A3B8"
+                    strokeWidth={1}
+                  />
+                  <text
+                    x={38}
+                    y={13.5}
+                    textAnchor="middle"
+                    fontSize={9}
+                    fontWeight={600}
+                    fill="#0F172A"
+                    fontFamily="sans-serif"
+                  >
+                    自适应 (Fit)
+                  </text>
+                </g>
               </g>
-            )}
+
+              {/* East (Right Edge) Page Resize Handle */}
+              <g
+                transform={`translate(${pageLeft + pageW}, ${pageTop + pageH / 2})`}
+                className="cursor-ew-resize"
+                onPointerDown={(e) => handleStartCanvasResize(e, 'e')}
+              >
+                <title>左右拖拽直接调节画布纸张宽度 (cm)</title>
+                <rect
+                  x={-3.5}
+                  y={-22}
+                  width={7}
+                  height={44}
+                  rx={3.5}
+                  fill="#FFFFFF"
+                  stroke="#64748B"
+                  strokeWidth={1.2}
+                />
+                <line
+                  x1={0}
+                  y1={-10}
+                  x2={0}
+                  y2={10}
+                  stroke="#94A3B8"
+                  strokeWidth={1.2}
+                />
+              </g>
+
+              {/* South (Bottom Edge) Page Resize Handle */}
+              <g
+                transform={`translate(${pageLeft + pageW / 2}, ${pageTop + pageH})`}
+                className="cursor-ns-resize"
+                onPointerDown={(e) => handleStartCanvasResize(e, 's')}
+              >
+                <title>上下拖拽直接调节画布纸张高度 (cm)</title>
+                <rect
+                  x={-22}
+                  y={-3.5}
+                  width={44}
+                  height={7}
+                  rx={3.5}
+                  fill="#FFFFFF"
+                  stroke="#64748B"
+                  strokeWidth={1.2}
+                />
+                <line
+                  x1={-10}
+                  y1={0}
+                  x2={10}
+                  y2={0}
+                  stroke="#94A3B8"
+                  strokeWidth={1.2}
+                />
+              </g>
+
+              {/* South-East (Bottom-Right Corner) Page Resize Handle */}
+              <g
+                transform={`translate(${pageLeft + pageW}, ${pageTop + pageH})`}
+                className="cursor-nwse-resize"
+                onPointerDown={(e) => handleStartCanvasResize(e, 'se')}
+              >
+                <title>拖拽右下角同时调节画布宽高 (cm)</title>
+                <rect
+                  x={-5.5}
+                  y={-5.5}
+                  width={11}
+                  height={11}
+                  rx={2.5}
+                  fill="#2563EB"
+                  stroke="#FFFFFF"
+                  strokeWidth={1.5}
+                />
+              </g>
+            </g>
 
             {alignmentGuides.xCm !== undefined && (
               <line
@@ -1399,19 +1907,22 @@ export const InteractiveCanvas: React.FC = () => {
           <div
             className={`${
               previewMode === 'tex_split'
-                ? 'w-1/2 border-l border-slate-200 bg-white'
-                : 'absolute inset-0 bg-white/80 pointer-events-none'
-            } flex flex-col items-center justify-center p-4 overflow-auto`}
+                ? 'w-1/2 border-l border-slate-200 bg-slate-50/40'
+                : 'absolute inset-0 bg-white/85 pointer-events-none'
+            } flex flex-col items-center p-4 overflow-auto`}
           >
-            <div className="text-xs font-medium text-slate-500 mb-2 flex items-center gap-2 bg-slate-50 px-2.5 py-1 rounded-full border border-slate-200">
+            <div className="text-xs font-medium text-slate-600 mb-3 flex items-center gap-2 bg-white px-3 py-1 rounded-full border border-slate-200 shadow-2xs shrink-0">
               <span className="w-2 h-2 rounded-full bg-emerald-500" />
-              {compiledSvg
-                ? '本地 TeX Live 精确编译输出 (standalone + tikz + pgfplots)'
-                : '高保真学术论文白纸打印预览 (Vector Print View)'}
+              <span>
+                {texCompilerStatus ||
+                  (compiledSvg
+                    ? '本地 TeX Live 精确编译输出 (standalone + tikz + pgfplots)'
+                    : '高保真学术论文白纸打印预览 (Vector Print View)')}
+              </span>
             </div>
             {compiledSvg ? (
               <div
-                className="bg-white p-4 rounded border border-slate-200 shadow-xs"
+                className="w-full flex-1 min-h-0 flex items-center justify-center bg-white p-4 rounded-xl border border-slate-200 shadow-xs overflow-auto [&_svg]:m-auto [&_svg]:block [&_svg]:max-w-full [&_svg]:max-h-full [&_svg]:w-auto [&_svg]:h-auto"
                 dangerouslySetInnerHTML={{
                   __html: compiledSvg
                     .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')

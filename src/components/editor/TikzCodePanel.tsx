@@ -24,38 +24,81 @@ export function buildStandaloneLatexDocument(
   tikzCode: string,
   themeId: keyof typeof JOURNAL_THEMES
 ): string {
-  const theme = JOURNAL_THEMES[themeId];
+  const allPreambleColors = Object.values(JOURNAL_THEMES)
+    .map((t) => t.tikzPreambleColors)
+    .join('\n');
+
+  // Hoist any inline #RRGGBB hex color specs (e.g. color=#2B5B84 in \addplot)
+  // to valid xcolor \definecolor{hex_RRGGBB}{HTML}{RRGGBB} definitions
+  const hexColors = new Set<string>();
+  const sanitizedTikz = tikzCode
+    .replace(/#([0-9a-fA-F]{6})\b/g, (_m, hex: string) => {
+      const upper = hex.toUpperCase();
+      hexColors.add(upper);
+      return `hex_${upper}`;
+    })
+    .replace(
+      /every node\/\.style=\{font=\\small\}/g,
+      'every node/.style={font=\\small, align=center}'
+    );
+
+  const customHexDefs = Array.from(hexColors)
+    .map((hex) => `\\definecolor{hex_${hex}}{HTML}{${hex}}`)
+    .join('\n');
+
+  const hasCjk = /[\u4e00-\u9fff]/.test(tikzCode);
+  const cjkPreamble = hasCjk
+    ? '\\IfFileExists{ctex.sty}{\\usepackage[UTF8]{ctex}}{}'
+    : '';
+
   return [
     '\\documentclass[border=4pt]{standalone}',
+    cjkPreamble,
     '\\usepackage{tikz}',
     '\\usepackage{pgfplots}',
+    '\\usepackage{graphicx}',
     '\\usepackage{amsmath,amssymb}',
-    '\\pgfplotsset{compat=1.18}',
+    '\\pgfplotsset{',
+    '  compat=1.18,',
+    '  id/.code={},',
+    '  chart_type/.code={},',
+    '  subcaption/.code={},',
+    '  title_offset/.code={},',
+    '  xlabel_offset/.code={},',
+    '  ylabel_offset/.code={},',
+    '  legend_scale/.code={},',
+    '  legend/.code={}',
+    '}',
+    '\\usepgfplotslibrary{statistics}',
     '\\usetikzlibrary{arrows.meta,positioning,calc,fit,backgrounds,shapes.geometric}',
     '',
-    '% --- Publication Theme Color Palette ---',
-    theme.tikzPreambleColors,
+    `% --- Publication Theme Color Palette (${JOURNAL_THEMES[themeId].venueBadge}) ---`,
+    allPreambleColors,
+    customHexDefs,
     '',
     '% --- AgenTikZ Semantic Attribute Keys & Default Node Styles ---',
     '\\tikzset{',
+    '  every node/.append style={align=center},',
     '  subtype/.code={},',
     '  depth/.code={},',
     '  channels/.code={},',
     '  sublabel/.code={},',
-    '  module/.style={draw=cPrimaryBorder, fill=cPrimaryFill, rounded corners=2pt, minimum width=2.4cm, minimum height=0.85cm, align=center, font=\\small},',
-    '  attn/.style={module, draw=cSecondaryBorder, fill=cSecondaryFill},',
-    '  norm/.style={module, draw=cAccentBorder, fill=cAccentFill, minimum height=0.68cm},',
-    '  op/.style={circle, draw=cNeutralBorder, fill=cNeutralFill, inner sep=1pt, minimum size=0.52cm, font=\\small},',
-    '  io/.style={module, draw=cNeutralBorder, fill=cNeutralFill, minimum height=0.7cm},',
-    '  container/.style={draw=cNeutralBorder, fill=cNeutralFill, dashed, rounded corners=4pt},',
-    '  flow/.style={-{Stealth[length=2.2mm, width=1.6mm]}, draw=cEdge, semithick},',
-    '  res/.style={-{Stealth[length=2.2mm, width=1.6mm]}, draw=cResidual, semithick, rounded corners=3pt}',
+    '  dl_block/.style={draw=nips_blue!85!black, fill=nips_blue!14, rounded corners=2.5pt, line width=0.7pt, minimum width=2.8cm, minimum height=0.82cm, align=center},',
+    '  mha_block/.style={draw=nips_amber!85!black, fill=nips_amber!16, rounded corners=2.5pt, line width=0.75pt, minimum width=3.0cm, minimum height=0.92cm, align=center},',
+    '  addnorm_block/.style={draw=nips_sage!85!black, fill=nips_sage!15, rounded corners=2.0pt, line width=0.65pt, minimum width=2.8cm, minimum height=0.65cm, align=center},',
+    '  conv_block/.style={draw=cvpr_teal!85!black, fill=cvpr_teal!14, rounded corners=2.0pt, line width=0.7pt, minimum width=2.6cm, minimum height=0.85cm, align=center},',
+    '  feature_cube/.style={draw=cvpr_navy!85!black, fill=cvpr_navy!14, line width=0.7pt, minimum width=1.2cm, minimum height=2.0cm, align=center},',
+    '  op_circle/.style={circle, draw=nips_slate!85!black, fill=white, line width=0.7pt, minimum size=0.6cm, inner sep=1pt, align=center},',
+    '  stage_box/.style={draw=nips_slate!55, fill=nips_slate!5, dashed, rounded corners=4pt, line width=0.65pt, align=center},',
+    '  subcaption/.style={draw=none, fill=none, align=center}',
     '}',
     '',
     '\\begin{document}',
-    tikzCode,
+    sanitizedTikz,
     '\\end{document}',
-  ].join('\n');
+  ]
+    .filter((line) => line !== '')
+    .join('\n');
 }
 
 export function buildPaperFigureEnvironment(

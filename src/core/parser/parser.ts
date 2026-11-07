@@ -207,6 +207,32 @@ function parseCmValue(val: string | undefined, fallback: number): number {
   return num;
 }
 
+function parseEdgeLabelOffset(
+  labelOptStr: string | undefined
+): { x: number; y: number } | undefined {
+  if (!labelOptStr) return undefined;
+  const opts = parseTikzOptionString(labelOptStr);
+  let x = parseCmValue(opts['xshift'], 0);
+  let y = parseCmValue(opts['yshift'], 0);
+  if (opts['right'] !== undefined && opts['xshift'] === undefined) {
+    x += opts['right'] === 'true' ? 0.35 : parseCmValue(opts['right'], 0.35);
+  }
+  if (opts['left'] !== undefined && opts['xshift'] === undefined) {
+    x -= opts['left'] === 'true' ? 0.35 : parseCmValue(opts['left'], 0.35);
+  }
+  if (opts['above'] !== undefined && opts['yshift'] === undefined) {
+    y += opts['above'] === 'true' ? 0.25 : parseCmValue(opts['above'], 0.25);
+  }
+  if (opts['below'] !== undefined && opts['yshift'] === undefined) {
+    y -= opts['below'] === 'true' ? 0.25 : parseCmValue(opts['below'], 0.25);
+  }
+  if (Math.abs(x) < 0.005 && Math.abs(y) < 0.005) return undefined;
+  return {
+    x: Number(x.toFixed(2)),
+    y: Number(y.toFixed(2)),
+  };
+}
+
 function parsePreambleStyles(source: string): Record<string, Record<string, string>> {
   const styles: Record<string, Record<string, string>> = {
     dl_block: {
@@ -304,6 +330,13 @@ function inferNodeSubtype(
 ): NodeSubtype {
   if (mergedOpts['subtype']) {
     return mergedOpts['subtype'] as NodeSubtype;
+  }
+  if (
+    styleClass === 'image_asset' ||
+    mergedOpts['image_path'] !== undefined ||
+    /\\includegraphics\b/.test(label)
+  ) {
+    return 'image';
   }
   if (
     styleClass === 'feature_cube' ||
@@ -464,6 +497,28 @@ function parseSingleNodeStatement(
 
   const subtype = inferNodeSubtype(styleClass, mergedOpts, label);
 
+  // Extract \includegraphics[...]{path} details if subtype === 'image'
+  let imagePath: string | undefined = mergedOpts['image_path'];
+  let includeGraphicsW: number | undefined;
+  let includeGraphicsH: number | undefined;
+  if (subtype === 'image') {
+    const igMatch = /\\includegraphics\s*(?:\[([^\]]*)\])?\s*\{\s*([^}]+)\s*\}/.exec(
+      label
+    );
+    if (igMatch) {
+      imagePath = igMatch[2].trim();
+      if (igMatch[1]) {
+        const igOpts = parseTikzOptionString(igMatch[1]);
+        if (igOpts['width']) {
+          includeGraphicsW = parseCmValue(igOpts['width'], 4.2);
+        }
+        if (igOpts['height']) {
+          includeGraphicsH = parseCmValue(igOpts['height'], 3.0);
+        }
+      }
+    }
+  }
+
   const defaultW =
     subtype === 'op_circle'
       ? 0.7
@@ -473,7 +528,9 @@ function parseSingleNodeStatement(
           ? 4.2
           : subtype === 'caption'
             ? 4.6
-            : 2.8;
+            : subtype === 'image'
+              ? includeGraphicsW ?? 4.2
+              : 2.8;
   const defaultH =
     subtype === 'op_circle'
       ? 0.7
@@ -485,7 +542,9 @@ function parseSingleNodeStatement(
             ? 3.4
             : subtype === 'caption'
               ? 0.55
-              : 0.85;
+              : subtype === 'image'
+                ? includeGraphicsH ?? 3.0
+                : 0.85;
 
   const sizeSpec = mergedOpts['minimum size'];
   const width = parseCmValue(mergedOpts['minimum width'] || sizeSpec, defaultW);
@@ -496,7 +555,35 @@ function parseSingleNodeStatement(
   // Extract optional secondary sublabel if separated by `\\`
   let mainLabel = label;
   let sublabel = mergedOpts['sublabel'];
-  if (label.includes('\\\\')) {
+  if (subtype === 'image' && imagePath) {
+    // Strip the raw \includegraphics{...} command from display label if present
+    const stripped = label
+      .replace(/\\includegraphics\s*(?:\[[^\]]*\])?\s*\{[^}]+\}/g, '')
+      .replace(/^\s*(?:\\\\\s*)+|(?:\s*\\\\)+\s*$/g, '')
+      .trim();
+    const defaultImgLabel = imagePath.split('/').pop() || imagePath;
+    const unwrapSub = (s: string) => {
+      const m = /^\{\\(?:scriptsize|footnotesize|tiny)\b\s*([\s\S]*)\}$/.exec(
+        s.trim()
+      );
+      return m ? m[1].trim() : s.trim();
+    };
+    if (!stripped) {
+      mainLabel = defaultImgLabel;
+    } else if (stripped.includes('\\\\')) {
+      const parts = stripped
+        .split('\\\\')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      mainLabel = parts[0] || defaultImgLabel;
+      sublabel = unwrapSub(parts.slice(1).join(' '));
+    } else if (/^\{\\(?:scriptsize|footnotesize|tiny)\b/.test(stripped)) {
+      mainLabel = defaultImgLabel;
+      sublabel = unwrapSub(stripped);
+    } else {
+      mainLabel = stripped;
+    }
+  } else if (label.includes('\\\\')) {
     const parts = label.split('\\\\').map((s) => s.trim());
     mainLabel = parts[0];
     let rawSub = parts.slice(1).join(' ');
@@ -520,6 +607,7 @@ function parseSingleNodeStatement(
     height,
     depth,
     channels,
+    imagePath,
     label: mainLabel,
     sublabel,
     styleClass,
@@ -588,7 +676,7 @@ function parseSingleDrawStatement(
 
   // Check for residual skip connection: `(a.east) -- ++(1.4, 0) |- (b.east)`
   const residualMatch =
-    /\(\s*([a-zA-Z0-9_:-]+)(?:\.([a-zA-Z ]+))?\s*\)\s*--\s*\+\+\(\s*([-+]?[0-9.]+)(?:cm)?\s*,\s*[-+]?[0-9.]+(?:cm)?\s*\)\s*\|-\s*(?:node\s*\[[\s\S]*?\]\s*\{([\s\S]*?)\}\s*)?\(\s*([a-zA-Z0-9_:-]+)(?:\.([a-zA-Z ]+))?\s*\)/.exec(
+    /\(\s*([a-zA-Z0-9_:-]+)(?:\.([a-zA-Z ]+))?\s*\)\s*--\s*\+\+\(\s*([-+]?[0-9.]+)(?:cm)?\s*,\s*[-+]?[0-9.]+(?:cm)?\s*\)\s*\|-\s*(?:node\s*\[([\s\S]*?)\]\s*\{([\s\S]*?)\}\s*)?\(\s*([a-zA-Z0-9_:-]+)(?:\.([a-zA-Z ]+))?\s*\)/.exec(
       bodyAfterOpt
     );
 
@@ -599,11 +687,12 @@ function parseSingleDrawStatement(
       id: `edge_${autoIdx}`,
       from: residualMatch[1],
       fromAnchor: residualMatch[2],
-      to: residualMatch[5],
-      toAnchor: residualMatch[6],
+      to: residualMatch[6],
+      toAnchor: residualMatch[7],
       routeType: dx >= 0 ? 'residual_right' : 'residual_left',
       residualOffset: Math.abs(dx),
-      label: residualMatch[4]?.trim(),
+      label: residualMatch[5]?.trim(),
+      labelOffset: parseEdgeLabelOffset(residualMatch[4]),
       arrowEnd: true,
       stroke: mergedOpts['draw'] || 'nips_slate!85!black',
       lineWidth: mergedOpts['line width'] || '0.7pt',
@@ -617,7 +706,7 @@ function parseSingleDrawStatement(
 
   // Standard or curved or orthogonal connection
   const stdMatch =
-    /\(\s*([a-zA-Z0-9_:-]+)(?:\.([a-zA-Z ]+))?\s*\)\s*(--|\|-|-\||to\s*\[[^\]]*\])\s*(?:node\s*\[[^\]]*\]\s*\{([\s\S]*?)\}\s*)?\(\s*([a-zA-Z0-9_:-]+)(?:\.([a-zA-Z ]+))?\s*\)/.exec(
+    /\(\s*([a-zA-Z0-9_:-]+)(?:\.([a-zA-Z ]+))?\s*\)\s*(--|\|-|-\||to\s*\[[^\]]*\])\s*(?:node\s*\[([^\]]*)\]\s*\{([\s\S]*?)\}\s*)?\(\s*([a-zA-Z0-9_:-]+)(?:\.([a-zA-Z ]+))?\s*\)/.exec(
       bodyAfterOpt
     );
 
@@ -650,11 +739,12 @@ function parseSingleDrawStatement(
     id: `edge_${autoIdx}`,
     from: stdMatch[1],
     fromAnchor: stdMatch[2],
-    to: stdMatch[5],
-    toAnchor: stdMatch[6],
+    to: stdMatch[6],
+    toAnchor: stdMatch[7],
     routeType,
     bendAngle,
-    label: stdMatch[4]?.trim(),
+    label: stdMatch[5]?.trim(),
+    labelOffset: parseEdgeLabelOffset(stdMatch[4]),
     arrowStart: Object.keys(mergedOpts).some((k) => k.startsWith('<') || k.startsWith('Stealth-')),
     arrowEnd: hasArrowEnd,
     stroke: mergedOpts['draw'] || 'nips_slate!85!black',
@@ -717,7 +807,7 @@ function parsePgfAxisBlock(
   const xlabelOffset = parseOffsetPair(axisOpts['xlabel_offset']);
   const ylabelOffset = parseOffsetPair(axisOpts['ylabel_offset']);
 
-  // Extract legend position `at={(lx, ly)}` inside `legend style={...}` if present
+  // Extract legend position `at={(lx, ly)}` and optional scale inside `legend style={...}` or `legend_scale`
   let legendPos = { x: 0.04, y: 0.94 };
   let legendCoordSpan: SourceSpan | undefined;
   const legendAtMatch =
@@ -737,6 +827,25 @@ function parsePgfAxisBlock(
       blockStart + legendAtMatch.index + openParen + 1,
       blockStart + legendAtMatch.index + closeParen
     );
+  }
+
+  let legendScale: number | undefined;
+  if (axisOpts['legend_scale']) {
+    const parsedScale = parseFloat(axisOpts['legend_scale']);
+    if (!isNaN(parsedScale) && parsedScale > 0) {
+      legendScale = parsedScale;
+    }
+  } else {
+    const legendScaleMatch =
+      /legend\s+style\s*=\s*\{[^\n]*?scale\s*=\s*([0-9]*\.?[0-9]+)/.exec(
+        rawBlock
+      );
+    if (legendScaleMatch) {
+      const parsedScale = parseFloat(legendScaleMatch[1]);
+      if (!isNaN(parsedScale) && parsedScale > 0) {
+        legendScale = parsedScale;
+      }
+    }
   }
 
   // Detect chartType (`line` | `bar` | `heatmap` | `boxplot`)
@@ -851,6 +960,7 @@ function parsePgfAxisBlock(
     showGrid,
     showLegend: showLegend && (series.length > 0 || chartType === 'line' || chartType === 'bar'),
     legendPos,
+    legendScale,
     titleOffset,
     xlabelOffset,
     ylabelOffset,

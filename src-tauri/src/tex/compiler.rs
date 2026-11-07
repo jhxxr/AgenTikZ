@@ -19,10 +19,13 @@ pub struct TexCompileResult {
 pub async fn tex_compile_preview(
     tex_source: String,
     tex_engine: Option<String>,
+    project_dir: Option<String>,
 ) -> TexCompileResult {
+    let has_cjk = tex_source.chars().any(|c| ('\u{4E00}'..='\u{9FFF}').contains(&c));
     let engine = match tex_engine.as_deref() {
         Some("pdflatex") => "pdflatex",
         Some("xelatex") => "xelatex",
+        _ if has_cjk => "xelatex",
         _ => "latex",
     };
 
@@ -59,8 +62,22 @@ pub async fn tex_compile_preview(
     }
 
     let mut latex_cmd = Command::new(engine);
+    #[cfg(target_os = "windows")]
+    {
+        latex_cmd.creation_flags(0x0800_0000);
+    }
     if engine == "xelatex" {
         latex_cmd.arg("-no-pdf");
+    }
+    if let Some(ref proj) = project_dir {
+        let trimmed = proj.trim();
+        if !trimmed.is_empty() {
+            let sep = if cfg!(windows) { ";" } else { ":" };
+            let existing = std::env::var("TEXINPUTS").unwrap_or_default();
+            let normalized = trimmed.replace('\\', "/");
+            let clean_dir = normalized.trim_end_matches('/');
+            latex_cmd.env("TEXINPUTS", format!("{}//{}{}", clean_dir, sep, existing));
+        }
     }
     latex_cmd
         .args([
@@ -75,11 +92,15 @@ pub async fn tex_compile_preview(
     let result = if let Ok(output) = latex_out {
         if output.status.success() && intermediate_path.exists() {
             let mut dvisvgm_cmd = Command::new("dvisvgm");
+            #[cfg(target_os = "windows")]
+            {
+                dvisvgm_cmd.creation_flags(0x0800_0000);
+            }
             if engine == "pdflatex" {
                 dvisvgm_cmd.arg("--pdf");
             }
             let dvisvgm_out = dvisvgm_cmd
-                .args(["--no-fonts", intermediate_file, "-o", "figure.svg"])
+                .args(["--no-fonts", "--bbox=min", intermediate_file, "-o", "figure.svg"])
                 .current_dir(&temp_dir)
                 .output()
                 .await;

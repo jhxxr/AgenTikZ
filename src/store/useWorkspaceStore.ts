@@ -17,6 +17,7 @@ import {
   patchEdgeElement,
   patchElementsCoordinates,
   patchFigureCaptionAndLabel,
+  patchImageNodePath,
   patchNodeLabel,
   patchNodeOptions,
 } from '../core/parser/patcher';
@@ -27,7 +28,7 @@ import {
 import { JOURNAL_THEMES } from '../core/themes/journal-presets';
 import { useSettingsStore } from './useSettingsStore';
 
-export type LeftSidebarTab = 'library' | 'code';
+export type LeftSidebarTab = 'project' | 'library' | 'code';
 
 export type CanvasTool =
   | 'select'
@@ -66,6 +67,8 @@ interface WorkspaceState {
   lastChangeInfo: LastTikzChangeInfo | null;
   showGrid: boolean;
   snapToGrid: boolean;
+  canvasWidthCm: number;
+  canvasHeightCm: number;
   zoom: number;
   pan: { x: number; y: number };
   previewMode: PreviewMode;
@@ -74,14 +77,19 @@ interface WorkspaceState {
   texCompilerStatus: string | null;
   undoStack: string[];
   redoStack: string[];
+  isAgentPanelCollapsed: boolean;
 
   // Actions
   setLeftTab: (tab: LeftSidebarTab) => void;
+  setAgentPanelCollapsed: (collapsed: boolean) => void;
+  toggleAgentPanel: () => void;
   setActiveTool: (tool: CanvasTool) => void;
   setActiveTheme: (themeId: JournalThemeId) => void;
   setSelectedIds: (ids: string[]) => void;
   setShowGrid: (show: boolean) => void;
   setSnapToGrid: (snap: boolean) => void;
+  setCanvasSizeCm: (widthCm: number, heightCm: number) => void;
+  fitCanvasToContent: (paddingCm?: number) => void;
   setZoom: (zoom: number) => void;
   setPan: (pan: { x: number; y: number }) => void;
   setPreviewMode: (mode: PreviewMode) => void;
@@ -110,6 +118,7 @@ interface WorkspaceState {
       residualOffset?: number;
       bendAngle?: number;
       label?: string;
+      labelOffset?: { x: number; y: number };
       stroke?: string;
       lineWidth?: string;
       dashed?: boolean;
@@ -131,6 +140,7 @@ interface WorkspaceState {
         | 'showGrid'
         | 'showLegend'
         | 'legendPos'
+        | 'legendScale'
         | 'titleOffset'
         | 'xlabelOffset'
         | 'ylabelOffset'
@@ -151,6 +161,24 @@ interface WorkspaceState {
   nudgeSelectedElements: (dxCm: number, dyCm: number) => void;
 
   addPrimitiveToCanvas: (primitiveId: string, x?: number, y?: number) => void;
+  addImageAssetToCanvas: (
+    relativePath: string,
+    x?: number,
+    y?: number,
+    widthCm?: number,
+    heightCm?: number
+  ) => void;
+  updateImageNodePathById: (id: string, newRelativePath: string) => void;
+  applyCanvasDocumentState: (docState: {
+    tikzCode: string;
+    activeThemeId?: JournalThemeId;
+    zoom?: number;
+    pan?: { x: number; y: number };
+    showGrid?: boolean;
+    snapToGrid?: boolean;
+    canvasWidthCm?: number;
+    canvasHeightCm?: number;
+  }) => void;
   addEdgeBetweenNodes: (
     fromId: string,
     toId: string,
@@ -199,6 +227,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   lastChangeInfo: null,
   showGrid: useSettingsStore.getState().showGridByDefault,
   snapToGrid: useSettingsStore.getState().snapToGridByDefault,
+  canvasWidthCm: 16.0,
+  canvasHeightCm: 10.0,
   zoom: 1,
   pan: FULL_FIGURE_TEMPLATES[0].recommendedPan || { x: 80, y: 495 },
   previewMode: 'interactive',
@@ -207,8 +237,13 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   texCompilerStatus: null,
   undoStack: [],
   redoStack: [],
+  isAgentPanelCollapsed: false,
 
   setLeftTab: (leftTab) => set({ leftTab }),
+  setAgentPanelCollapsed: (isAgentPanelCollapsed) =>
+    set({ isAgentPanelCollapsed }),
+  toggleAgentPanel: () =>
+    set((s) => ({ isAgentPanelCollapsed: !s.isAgentPanelCollapsed })),
   setActiveTool: (activeTool) => set({ activeTool }),
   setActiveTheme: (activeThemeId) => set({ activeThemeId }),
 
@@ -222,6 +257,88 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
   setShowGrid: (showGrid) => set({ showGrid }),
   setSnapToGrid: (snapToGrid) => set({ snapToGrid }),
+  setCanvasSizeCm: (widthCm, heightCm) => {
+    const w = Math.max(4.0, Math.min(40.0, Math.round(widthCm * 10) / 10));
+    const h = Math.max(4.0, Math.min(40.0, Math.round(heightCm * 10) / 10));
+    set({ canvasWidthCm: w, canvasHeightCm: h });
+  },
+  fitCanvasToContent: (paddingCm = 1.0) => {
+    const { parsedDoc } = get();
+    if (parsedDoc.nodes.length === 0 && parsedDoc.charts.length === 0) {
+      set({
+        canvasWidthCm: 16.0,
+        canvasHeightCm: 10.0,
+        pan: { x: 90, y: 495 },
+      });
+      return;
+    }
+
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+
+    for (const node of parsedDoc.nodes) {
+      const hw = node.width / 2;
+      const hh = node.height / 2;
+      const depthExtraX =
+        node.subtype === 'cuboid' ? (node.depth || 0.55) * 0.75 : 0;
+      const depthExtraY =
+        node.subtype === 'cuboid' ? (node.depth || 0.55) * 0.6 : 0;
+      const bottomExtraY = node.sublabel || node.channels ? 0.5 : 0;
+      minX = Math.min(minX, node.x - hw);
+      maxX = Math.max(maxX, node.x + hw + depthExtraX);
+      minY = Math.min(minY, node.y - hh - bottomExtraY);
+      maxY = Math.max(maxY, node.y + hh + depthExtraY);
+    }
+
+    for (const chart of parsedDoc.charts) {
+      minX = Math.min(minX, chart.x - 1.1);
+      maxX = Math.max(maxX, chart.x + chart.width + 0.5);
+      minY = Math.min(minY, chart.y - (chart.subcaption ? 1.3 : 0.9));
+      maxY = Math.max(maxY, chart.y + chart.height + 0.7);
+    }
+
+    // The fixed artboard top-left corner sits at (-1.0, 8.5) in TikZ coordinates.
+    // Shift all elements so content's top-left starts at (-1.0 + paddingCm, 8.5 - paddingCm)
+    const targetMinX = -1.0 + paddingCm;
+    const targetMaxY = 8.5 - paddingCm;
+    const dx = Number((targetMinX - minX).toFixed(2));
+    const dy = Number((targetMaxY - maxY).toFixed(2));
+
+    if (Math.abs(dx) >= 0.15 || Math.abs(dy) >= 0.15) {
+      const moves: Array<{ id: string; x: number; y: number }> = [];
+      for (const n of parsedDoc.nodes) {
+        moves.push({ id: n.id, x: n.x + dx, y: n.y + dy });
+      }
+      for (const c of parsedDoc.charts) {
+        moves.push({ id: c.id, x: c.x + dx, y: c.y + dy });
+      }
+      if (moves.length > 0) {
+        get().moveElementsByPosition(moves, true);
+      }
+    }
+
+    const contentSpanW = Math.max(2.0, maxX - minX);
+    const contentSpanH = Math.max(2.0, maxY - minY);
+    const nextW = Math.max(
+      4.0,
+      Math.min(40.0, Math.round((contentSpanW + paddingCm * 2) * 10) / 10)
+    );
+    const nextH = Math.max(
+      4.0,
+      Math.min(40.0, Math.round((contentSpanH + paddingCm * 2) * 10) / 10)
+    );
+
+    set({
+      canvasWidthCm: nextW,
+      canvasHeightCm: nextH,
+      pan: {
+        x: 92,
+        y: 495,
+      },
+    });
+  },
   setZoom: (zoom) => set({ zoom: Math.max(0.35, Math.min(2.5, zoom)) }),
   setPan: (pan) => set({ pan }),
   setPreviewMode: (previewMode) => set({ previewMode }),
@@ -458,7 +575,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
           ? `++(${updates.residualOffset}, 0)`
           : updates.bendAngle !== undefined
             ? `bend=${updates.bendAngle}`
-            : updates.routeType || updates.label || '连线更新';
+            : updates.labelOffset !== undefined
+              ? `xshift=${formatCoordNum(updates.labelOffset.x)}cm, yshift=${formatCoordNum(updates.labelOffset.y)}cm`
+              : updates.routeType || updates.label || '连线更新';
       set({
         highlightedLineRange: {
           startLine: updatedEdge.span.startLine,
@@ -515,6 +634,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       } else if (updates.ylabelOffset !== undefined) {
         summary = `ylabel_offset`;
         searchToken = `ylabel_offset=`;
+      } else if (updates.legendScale !== undefined) {
+        summary = `图例缩放 ${Math.round(updates.legendScale * 100)}%`;
+        searchToken = `legend style=`;
       } else if (updates.series !== undefined) {
         summary = `\\addplot 数据序列 (${updates.series.length}组)`;
         searchToken = `\\addplot`;
@@ -675,6 +797,113 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     if (lastEl) {
       get().setSelectedIds([lastEl.id]);
     }
+  },
+
+  addImageAssetToCanvas: (
+    relativePath,
+    x = 4.5,
+    y = 4.2,
+    widthCm = 4.2,
+    heightCm = 3.0
+  ) => {
+    const { tikzCode, parsedDoc } = get();
+    const cleanRel = relativePath.replace(/\\/g, '/').trim();
+    const imgCount =
+      parsedDoc.nodes.filter((n) => n.subtype === 'image').length + 1;
+    let nodeId = `img_${imgCount}`;
+    while (parsedDoc.nodes.some((n) => n.id === nodeId)) {
+      nodeId = `img_${Math.floor(Math.random() * 900 + 100)}`;
+    }
+    const xStr = formatCoordNum(x);
+    const yStr = formatCoordNum(y);
+    const wStr = `${formatCoordNum(widthCm)}cm`;
+    const hStr = `${formatCoordNum(heightCm)}cm`;
+    const snippet = `\\node[inner sep=0pt, minimum width=${wStr}, minimum height=${hStr}, draw=nips_slate!35, line width=0.5pt, rounded corners=2pt] (${nodeId}) at (${xStr}, ${yStr}) {\\includegraphics[width=${wStr}, height=${hStr}]{${cleanRel}}};`;
+    const nextCode = insertTikzStatement(tikzCode, snippet);
+    get().setTikzCode(nextCode, true);
+
+    const nextDoc = get().parsedDoc;
+    const created = nextDoc.nodes.find((n) => n.id === nodeId);
+    if (created) {
+      get().setSelectedIds([created.id]);
+      set({
+        highlightedLineRange: {
+          startLine: created.span.startLine,
+          endLine: created.span.endLine,
+        },
+        lastChangeInfo: {
+          elementId: created.id,
+          fieldLabel: '插入同目录图片素材',
+          newValue: cleanRel,
+          lineRange: {
+            startLine: created.span.startLine,
+            endLine: created.span.endLine,
+          },
+          timestamp: Date.now(),
+        },
+      });
+    }
+  },
+
+  updateImageNodePathById: (id, newRelativePath) => {
+    const { tikzCode, parsedDoc } = get();
+    const node = parsedDoc.nodes.find((n) => n.id === id);
+    if (!node) return;
+    const oldPath = node.imagePath;
+    const cleanRel = newRelativePath.replace(/\\/g, '/').trim();
+    const patched = patchImageNodePath(tikzCode, node, cleanRel);
+    get().setTikzCode(patched, true);
+
+    const updated = get().parsedDoc.nodes.find((n) => n.id === id);
+    if (updated) {
+      set({
+        highlightedLineRange: {
+          startLine: updated.span.startLine,
+          endLine: updated.span.endLine,
+        },
+        lastChangeInfo: {
+          elementId: id,
+          fieldLabel: '素材图片路径 \\includegraphics',
+          oldValue: oldPath,
+          newValue: cleanRel,
+          lineRange: {
+            startLine: updated.span.startLine,
+            endLine: updated.span.endLine,
+          },
+          timestamp: Date.now(),
+        },
+      });
+    }
+  },
+
+  applyCanvasDocumentState: (docState) => {
+    const nextDoc = parseTikzDocument(docState.tikzCode);
+    const primaryTarget =
+      nextDoc.nodes.find((n) => n.subtype !== 'container') ||
+      nextDoc.charts[0] ||
+      nextDoc.elements[0];
+    const nextSelected = primaryTarget ? [primaryTarget.id] : [];
+    set({
+      tikzCode: docState.tikzCode,
+      parsedDoc: nextDoc,
+      activeThemeId:
+        docState.activeThemeId && docState.activeThemeId in JOURNAL_THEMES
+          ? docState.activeThemeId
+          : get().activeThemeId,
+      zoom: docState.zoom ?? 1,
+      pan: docState.pan ?? { x: 80, y: 495 },
+      showGrid: docState.showGrid ?? get().showGrid,
+      snapToGrid: docState.snapToGrid ?? get().snapToGrid,
+      canvasWidthCm: docState.canvasWidthCm ?? 16.0,
+      canvasHeightCm: docState.canvasHeightCm ?? 10.0,
+      selectedIds: nextSelected,
+      highlightedLineRange: computeLineRangeForSelection(nextDoc, nextSelected),
+      lastChangeInfo: null,
+      undoStack: [],
+      redoStack: [],
+      compiledSvg: null,
+      previewMode: 'interactive',
+    });
   },
 
   addEdgeBetweenNodes: (fromId, toId, routeType = 'direct') => {

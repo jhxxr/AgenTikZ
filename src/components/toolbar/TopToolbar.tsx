@@ -4,6 +4,7 @@ import {
   useWorkspaceStore,
 } from '../../store/useWorkspaceStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
+import { useProjectStore } from '../../store/useProjectStore';
 import { JOURNAL_THEMES } from '../../core/themes/journal-presets';
 import { JournalThemeId } from '../../types/theme';
 import {
@@ -21,24 +22,29 @@ import {
   BarChart3,
   BookOpenText,
   Box,
+  CheckCircle2,
+  ChevronDown,
   CirclePlus,
   CornerDownRight,
   Download,
   Eye,
   FileCode2,
   FileText,
+  FolderOpen,
   Group,
   Image as ImageIcon,
   MousePointer,
   Palette,
+  PanelRightClose,
+  PanelRightOpen,
   Play,
   Redo2,
+  Save,
   Settings,
   Sigma,
-  Square,
   Sparkles,
+  Square,
   Undo2,
-  ChevronDown,
 } from 'lucide-react';
 
 function triggerFileDownload(filename: string, content: string, mimeType: string) {
@@ -53,14 +59,40 @@ function triggerFileDownload(filename: string, content: string, mimeType: string
   URL.revokeObjectURL(url);
 }
 
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const result = typeof reader.result === 'string' ? reader.result : '';
+      const base64 = result.includes(',') ? result.split(',')[1] : result;
+      resolve(base64);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
 export const TopToolbar: React.FC = () => {
   const {
     tikzCode, parsedDoc, activeTool, activeThemeId, selectedIds,
     previewMode, undoStack, redoStack, isCompilingTex,
+    isAgentPanelCollapsed,
     setActiveTool, setActiveTheme, setPreviewMode, setCompiledSvg,
-    setIsCompilingTex, undo, redo, alignSelectedNodes,
+    setIsCompilingTex, undo, redo, alignSelectedNodes, toggleAgentPanel,
   } = useWorkspaceStore();
   const { openSettings, texEngine } = useSettingsStore();
+  const {
+    projectDir,
+    projectName,
+    activeCanvasFileName,
+    saveStatus,
+    lastExportedNotice,
+    setPickerOpen,
+    saveActiveCanvasNow,
+    exportFileToProject,
+  } = useProjectStore();
+
+  const stem = activeCanvasFileName.replace(/\.canvas\.json$/i, '') || 'figure';
 
   const [showExportMenu, setShowExportMenu] = useState(false);
   const exportMenuRef = useRef<HTMLDivElement>(null);
@@ -109,15 +141,23 @@ export const TopToolbar: React.FC = () => {
   ];
 
   const handleCompileTex = async () => {
+    if (previewMode !== 'interactive') {
+      setPreviewMode('interactive');
+      return;
+    }
     setIsCompilingTex(true);
     try {
       const fullTex = buildStandaloneLatexDocument(tikzCode, activeThemeId);
       const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
       if (isTauri) {
         const { invoke } = await import('@tauri-apps/api/core');
+        const currentProjectDir = useProjectStore.getState().projectDir;
         const res = await invoke<{ ok: boolean; svg?: string; message: string }>('tex_compile_preview', {
           texSource: fullTex,
+          latexCode: fullTex,
           texEngine,
+          engine: texEngine,
+          projectDir: currentProjectDir,
         });
         if (res.ok && res.svg) {
           setCompiledSvg(res.svg, res.message);
@@ -128,9 +168,11 @@ export const TopToolbar: React.FC = () => {
       }
       const svgEl = document.getElementById('agentikz-canvas-svg') as SVGSVGElement | null;
       if (svgEl) setCompiledSvg(exportCleanCanvasSvg(svgEl), '内置高保真矢量引擎渲染 (无背景/纯矢量公式)');
-      setPreviewMode(previewMode === 'tex_split' ? 'interactive' : 'tex_split');
+      setPreviewMode('tex_split');
     } catch {
-      setPreviewMode(previewMode === 'tex_split' ? 'interactive' : 'tex_split');
+      const svgEl = document.getElementById('agentikz-canvas-svg') as SVGSVGElement | null;
+      if (svgEl) setCompiledSvg(exportCleanCanvasSvg(svgEl), '内置高保真矢量引擎渲染 (无背景/纯矢量公式)');
+      setPreviewMode('tex_split');
     } finally {
       setIsCompilingTex(false);
     }
@@ -140,7 +182,7 @@ export const TopToolbar: React.FC = () => {
     const svgEl = document.getElementById('agentikz-canvas-svg') as SVGSVGElement | null;
     if (!svgEl) return;
     const cleanSvg = exportCleanCanvasSvg(svgEl);
-    triggerFileDownload('agentikz-figure.svg', cleanSvg, 'image/svg+xml;charset=utf-8');
+    triggerFileDownload(`${stem}.svg`, cleanSvg, 'image/svg+xml;charset=utf-8');
     setShowExportMenu(false);
   };
 
@@ -153,7 +195,7 @@ export const TopToolbar: React.FC = () => {
       const url = URL.createObjectURL(pngBlob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'agentikz-figure.png';
+      a.download = `${stem}.png`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -163,22 +205,83 @@ export const TopToolbar: React.FC = () => {
     }
   };
 
+  const handleProjectExportTikz = async () => {
+    setShowExportMenu(false);
+    await exportFileToProject(`${stem}.tikz`, tikzCode, false);
+  };
+
+  const handleProjectExportSvg = async () => {
+    const svgEl = document.getElementById('agentikz-canvas-svg') as SVGSVGElement | null;
+    if (!svgEl) return;
+    setShowExportMenu(false);
+    const cleanSvg = exportCleanCanvasSvg(svgEl);
+    await exportFileToProject(`${stem}.svg`, cleanSvg, false);
+  };
+
+  const handleProjectExportPng = async () => {
+    const svgEl = document.getElementById('agentikz-canvas-svg') as SVGSVGElement | null;
+    if (!svgEl) return;
+    setShowExportMenu(false);
+    try {
+      const pngBlob = await exportCleanCanvasPng(svgEl, 3);
+      const base64Data = await blobToBase64(pngBlob);
+      await exportFileToProject(`${stem}.png`, base64Data, true);
+    } catch (err) {
+      console.error('Failed to export PNG to project:', err);
+    }
+  };
+
+  const saveDotClass =
+    saveStatus === 'saved'
+      ? 'bg-emerald-500'
+      : saveStatus === 'dirty'
+      ? 'bg-amber-500'
+      : saveStatus === 'saving'
+      ? 'bg-blue-500 animate-pulse'
+      : saveStatus === 'error'
+      ? 'bg-rose-500'
+      : 'bg-slate-400';
+
   return (
     <header className="h-12 bg-toolbar-gradient border-b border-slate-200/80 px-3 flex items-center justify-between gap-2 shrink-0 select-none z-30">
-      {/* Left: Brand + Undo/Redo */}
-      <div className="flex items-center gap-2.5">
+      {/* Left: Brand + Project Folder + Save + Undo/Redo */}
+      <div className="flex items-center gap-2">
         <div className="flex items-center gap-2">
           <img
             src="/icon.svg"
             alt="AgenTikZ"
             className="w-7 h-7 rounded-lg shadow-xs select-none"
           />
-          <div className="leading-none">
+          <div className="leading-none hidden sm:block">
             <span className="font-bold text-[13px] tracking-tight text-slate-900">AgenTikZ</span>
             <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-gradient-to-r from-blue-50 to-indigo-50 text-blue-600 border border-blue-200/60 font-medium">
               Studio
             </span>
           </div>
+        </div>
+
+        <div className="w-px h-5 bg-slate-200/80" />
+
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setPickerOpen(true)}
+            title="切换或管理论文/项目文件夹 (Ctrl+O)"
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium bg-white/80 hover:bg-white text-slate-700 border border-slate-200/80 shadow-xs transition-all cursor-pointer max-w-[160px]"
+          >
+            <FolderOpen className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+            <span className="truncate">{projectName || '未关联项目'}</span>
+          </button>
+
+          <button
+            onClick={() => void saveActiveCanvasNow()}
+            title="保存当前画布到 agentikzfile/ (Ctrl+S)"
+            className="relative flex items-center justify-center p-1.5 rounded-lg text-slate-600 hover:text-slate-900 bg-white/70 hover:bg-white border border-slate-200/70 shadow-xs transition-all cursor-pointer"
+          >
+            <Save className="w-3.5 h-3.5" />
+            <span
+              className={`absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full ring-2 ring-white ${saveDotClass}`}
+            />
+          </button>
         </div>
 
         <div className="w-px h-5 bg-slate-200/80" />
@@ -230,8 +333,15 @@ export const TopToolbar: React.FC = () => {
         )}
       </div>
 
-      {/* Right: Theme + Preview + Export */}
+      {/* Right: Theme + Preview + Export + Agent Toggle */}
       <div className="flex items-center gap-1.5">
+        {lastExportedNotice && (
+          <div className="hidden lg:flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-[11px] font-medium shadow-xs animate-fade-in">
+            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+            <span className="max-w-[200px] truncate">{lastExportedNotice}</span>
+          </div>
+        )}
+
         <div className="flex items-center gap-1.5 bg-white/70 border border-slate-200/70 rounded-lg px-2 py-1 shadow-sm">
           <Palette className="w-3.5 h-3.5 text-slate-400" />
           <select value={activeThemeId} onChange={(e) => setActiveTheme(e.target.value as JournalThemeId)}
@@ -270,17 +380,58 @@ export const TopToolbar: React.FC = () => {
           </button>
 
           {showExportMenu && (
-            <div className="absolute right-0 mt-2 w-64 bg-white border border-slate-200/80 rounded-2xl shadow-xl py-2 z-40 text-xs overflow-hidden">
+            <div className="absolute right-0 mt-2 w-72 bg-white border border-slate-200/80 rounded-2xl shadow-xl py-2 z-40 text-xs overflow-hidden">
+              {projectDir && (
+                <>
+                  <div className="px-3.5 py-1.5 text-[10px] font-semibold text-blue-600 uppercase tracking-wider bg-blue-50/50">
+                    一键导出至项目目录 (agentikzfile/export/)
+                  </div>
+                  {[
+                    {
+                      icon: <FileCode2 className="w-4 h-4 text-blue-600" />,
+                      title: `${stem}.tikz (TikZ 源码)`,
+                      desc: '直接保存到 agentikzfile/export/ 供论文 \\input',
+                      action: () => void handleProjectExportTikz(),
+                    },
+                    {
+                      icon: <ImageIcon className="w-4 h-4 text-amber-500" />,
+                      title: `${stem}.svg (无背景纯矢量图)`,
+                      desc: '直接保存纯矢量 SVG 到项目导出目录',
+                      action: () => void handleProjectExportSvg(),
+                    },
+                    {
+                      icon: <ImageIcon className="w-4 h-4 text-rose-500" />,
+                      title: `${stem}.png (300DPI 高清位图)`,
+                      desc: '直接保存高清透明 PNG 到项目导出目录',
+                      action: () => void handleProjectExportPng(),
+                    },
+                  ].map((item, i) => (
+                    <button
+                      key={`proj-${i}`}
+                      onClick={item.action}
+                      className="w-full text-left px-3.5 py-2 hover:bg-blue-50/60 flex items-center gap-2.5 text-slate-700 transition-colors cursor-pointer"
+                    >
+                      {item.icon}
+                      <div className="min-w-0">
+                        <div className="font-medium text-slate-800 truncate">{item.title}</div>
+                        <div className="text-[10px] text-slate-400 truncate">{item.desc}</div>
+                      </div>
+                    </button>
+                  ))}
+                  <div className="my-1.5 border-t border-slate-100" />
+                </>
+              )}
+
               <div className="px-3.5 py-1.5 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
-                论文插图导出
+                另存为下载文件
               </div>
               {[
                 { icon: <FileCode2 className="w-4 h-4 text-blue-500" />, title: 'TikZ 代码 (.tikz)', desc: '可直接 \\input 嵌入论文',
-                  action: () => { triggerFileDownload('figure.tikz', tikzCode, 'text/plain;charset=utf-8'); setShowExportMenu(false); } },
+                  action: () => { triggerFileDownload(`${stem}.tikz`, tikzCode, 'text/plain;charset=utf-8'); setShowExportMenu(false); } },
                 { icon: <BookOpenText className="w-4 h-4 text-indigo-500" />, title: 'Figure 环境 (.tex)', desc: '含 \\caption + \\label',
-                  action: () => { triggerFileDownload('figure-env.tex', buildPaperFigureEnvironment(tikzCode, parsedDoc.figureCaption, parsedDoc.figureLabel), 'text/plain;charset=utf-8'); setShowExportMenu(false); } },
+                  action: () => { triggerFileDownload(`${stem}-env.tex`, buildPaperFigureEnvironment(tikzCode, parsedDoc.figureCaption, parsedDoc.figureLabel), 'text/plain;charset=utf-8'); setShowExportMenu(false); } },
                 { icon: <FileText className="w-4 h-4 text-emerald-500" />, title: 'Standalone 文档 (.tex)', desc: '含导言区与色彩宏',
-                  action: () => { triggerFileDownload('figure-standalone.tex', buildStandaloneLatexDocument(tikzCode, activeThemeId), 'text/plain;charset=utf-8'); setShowExportMenu(false); } },
+                  action: () => { triggerFileDownload(`${stem}-standalone.tex`, buildStandaloneLatexDocument(tikzCode, activeThemeId), 'text/plain;charset=utf-8'); setShowExportMenu(false); } },
                 { icon: <ImageIcon className="w-4 h-4 text-amber-500" />, title: '矢量图 (.svg)', desc: '无网格透明背景 · 纯矢量公式',
                   action: handleExportSvg },
                 { icon: <ImageIcon className="w-4 h-4 text-rose-500" />, title: '高清位图 (.png)', desc: '300DPI 透明背景 · PPT/文档即插即用',
@@ -289,7 +440,7 @@ export const TopToolbar: React.FC = () => {
                   action: () => { setShowExportMenu(false); window.print(); } },
               ].map((item, i) => (
                 <button key={i} onClick={item.action}
-                  className="w-full text-left px-3.5 py-2 hover:bg-slate-50 flex items-center gap-2.5 text-slate-700 transition-colors">
+                  className="w-full text-left px-3.5 py-2 hover:bg-slate-50 flex items-center gap-2.5 text-slate-700 transition-colors cursor-pointer">
                   {item.icon}
                   <div>
                     <div className="font-medium text-slate-800">{item.title}</div>
@@ -300,6 +451,22 @@ export const TopToolbar: React.FC = () => {
             </div>
           )}
         </div>
+
+        <button
+          onClick={toggleAgentPanel}
+          title="折叠/展开右侧 AI 绘图助手"
+          className={`flex items-center justify-center p-1.5 rounded-lg border transition-all cursor-pointer ${
+            isAgentPanelCollapsed
+              ? 'bg-white/70 text-slate-600 border-slate-200/70 hover:bg-white shadow-sm'
+              : 'bg-blue-50 text-blue-600 border-blue-200/80 hover:bg-blue-100/80 shadow-sm'
+          }`}
+        >
+          {isAgentPanelCollapsed ? (
+            <PanelRightOpen className="w-4 h-4" />
+          ) : (
+            <PanelRightClose className="w-4 h-4" />
+          )}
+        </button>
       </div>
     </header>
   );

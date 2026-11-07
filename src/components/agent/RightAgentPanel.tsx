@@ -7,11 +7,14 @@ import {
   Bot,
   Check,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Code2,
   Cpu,
   History,
   Layers,
+  PanelRightClose,
+  PanelRightOpen,
   Plus,
   RotateCcw,
   Send,
@@ -43,7 +46,13 @@ export const RightAgentPanel: React.FC = () => {
     revertPatchProposal,
   } = useAgentStore();
 
-  const { selectedIds, parsedDoc, setLeftTab } = useWorkspaceStore();
+  const {
+    selectedIds,
+    parsedDoc,
+    setLeftTab,
+    isAgentPanelCollapsed,
+    toggleAgentPanel,
+  } = useWorkspaceStore();
   const { openSettings } = useSettingsStore();
 
   const [inputText, setInputText] = useState('');
@@ -91,6 +100,49 @@ export const RightAgentPanel: React.FC = () => {
     '在右侧添加 Cross-Attention 注意力热力图',
     '生成 CVPR 多尺度 3D 视觉特征金字塔',
   ];
+
+  if (isAgentPanelCollapsed) {
+    return (
+      <aside className="w-11 h-full bg-slate-50/95 border-l border-slate-200/80 flex flex-col items-center py-3 justify-between shrink-0 select-none">
+        <div className="flex flex-col items-center gap-2">
+          <button
+            onClick={toggleAgentPanel}
+            className="p-1.5 text-slate-600 hover:text-blue-600 hover:bg-white rounded-lg border border-transparent hover:border-slate-200 transition-colors cursor-pointer"
+            title="展开 AI 绘图助手面板"
+          >
+            <PanelRightOpen className="w-4 h-4" />
+          </button>
+          <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 text-white flex items-center justify-center shadow-sm">
+            <Bot className="w-3.5 h-3.5" />
+          </div>
+        </div>
+
+        <button
+          onClick={toggleAgentPanel}
+          className="text-[11px] font-semibold text-slate-500 hover:text-blue-600 tracking-widest cursor-pointer py-2"
+          style={{ writingMode: 'vertical-rl' }}
+          title="展开 AI 绘图助手面板"
+        >
+          AI 绘图助手
+        </button>
+
+        <div className="flex flex-col items-center gap-1.5">
+          <span
+            className="w-2 h-2 rounded-full"
+            style={{ backgroundColor: activeProvider.badgeColor }}
+            title={`${activeProvider.name}${activeProvider.detected ? ' · 已就绪' : ''}`}
+          />
+          <button
+            onClick={toggleAgentPanel}
+            className="p-1 text-slate-400 hover:text-blue-600 cursor-pointer"
+            title="展开 AI 绘图助手面板"
+          >
+            <ChevronLeft className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </aside>
+    );
+  }
 
   return (
     <aside className="w-[360px] h-full bg-sidebar-gradient border-l border-slate-200/80 flex flex-col shrink-0 select-none">
@@ -163,6 +215,13 @@ export const RightAgentPanel: React.FC = () => {
                 </div>
               )}
             </div>
+            <button
+              onClick={toggleAgentPanel}
+              className="p-1.5 text-slate-600 hover:text-blue-600 hover:bg-white rounded-md border border-transparent hover:border-slate-200 transition-colors cursor-pointer"
+              title="折叠 AI 绘图助手面板"
+            >
+              <PanelRightClose className="w-3.5 h-3.5" />
+            </button>
           </div>
         </div>
 

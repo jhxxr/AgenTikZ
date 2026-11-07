@@ -55,6 +55,33 @@ export function patchNodeLabel(
   newSublabel?: string
 ): string {
   if (!node.labelSpan) return source;
+
+  if (node.subtype === 'image') {
+    const oldBody = source.slice(node.labelSpan.start, node.labelSpan.end);
+    const igMatch = /\\includegraphics\s*(?:\[[^\]]*\])?\s*\{[^}]+\}/.exec(oldBody);
+    const igCmd = igMatch
+      ? igMatch[0]
+      : `\\includegraphics[width=${formatCoordNum(node.width)}cm, height=${formatCoordNum(node.height)}cm]{${node.imagePath || ''}}`;
+    const defaultFileName =
+      (node.imagePath || '').split('/').pop() || node.imagePath || '';
+    const trimmedLabel = newLabel.trim();
+    const trimmedSub = (newSublabel ?? '').trim();
+
+    const parts: string[] = [igCmd];
+    if (trimmedLabel && trimmedLabel !== defaultFileName) {
+      parts.push(trimmedLabel);
+    }
+    if (trimmedSub) {
+      parts.push(`{\\scriptsize ${trimmedSub}}`);
+    }
+    const combinedImageBody = parts.join(' \\\\ ');
+    return (
+      source.slice(0, node.labelSpan.start) +
+      combinedImageBody +
+      source.slice(node.labelSpan.end)
+    );
+  }
+
   const combined =
     newSublabel && newSublabel.trim()
       ? `${newLabel.trim()} \\\\ {\\scriptsize ${newSublabel.trim()}}`
@@ -85,21 +112,67 @@ export function patchNodeOptions(
   }
   const formatted = formatTikzOptions(updatedOpts).trim();
 
+  let nextSource = source;
+  // If this is an image node and width/height changed, also sync \includegraphics[width=..., height=...] inside {label}
+  if (
+    node.subtype === 'image' &&
+    node.labelSpan &&
+    (optionPatches['minimum width'] !== undefined ||
+      optionPatches['minimum height'] !== undefined)
+  ) {
+    const nextW = optionPatches['minimum width'] || `${formatCoordNum(node.width)}cm`;
+    const nextH = optionPatches['minimum height'] || `${formatCoordNum(node.height)}cm`;
+    const oldBody = nextSource.slice(node.labelSpan.start, node.labelSpan.end);
+    const updatedBody = oldBody.replace(
+      /\\includegraphics\s*(?:\[[^\]]*\])?\s*\{([^}]+)\}/,
+      `\\includegraphics[width=${nextW}, height=${nextH}]{$1}`
+    );
+    nextSource =
+      nextSource.slice(0, node.labelSpan.start) +
+      updatedBody +
+      nextSource.slice(node.labelSpan.end);
+  }
+
   if (node.optionsSpan) {
     return (
-      source.slice(0, node.optionsSpan.start) +
+      nextSource.slice(0, node.optionsSpan.start) +
       formatted +
-      source.slice(node.optionsSpan.end)
+      nextSource.slice(node.optionsSpan.end)
     );
   }
 
   // If the node didn't have `[...]` brackets yet, insert right after `\node`
-  const rawStmt = source.slice(node.span.start, node.span.end);
+  const rawStmt = nextSource.slice(node.span.start, node.span.end);
   const replacedStmt = rawStmt.replace(/^(\s*\\node)\b/, `$1[${formatted}]`);
   return (
-    source.slice(0, node.span.start) +
+    nextSource.slice(0, node.span.start) +
     replacedStmt +
-    source.slice(node.span.end)
+    nextSource.slice(node.span.end)
+  );
+}
+
+/**
+ * Updates the relative file path inside an image node's `\includegraphics[...]{path}`.
+ */
+export function patchImageNodePath(
+  source: string,
+  node: TikzNodeElement,
+  newImagePath: string
+): string {
+  if (!node.labelSpan) return source;
+  const wStr = `${formatCoordNum(node.width)}cm`;
+  const hStr = `${formatCoordNum(node.height)}cm`;
+  const cleanPath = newImagePath.replace(/\\/g, '/').trim();
+  const newIgCmd = `\\includegraphics[width=${wStr}, height=${hStr}]{${cleanPath}}`;
+  const oldBody = source.slice(node.labelSpan.start, node.labelSpan.end);
+  const igRegex = /\\includegraphics\s*(?:\[[^\]]*\])?\s*\{[^}]+\}/;
+  const newBody = igRegex.test(oldBody)
+    ? oldBody.replace(igRegex, newIgCmd)
+    : newIgCmd;
+  return (
+    source.slice(0, node.labelSpan.start) +
+    newBody +
+    source.slice(node.labelSpan.end)
   );
 }
 
@@ -114,6 +187,7 @@ export function patchEdgeElement(
     residualOffset?: number;
     bendAngle?: number;
     label?: string;
+    labelOffset?: { x: number; y: number };
     stroke?: string;
     lineWidth?: string;
     dashed?: boolean;
@@ -123,6 +197,8 @@ export function patchEdgeElement(
   const nextOffset = updates.residualOffset ?? edge.residualOffset ?? 1.4;
   const nextBend = updates.bendAngle ?? edge.bendAngle ?? 28;
   const nextLabel = updates.label !== undefined ? updates.label : edge.label;
+  const nextLabelOffset =
+    updates.labelOffset !== undefined ? updates.labelOffset : edge.labelOffset;
 
   const opts: Record<string, string> = { ...edge.rawOptions };
   if (updates.stroke !== undefined) opts['draw'] = updates.stroke;
@@ -139,9 +215,19 @@ export function patchEdgeElement(
   const optStr = formatTikzOptions(opts);
   const fromRef = edge.fromAnchor ? `${edge.from}.${edge.fromAnchor}` : edge.from;
   const toRef = edge.toAnchor ? `${edge.to}.${edge.toAnchor}` : edge.to;
+  const shiftTokens: string[] = [];
+  if (nextLabelOffset) {
+    if (Math.abs(nextLabelOffset.x) >= 0.005) {
+      shiftTokens.push(`xshift=${formatCoordNum(nextLabelOffset.x)}cm`);
+    }
+    if (Math.abs(nextLabelOffset.y) >= 0.005) {
+      shiftTokens.push(`yshift=${formatCoordNum(nextLabelOffset.y)}cm`);
+    }
+  }
+  const shiftPrefix = shiftTokens.length > 0 ? `, ${shiftTokens.join(', ')}` : '';
   const labelSegment =
     nextLabel && nextLabel.trim()
-      ? ` node[midway, fill=white, inner sep=1.5pt, font=\\scriptsize] {${nextLabel.trim()}} `
+      ? ` node[midway${shiftPrefix}, fill=white, inner sep=1.5pt, font=\\scriptsize] {${nextLabel.trim()}} `
       : ' ';
 
   let newStmt = '';
@@ -226,6 +312,7 @@ export function patchChartElement(
       | 'showGrid'
       | 'showLegend'
       | 'legendPos'
+      | 'legendScale'
       | 'titleOffset'
       | 'xlabelOffset'
       | 'ylabelOffset'
@@ -297,6 +384,17 @@ export function generatePgfChartTikz(chart: TikzChartElement): string {
       `      ylabel_offset={${Math.round(chart.ylabelOffset.x)}, ${Math.round(chart.ylabelOffset.y)}},`
     );
   }
+  const hasCustomLegendScale =
+    chart.legendScale !== undefined && Math.abs(chart.legendScale - 1) > 0.01;
+  const legendScaleStr = hasCustomLegendScale
+    ? Number(chart.legendScale!.toFixed(2)).toString()
+    : '1';
+  if (hasCustomLegendScale) {
+    optionalMetaLines.push(`      legend_scale=${legendScaleStr},`);
+  }
+  const legendScaleNodeOpt = hasCustomLegendScale
+    ? `, nodes={scale=${legendScaleStr}, transform shape}`
+    : '';
 
   const lines: string[] = [
     `  \\begin{scope}[shift={(${xStr}, ${yStr})}]`,
@@ -312,7 +410,7 @@ export function generatePgfChartTikz(chart: TikzChartElement): string {
     `      tick label style={font=\\scriptsize},`,
     `      label style={font=\\footnotesize},`,
     `      title style={font=\\footnotesize\\bfseries},`,
-    `      legend style={at={(${lxStr}, ${lyStr})}, anchor=north west, font=\\scriptsize, draw=gray!40, fill=white, fill opacity=0.9}`,
+    `      legend style={at={(${lxStr}, ${lyStr})}, anchor=north west, font=\\scriptsize, draw=gray!40, fill=white, fill opacity=0.9${legendScaleNodeOpt}}`,
     `    ]`,
   ];
 

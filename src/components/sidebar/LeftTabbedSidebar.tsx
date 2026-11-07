@@ -1,5 +1,10 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useWorkspaceStore } from '../../store/useWorkspaceStore';
+import {
+  useProjectStore,
+  AGENTIKZ_FOLDER_NAME,
+  ProjectAssetItem,
+} from '../../store/useProjectStore';
 import {
   FULL_FIGURE_TEMPLATES,
   PRIMITIVE_LIBRARY,
@@ -26,6 +31,17 @@ import {
   Eye,
   Zap,
   FlaskConical,
+  FolderKanban,
+  FolderOpen,
+  FileText,
+  Images,
+  RefreshCw,
+  Upload,
+  Search,
+  ExternalLink,
+  Copy,
+  Trash2,
+  FilePlus2,
 } from 'lucide-react';
 
 // --- Venue color accent for template card top band ---
@@ -114,6 +130,67 @@ const TemplateMinimap: React.FC<{ tpl: FullFigureTemplate }> = React.memo(({ tpl
   );
 });
 
+const AssetThumbnailCard: React.FC<{
+  asset: ProjectAssetItem;
+  dataUrl?: string;
+  onEnsureDataUrl: (relPath: string) => void;
+  onInsert: (relPath: string) => void;
+}> = React.memo(({ asset, dataUrl, onEnsureDataUrl, onInsert }) => {
+  useEffect(() => {
+    if (!dataUrl && asset.ext !== 'pdf') {
+      onEnsureDataUrl(asset.relativePath);
+    }
+  }, [asset.relativePath, asset.ext, dataUrl, onEnsureDataUrl]);
+
+  return (
+    <div
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData(
+          'application/x-agentikz-asset',
+          asset.relativePath
+        );
+        e.dataTransfer.effectAllowed = 'copy';
+      }}
+      onClick={() => onInsert(asset.relativePath)}
+      title={`点击或拖拽至画布: ${asset.relativePath}`}
+      className="group rounded-xl border border-slate-200/90 bg-white hover:border-indigo-400 hover:shadow-xs overflow-hidden flex flex-col transition-all cursor-pointer"
+    >
+      <div className="h-20 bg-slate-50 border-b border-slate-100 flex items-center justify-center p-1.5 relative overflow-hidden">
+        {dataUrl ? (
+          <img
+            src={dataUrl}
+            alt={asset.fileName}
+            className="max-h-full max-w-full object-contain rounded-xs group-hover:scale-105 transition-transform"
+          />
+        ) : (
+          <div className="flex flex-col items-center justify-center text-slate-400 gap-1">
+            <Images className="w-5 h-5" />
+            <span className="text-[9px] uppercase font-mono">{asset.ext}</span>
+          </div>
+        )}
+        <span className="absolute top-1 right-1 px-1.5 py-0.2 rounded bg-slate-900/70 text-white text-[9px] font-mono uppercase">
+          {asset.ext}
+        </span>
+        <div className="absolute inset-0 bg-indigo-900/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+          <span className="px-2 py-1 rounded-md bg-white text-indigo-700 text-[10px] font-bold shadow-xs flex items-center gap-1">
+            <Plus className="w-3 h-3" />
+            加入画布
+          </span>
+        </div>
+      </div>
+      <div className="p-2">
+        <div className="text-[11px] font-semibold text-slate-800 truncate">
+          {asset.fileName}
+        </div>
+        <div className="text-[9.5px] font-mono text-slate-400 truncate mt-0.5">
+          {asset.relativePath}
+        </div>
+      </div>
+    </div>
+  );
+});
+
 export const LeftTabbedSidebar: React.FC = () => {
   const {
     leftTab,
@@ -121,11 +198,34 @@ export const LeftTabbedSidebar: React.FC = () => {
     highlightedLineRange,
     setLeftTab,
     addPrimitiveToCanvas,
+    addImageAssetToCanvas,
     loadTemplate,
   } = useWorkspaceStore();
 
+  const {
+    projectDir,
+    projectName,
+    canvases,
+    activeCanvasFileName,
+    assets,
+    assetDataUrls,
+    isScanningAssets,
+    setPickerOpen,
+    switchCanvasFile,
+    createNewCanvasFile,
+    duplicateCurrentCanvasFile,
+    deleteCanvasFile,
+    refreshProjectAssets,
+    ensureAssetDataUrl,
+    registerLocalBrowserAssetFiles,
+    revealInFileManager,
+  } = useProjectStore();
+
   const [selectedCategory, setSelectedCategory] =
     useState<TemplateCategory>('all');
+  const [assetFolderFilter, setAssetFolderFilter] = useState<string>('all');
+  const [assetSearch, setAssetSearch] = useState<string>('');
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const dlPrimitives = PRIMITIVE_LIBRARY.filter((p) => p.category === 'dl');
   const chartPrimitives = PRIMITIVE_LIBRARY.filter((p) => p.category === 'chart');
@@ -144,48 +244,338 @@ export const LeftTabbedSidebar: React.FC = () => {
     return map;
   }, []);
 
+  const assetFolders = useMemo(() => {
+    const set = new Set<string>();
+    for (const a of assets) {
+      set.add(a.folder || '.');
+    }
+    return ['all', ...Array.from(set)];
+  }, [assets]);
+
+  const filteredAssets = useMemo(() => {
+    return assets.filter((a) => {
+      if (assetFolderFilter !== 'all' && a.folder !== assetFolderFilter) {
+        return false;
+      }
+      if (assetSearch.trim()) {
+        const q = assetSearch.trim().toLowerCase();
+        return (
+          a.fileName.toLowerCase().includes(q) ||
+          a.relativePath.toLowerCase().includes(q)
+        );
+      }
+      return true;
+    });
+  }, [assets, assetFolderFilter, assetSearch]);
+
   return (
     <aside
       className={`${
-        leftTab === 'code' ? 'w-[420px]' : 'w-[360px]'
+        leftTab === 'code' ? 'w-[410px]' : 'w-[350px]'
       } h-full bg-sidebar-gradient border-r border-slate-200/80 flex flex-col shrink-0 transition-[width] duration-200 select-none`}
     >
-      {/* Tab Header */}
-      <div className="p-1.5 bg-white/60 border-b border-slate-200/80 grid grid-cols-2 gap-1">
+      {/* 3-Tab Header */}
+      <div className="p-1.5 bg-white/60 border-b border-slate-200/80 grid grid-cols-3 gap-1">
         <button
-          onClick={() => setLeftTab('code')}
-          className={`flex items-center justify-center gap-1.5 py-1.5 px-2.5 rounded-md text-xs font-medium transition-all cursor-pointer ${
-            leftTab === 'code'
-              ? 'bg-white text-blue-700 shadow-xs border border-slate-200/80'
+          onClick={() => setLeftTab('project')}
+          className={`flex items-center justify-center gap-1 py-1.5 px-2 rounded-md text-xs font-medium transition-all cursor-pointer ${
+            leftTab === 'project'
+              ? 'bg-white text-indigo-700 shadow-xs border border-slate-200/80'
               : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
           }`}
         >
-          <Code2 className="w-3.5 h-3.5" />
-          <span>TikZ 代码面板</span>
-          {highlightedLineRange && (
-            <span className="ml-0.5 px-1 py-0.2 text-[10px] rounded bg-blue-50 text-blue-700 font-mono">
-              L{highlightedLineRange.startLine}
-            </span>
-          )}
+          <FolderKanban className="w-3.5 h-3.5 shrink-0" />
+          <span className="truncate">项目与素材</span>
         </button>
+
         <button
           onClick={() => setLeftTab('library')}
-          className={`flex items-center justify-center gap-1.5 py-1.5 px-2.5 rounded-md text-xs font-medium transition-all cursor-pointer ${
+          className={`flex items-center justify-center gap-1 py-1.5 px-2 rounded-md text-xs font-medium transition-all cursor-pointer ${
             leftTab === 'library'
               ? 'bg-white text-blue-700 shadow-xs border border-slate-200/80'
               : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
           }`}
         >
-          <Blocks className="w-3.5 h-3.5" />
-          <span>组件与模板库</span>
-          <span className="px-1 py-0.2 text-[10px] rounded bg-slate-200/70 text-slate-600 font-mono">
-            {FULL_FIGURE_TEMPLATES.length}
-          </span>
+          <Blocks className="w-3.5 h-3.5 shrink-0" />
+          <span className="truncate">组件与模板</span>
+        </button>
+
+        <button
+          onClick={() => setLeftTab('code')}
+          className={`flex items-center justify-center gap-1 py-1.5 px-2 rounded-md text-xs font-medium transition-all cursor-pointer ${
+            leftTab === 'code'
+              ? 'bg-white text-blue-700 shadow-xs border border-slate-200/80'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-white/60'
+          }`}
+        >
+          <Code2 className="w-3.5 h-3.5 shrink-0" />
+          <span className="truncate">TikZ 代码</span>
+          {highlightedLineRange && (
+            <span className="px-1 py-0.2 text-[9px] rounded bg-blue-50 text-blue-700 font-mono">
+              L{highlightedLineRange.startLine}
+            </span>
+          )}
         </button>
       </div>
 
       {leftTab === 'code' ? (
-        <div className="flex-1 overflow-hidden"><TikzCodePanel /></div>
+        <div className="flex-1 overflow-hidden">
+          <TikzCodePanel />
+        </div>
+      ) : leftTab === 'project' ? (
+        <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+          <div className="flex-1 overflow-y-auto p-3 space-y-5">
+            {/* Section 1: Current Project Folder */}
+            <div className="p-3 rounded-xl bg-white border border-slate-200/90 shadow-2xs space-y-2.5">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5">
+                    <FolderOpen className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                    <span className="text-xs font-bold text-slate-800 truncate">
+                      {projectName}
+                    </span>
+                  </div>
+                  <div className="text-[10.5px] font-mono text-slate-400 truncate mt-0.5">
+                    {projectDir
+                      ? `${projectDir}/${AGENTIKZ_FOLDER_NAME}`
+                      : '尚未绑定本地论文/项目文件夹'}
+                  </div>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  {projectDir && (
+                    <button
+                      type="button"
+                      onClick={() => void revealInFileManager()}
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+                      title="在系统资源管理器中打开 agentikzfile 文件夹"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setPickerOpen(true)}
+                    className="px-2.5 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[11px] font-semibold transition-colors cursor-pointer"
+                  >
+                    {projectDir ? '切换目录' : '选择目录'}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Section 2: Canvas Files in agentikzfile/ */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-800">
+                  <FileText className="w-3.5 h-3.5 text-indigo-600" />
+                  <span>画布存档 ({canvases.length})</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    void createNewCanvasFile(
+                      `Fig ${canvases.length + 1} - New Figure`
+                    )
+                  }
+                  className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-indigo-600 hover:bg-indigo-700 text-white text-[10.5px] font-medium transition-colors cursor-pointer"
+                >
+                  <Plus className="w-3 h-3" />
+                  <span>新建画布</span>
+                </button>
+              </div>
+
+              <div className="space-y-1.5">
+                {canvases.map((c) => {
+                  const isActive = c.fileName === activeCanvasFileName;
+                  return (
+                    <div
+                      key={c.fileName}
+                      onClick={() => void switchCanvasFile(c.fileName)}
+                      className={`group flex items-center justify-between gap-2 px-3 py-2 rounded-xl border transition-all cursor-pointer ${
+                        isActive
+                          ? 'bg-indigo-50/70 border-indigo-300 shadow-2xs'
+                          : 'bg-white hover:bg-slate-50 border-slate-200/80'
+                      }`}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5">
+                          <span
+                            className={`text-xs truncate ${
+                              isActive
+                                ? 'font-bold text-indigo-900'
+                                : 'font-medium text-slate-700'
+                            }`}
+                          >
+                            {c.name}
+                          </span>
+                          {isActive && (
+                            <span className="px-1.5 py-0.2 rounded bg-indigo-600 text-white text-[9px] font-semibold shrink-0">
+                              当前
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[10px] font-mono text-slate-400 truncate mt-0.5">
+                          {AGENTIKZ_FOLDER_NAME}/{c.fileName}
+                        </div>
+                      </div>
+
+                      <div
+                        className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {isActive && (
+                          <button
+                            type="button"
+                            onClick={() => void duplicateCurrentCanvasFile()}
+                            className="p-1 rounded hover:bg-white text-slate-400 hover:text-indigo-600"
+                            title="复制此画布"
+                          >
+                            <Copy className="w-3 h-3" />
+                          </button>
+                        )}
+                        {canvases.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => void deleteCanvasFile(c.fileName)}
+                            className="p-1 rounded hover:bg-rose-50 text-slate-400 hover:text-rose-600"
+                            title="删除此画布"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Section 3: Project Image Asset Browser */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-800">
+                  <Images className="w-3.5 h-3.5 text-amber-600" />
+                  <span>同目录图像素材 ({assets.length})</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/png,image/jpeg,image/svg+xml,image/webp"
+                    multiple
+                    className="hidden"
+                    onChange={(e) => {
+                      if (e.target.files) {
+                        void registerLocalBrowserAssetFiles(e.target.files);
+                        e.target.value = '';
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-medium transition-colors cursor-pointer"
+                    title="从本地选择图片加入素材库"
+                  >
+                    <Upload className="w-3 h-3" />
+                    <span>导入图片</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void refreshProjectAssets()}
+                    className="p-1 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-600 transition-colors cursor-pointer"
+                    title="重新扫描项目目录中的图片素材"
+                  >
+                    <RefreshCw
+                      className={`w-3 h-3 ${
+                        isScanningAssets ? 'animate-spin text-indigo-600' : ''
+                      }`}
+                    />
+                  </button>
+                </div>
+              </div>
+
+              {/* Folder Filter Pills & Search */}
+              {assets.length > 0 && (
+                <div className="space-y-2 mb-2.5">
+                  {assetFolders.length > 2 && (
+                    <div className="flex items-center gap-1 overflow-x-auto no-scrollbar pb-1">
+                      {assetFolders.map((folder) => (
+                        <button
+                          key={folder}
+                          type="button"
+                          onClick={() => setAssetFolderFilter(folder)}
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-mono shrink-0 transition-colors cursor-pointer ${
+                            assetFolderFilter === folder
+                              ? 'bg-slate-800 text-white'
+                              : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                          }`}
+                        >
+                          {folder === 'all'
+                            ? `全部 (${assets.length})`
+                            : folder === '.'
+                              ? '根目录 (.)'
+                              : folder}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {assets.length > 4 && (
+                    <div className="relative">
+                      <Search className="w-3 h-3 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        value={assetSearch}
+                        onChange={(e) => setAssetSearch(e.target.value)}
+                        placeholder="搜索同目录图片文件名或子目录..."
+                        className="w-full pl-7 pr-2.5 py-1 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-400"
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {filteredAssets.length === 0 ? (
+                <div className="p-4 rounded-xl border border-dashed border-slate-200 bg-white/60 text-center space-y-2">
+                  <Images className="w-6 h-6 text-slate-300 mx-auto" />
+                  <div className="text-[11px] font-medium text-slate-600">
+                    {projectDir
+                      ? '当前项目文件夹下暂未扫描到图片文件'
+                      : '尚未关联项目文件夹或导入图片'}
+                  </div>
+                  <p className="text-[10px] text-slate-400 leading-relaxed">
+                    将论文插图（<code className="font-mono">.png/.jpg/.svg</code>）放入项目目录（如{' '}
+                    <code className="font-mono">figs/</code>），或点击上方「导入图片」，即可点击或拖拽进画布生成{' '}
+                    <code className="font-mono">\includegraphics</code> 节点。
+                  </p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-2">
+                  {filteredAssets.map((asset) => (
+                    <AssetThumbnailCard
+                      key={asset.relativePath}
+                      asset={asset}
+                      dataUrl={assetDataUrls[asset.relativePath]}
+                      onEnsureDataUrl={(relPath) =>
+                        void ensureAssetDataUrl(relPath)
+                      }
+                      onInsert={(relPath) => addImageAssetToCanvas(relPath)}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Docked Live Code Sync */}
+          <div className="border-t border-slate-200 shrink-0">
+            <LiveCodeSyncBanner
+              compact
+              onExpandCodeTab={() => setLeftTab('code')}
+            />
+          </div>
+        </div>
       ) : (
         <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
           <div className="flex-1 overflow-y-auto p-3 space-y-5">
@@ -250,7 +640,7 @@ export const LeftTabbedSidebar: React.FC = () => {
                             </span>
                           ) : (
                             <span className="text-[10px] text-blue-500 opacity-0 group-hover:opacity-100 font-medium flex items-center gap-0.5">
-                              <Sparkles className="w-3 h-3" /> 载入
+                              <Sparkles className="w-3 h-3" /> 载入当前画布
                             </span>
                           )}
                         </div>
@@ -274,25 +664,37 @@ export const LeftTabbedSidebar: React.FC = () => {
                           </div>
                         </div>
 
-                        {/* Tags + Code Button */}
+                        {/* Tags + Action Buttons */}
                         <div className="flex items-center justify-between mt-2 gap-1.5">
                           <div className="flex flex-wrap gap-1 min-w-0">
-                            {tpl.tags.slice(0, 3).map((tag) => (
+                            {tpl.tags.slice(0, 2).map((tag) => (
                               <span key={tag} className="text-[9.5px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500">
                                 {tag}
                               </span>
                             ))}
-                            {tpl.tags.length > 3 && (
-                              <span className="text-[9.5px] px-1 py-0.5 text-slate-400">+{tpl.tags.length - 3}</span>
-                            )}
                           </div>
-                          <button
-                            onClick={(e) => { e.stopPropagation(); loadTemplate(tpl.id); setLeftTab('code'); }}
-                            className="shrink-0 px-2 py-0.5 rounded-md text-[10px] font-medium bg-slate-100 hover:bg-blue-600 hover:text-white text-slate-500 flex items-center gap-1 transition-colors cursor-pointer"
-                          >
-                            <FileCode2 className="w-3 h-3" />
-                            <span>代码</span>
-                          </button>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void createNewCanvasFile(tpl.title, tpl.id);
+                              }}
+                              className="px-2 py-0.5 rounded-md text-[10px] font-medium bg-indigo-50 hover:bg-indigo-600 hover:text-white text-indigo-700 flex items-center gap-1 transition-colors cursor-pointer"
+                              title="基于此模板在当前项目中新建一个画布文件"
+                            >
+                              <FilePlus2 className="w-3 h-3" />
+                              <span>新建画布</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); loadTemplate(tpl.id); setLeftTab('code'); }}
+                              className="px-2 py-0.5 rounded-md text-[10px] font-medium bg-slate-100 hover:bg-blue-600 hover:text-white text-slate-500 flex items-center gap-1 transition-colors cursor-pointer"
+                            >
+                              <FileCode2 className="w-3 h-3" />
+                              <span>代码</span>
+                            </button>
+                          </div>
                         </div>
                       </div>
                     </div>
