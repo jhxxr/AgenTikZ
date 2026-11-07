@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::process::Command;
 
@@ -183,27 +183,31 @@ pub fn remove_solid_background_floodfill(
         (dr * dr + dg * dg + db * db).sqrt()
     };
 
-    let mut try_enqueue = |x: usize, y: usize, rgba_buf: &[u8]| {
+    let try_enqueue = |x: usize,
+                       y: usize,
+                       rgba_buf: &[u8],
+                       vis: &mut [bool],
+                       q: &mut VecDeque<usize>| {
         let pos = y * width + x;
-        if visited[pos] {
+        if vis[pos] {
             return;
         }
         let idx = pos * 4;
         if rgba_buf[idx + 3] > 0
             && color_dist(rgba_buf[idx], rgba_buf[idx + 1], rgba_buf[idx + 2]) <= tolerance * 1.45
         {
-            visited[pos] = true;
-            queue.push_back(pos);
+            vis[pos] = true;
+            q.push_back(pos);
         }
     };
 
     for x in 0..width {
-        try_enqueue(x, 0, rgba);
-        try_enqueue(x, height - 1, rgba);
+        try_enqueue(x, 0, rgba, &mut visited, &mut queue);
+        try_enqueue(x, height - 1, rgba, &mut visited, &mut queue);
     }
     for y in 1..(height - 1) {
-        try_enqueue(0, y, rgba);
-        try_enqueue(width - 1, y, rgba);
+        try_enqueue(0, y, rgba, &mut visited, &mut queue);
+        try_enqueue(width - 1, y, rgba, &mut visited, &mut queue);
     }
 
     let mut removed = 0usize;
@@ -215,16 +219,16 @@ pub fn remove_solid_background_floodfill(
         let x = pos % width;
         let y = pos / width;
         if x > 0 {
-            try_enqueue(x - 1, y, rgba);
+            try_enqueue(x - 1, y, rgba, &mut visited, &mut queue);
         }
         if x + 1 < width {
-            try_enqueue(x + 1, y, rgba);
+            try_enqueue(x + 1, y, rgba, &mut visited, &mut queue);
         }
         if y > 0 {
-            try_enqueue(x, y - 1, rgba);
+            try_enqueue(x, y - 1, rgba, &mut visited, &mut queue);
         }
         if y + 1 < height {
-            try_enqueue(x, y + 1, rgba);
+            try_enqueue(x, y + 1, rgba, &mut visited, &mut queue);
         }
     }
 
