@@ -465,7 +465,11 @@ fn scan_dedicated_project_assets(root: &Path) -> Vec<ProjectAssetItem> {
 
 /// Opens the native OS folder selection dialog and returns the selected directory path.
 #[tauri::command]
-pub async fn project_pick_directory(initial_dir: Option<String>) -> Result<Option<String>, String> {
+pub async fn project_pick_directory(
+    initial_dir: Option<String>,
+    title: Option<String>,
+) -> Result<Option<String>, String> {
+    let title = title.as_deref().unwrap_or("选择项目或论文文件夹");
     #[cfg(target_os = "windows")]
     {
         let init_path = initial_dir
@@ -473,12 +477,13 @@ pub async fn project_pick_directory(initial_dir: Option<String>) -> Result<Optio
             .filter(|p| !p.trim().is_empty() && Path::new(p).is_dir())
             .unwrap_or("");
         let escaped_init = init_path.replace('\'', "''");
+        let escaped_title = title.replace('\'', "''");
         let ps_script = format!(
             "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; \
              Add-Type -AssemblyName System.Windows.Forms; \
              [System.Windows.Forms.Application]::EnableVisualStyles(); \
              $dlg = New-Object System.Windows.Forms.FolderBrowserDialog; \
-             $dlg.Description = '选择项目或论文文件夹 (AgenTikZ 将在其中创建 agentikzfile 专属存档目录)'; \
+             $dlg.Description = '{}'; \
              $dlg.UseDescriptionForTitle = $true; \
              $dlg.ShowNewFolderButton = $true; \
              if ('{}' -ne '') {{ $dlg.SelectedPath = '{}' }}; \
@@ -486,7 +491,7 @@ pub async fn project_pick_directory(initial_dir: Option<String>) -> Result<Optio
              $res = $dlg.ShowDialog($owner); \
              $owner.Dispose(); \
              if ($res -eq [System.Windows.Forms.DialogResult]::OK) {{ Write-Output $dlg.SelectedPath }}",
-            escaped_init, escaped_init
+            escaped_title, escaped_init, escaped_init
         );
         let mut cmd = Command::new("powershell");
         cmd.args([
@@ -513,9 +518,12 @@ pub async fn project_pick_directory(initial_dir: Option<String>) -> Result<Optio
 
     #[cfg(target_os = "macos")]
     {
-        let script = "POSIX path of (choose folder with prompt \"选择项目或论文文件夹\")";
+        let script = format!(
+            "POSIX path of (choose folder with prompt \"{}\")",
+            title.replace('\\', "\\\\").replace('"', "\\\""),
+        );
         let output = Command::new("osascript")
-            .args(["-e", script])
+            .args(["-e", &script])
             .output()
             .await
             .map_err(|e| format!("无法启动 macOS 文件夹选择器: {}", e))?;
@@ -532,7 +540,7 @@ pub async fn project_pick_directory(initial_dir: Option<String>) -> Result<Optio
             .args([
                 "--file-selection",
                 "--directory",
-                "--title=选择项目或论文文件夹",
+                &format!("--title={title}"),
             ])
             .output()
             .await

@@ -94,7 +94,7 @@ flowchart TB
     subgraph Backend["Tauri v2 Rust Core"]
         AcpBridge["ACP v1 Client Bridge (stdio)\nBounded Timeouts · Fail-Closed Permissions"]
         TexEngine["Async Local TeX Compiler\n(latex + dvisvgm · Isolated Temp Dir)"]
-        McpManifest["Built-In MCP Tool Specs\n(AST / Selection / Patch Schemas)"]
+        McpManifest["Canvas MCP Bridge\nScoped Targets · Reviewed Proposals"]
     end
 
     Canvas <-->|"Exact SourceSpan Patch"| Parser
@@ -102,11 +102,15 @@ flowchart TB
     AgentUI <-->|"Tauri IPC + acp:stream Events"| AcpBridge
     Canvas -->|"Standalone .tex"| TexEngine
     AcpBridge <-->|"JSON-RPC 2.0 over stdio"| LocalAgents["Local ACP Agents\n(Claude Code · Codex · OpenCode · Gemini · Cursor · Kimi)"]
+    LocalAgents <-->|"MCP stdio"| McpSidecar["Bundled Rust MCP Server"]
+    McpSidecar <-->|"Authenticated Loopback Bridge"| McpManifest
+    McpManifest <-->|"Targeted Tool Requests"| Parser
+    LocalAgents <-->|"MCP stdio / Streamable HTTP"| ExternalMcp["User-Configured MCP Services"]
 ```
 
 - **Lossless CST/AST Engine**: Located in `src/core/parser/`, the parser resolves `\tikzset` style definitions, `\node` statements, orthogonal/curved/residual `\draw` edges, and `\begin{axis}...\end{axis}` PGFPlots environments using depth-aware bracket `[]` and brace `{}` matching so math expressions like `$p(x;\theta)$` never truncate statement boundaries.
 - **Official ACP v1 Transport**: Located in `src-tauri/src/acp/mod.rs`, the desktop backend launches locally installed ACP adapters over `stdio` with bounded initialization (`20s`), session creation (`20s`), prompt execution (`180s`), and transport shutdown timeouts.
-- **Release Scope**: Current release **v0.4.2** provides full visual editing, 6 publication templates, 4 venue themes, local TeX Live preview, and `stdio`-based ACP v1 prompt/stream integration. Interactive filesystem/command permission approval dialogs for external agents are intentionally denied by default (fail-closed).
+- **Release Scope**: Current release **v0.4.3** provides full visual editing, 6 publication templates, 4 venue themes, local TeX Live preview, `stdio`-based ACP v1 prompt/stream integration, and built-in/external MCP services. Local tool permissions are denied by default; **Settings → Agent → 完整本机访问 (Full local access)** enables cross-folder file access and native agent commands.
 
 ## Publication Templates & Themes
 
@@ -258,7 +262,7 @@ src/
 src-tauri/
   src/
     acp/            # Official ACP v1 stdio client bridge, executable resolution, and unit tests
-    mcp/            # Built-in MCP tool manifest definitions for canvas AST & patch schemas
+    mcp/            # MCP configuration, credentials, authenticated bridge and canvas tool routing
     tex/            # Async local TeX Live (latex + dvisvgm) preview compiler
 ```
 
@@ -274,6 +278,8 @@ npm test
 npm run build
 
 # 3. Run Rust ACP & Tauri backend unit tests
+npm run mcp:stage
+npm run test:mcp
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
@@ -281,7 +287,9 @@ cargo test --manifest-path src-tauri/Cargo.toml
 
 - **Trust & Execution Boundary**:
   - **No Implicit Downloads**: AgenTikZ resolves ACP executables strictly from your local `PATH` (or explicit custom command path) and never invokes `npx -y` to download unverified packages behind the scenes.
-  - **Isolated Working Directory**: Local ACP sessions are initialized with an isolated `app_data_dir()/agent-workspace` working directory rather than exposing your home directory or project root.
-  - **Fail-Closed Permissions**: Incoming ACP `RequestPermissionRequest` calls for arbitrary filesystem writes or terminal commands are automatically denied (`RequestPermissionOutcome::Cancelled`); agents return proposed TikZ code as text for your explicit review.
+  - **Configurable Local Access**: **Settings → Agent → 完整本机访问 (Full local access)** is off by default. Enabling it allows the agent to read and modify files outside the project and execute its native commands. This preference is saved locally and takes effect on the next message, including in an existing chat.
+  - **Working Directory**: Restricted sessions use `app_data_dir()/agent-workspace`. With full access enabled, the working directory follows the current project, or a folder selected in Agent settings; without either, it uses the application workspace. Relative or missing custom directories produce an actionable error. A working directory is not an OS sandbox.
+  - **Tool Permissions**: Restricted sessions cancel native filesystem/command permission requests; explicitly enabled MCP tools are authorized independently. Full access selects the agent's advertised full-access mode when available and enables ACP text-file read/write capabilities. Permission responses select `allow_once`; requests offering only persistent permission are cancelled. Native CLI tools retain their own capabilities and OS permissions. Canvas proposals still require clicking Apply.
+  - **MCP Services**: **Settings → MCP 服务** manages the bundled 9-tool canvas server and external stdio/Streamable HTTP services. Sensitive values use OS credentials or explicit session-only memory; exports omit them. Canvas proposals bind to their original canvas and source revision. See the [MCP guide](docs/mcp-guide.zh-CN.md).
   - **External Agent Privileges**: Note that an ACP agent CLI process you launch still runs under your OS user account and sends prompt context to the model provider configured in that CLI.
 - **License**: Released under the [MIT License](LICENSE).

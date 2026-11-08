@@ -2,10 +2,14 @@
 //! bundled JS adapter fallback for Claude Code (`@agentclientprotocol/claude-agent-acp`)
 //! and Codex (`@agentclientprotocol/codex-acp`).
 
+mod access;
+
 use agent_client_protocol::v1::schema::{
-    ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest, RequestPermissionOutcome,
+    ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest, ReadTextFileRequest,
+    ReadTextFileResponse, RequestPermissionOutcome,
     RequestPermissionRequest, RequestPermissionResponse, SessionNotification, SessionUpdate,
-    StopReason, TextContent, ToolCallStatus,
+    SetSessionModeRequest, StopReason, TextContent, ToolCallStatus, WriteTextFileRequest,
+    WriteTextFileResponse,
 };
 use agent_client_protocol::v1::ConnectionTo;
 use agent_client_protocol::{schema::ProtocolVersion, AcpAgent, AcpAgentConfig, Client};
@@ -17,6 +21,40 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::time::timeout;
+
+struct RunningPrompt {
+    window: String,
+    cancel: tokio::sync::watch::Sender<bool>,
+}
+static RUNNING_PROMPTS: std::sync::LazyLock<Mutex<HashMap<String, RunningPrompt>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+struct PromptGuard(String);
+impl Drop for PromptGuard {
+    fn drop(&mut self) {
+        if let Ok(mut prompts) = RUNNING_PROMPTS.lock() { prompts.remove(&self.0); }
+    }
+}
+
+#[tauri::command]
+pub fn acp_cancel_prompt(window: tauri::WebviewWindow, request_id: String) -> Result<(), String> {
+    let prompts = RUNNING_PROMPTS.lock().map_err(|_| "Agent 状态不可用。")?;
+    let prompt = prompts.get(&request_id).ok_or("Agent 请求已结束。")?;
+    if prompt.window != window.label() { return Err("请求不属于当前窗口。".into()); }
+    prompt.cancel.send(true).map_err(|_| "Agent 请求已结束。".into())
+}
+
+pub fn cancel_window(label: &str) {
+    if let Ok(prompts) = RUNNING_PROMPTS.lock() {
+        for prompt in prompts.values().filter(|p| p.window == label) { let _ = prompt.cancel.send(true); }
+    }
+}
+
+pub(crate) fn resolve_mcp_executable(command: &str) -> Result<PathBuf, String> {
+    find_executable_in_paths(Path::new(command.trim()), &merged_path_entries(None))
+        .map(protocol_workspace_path)
+        .ok_or_else(|| format!("未找到 MCP 命令：{}。请填写可执行文件绝对路径或安装相应运行时。", command.trim()))
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -854,6 +892,7 @@ pub async fn sys_probe_environment() -> EnvironmentDiagnostics {
 #[tauri::command]
 pub async fn acp_send_prompt(
     app_handle: AppHandle,
+    window: tauri::WebviewWindow,
     request_id: String,
     agent_id: String,
     prompt: String,
@@ -867,7 +906,18 @@ pub async fn acp_send_prompt(
     personal_prompt: Option<String>,
     template_references: Option<String>,
     agent_context: Option<String>,
+    full_access: Option<bool>,
+    working_directory: Option<String>,
+    mcp_target: Option<crate::mcp::bridge::CanvasTarget>,
 ) -> Result<AcpPromptResponse, String> {
+    let (cancel, mut cancelled) = tokio::sync::watch::channel(false);
+    {
+        let mut running = RUNNING_PROMPTS.lock().map_err(|_| "Agent 状态不可用。")?;
+        if running.contains_key(&request_id) { return Err("重复的 Agent 请求。".into()); }
+        running.insert(request_id.clone(), RunningPrompt { window: window.label().into(), cancel });
+    }
+    let _prompt_guard = PromptGuard(request_id.clone());
+    let full_access = full_access.unwrap_or(false);
     let (base_config, _) = resolve_agent_command(&agent_id, custom_command.as_deref())?;
     let agent_config = apply_runtime_env_overrides(
         base_config,
@@ -875,17 +925,29 @@ pub async fn acp_send_prompt(
         user_agent.as_deref(),
     );
     let agent = AcpAgent::new(agent_config);
-    // This is a working directory, not a sandbox. Do not expose the user's home as a project.
-    let cwd = app_handle
+    let (config, prepared_servers) = crate::mcp::prepare_session(&app_handle, &agent_id)?;
+    let lease = if config.builtin_enabled {
+        match mcp_target {
+            Some(target) => Some(crate::mcp::bridge::start_for_window(
+                app_handle.clone(), window.label().into(), request_id.clone(), target,
+            ).await?),
+            None => None,
+        }
+    } else { None };
+    let builtin_server = lease.as_ref().map(|lease| lease.server(&app_handle)).transpose()?;
+    let allowed_mcp_names: Vec<String> = config.servers.iter()
+        .filter(|s| s.enabled && (s.agent_ids.is_empty() || s.agent_ids.contains(&agent_id)))
+        .map(|s| s.name.clone()).chain(builtin_server.is_some().then_some("agentikz".into())).collect();
+    let default_dir = app_handle
         .path()
         .app_data_dir()
         .map_err(|e| format!("Cannot resolve ACP workspace: {e}"))?
         .join("agent-workspace");
-    std::fs::create_dir_all(&cwd).map_err(|e| format!("Cannot create ACP workspace: {e}"))?;
-    let cwd = protocol_workspace_path(
-        cwd.canonicalize()
-            .map_err(|e| format!("Cannot resolve ACP workspace: {e}"))?,
-    );
+    let cwd = access::resolve_working_directory(
+        &default_dir,
+        full_access,
+        working_directory.as_deref(),
+    )?;
     let message_buf = Arc::new(Mutex::new(String::new()));
     let thought_buf = Arc::new(Mutex::new(String::new()));
     let app = app_handle.clone();
@@ -901,10 +963,18 @@ pub async fn acp_send_prompt(
         personal_prompt.as_deref(),
         template_references.as_deref(),
         agent_context.as_deref(),
+        full_access,
+    );
+    let structured_prompt = format!(
+        "{structured_prompt}\n\nAgent working directory: {}\n\nMCP policy: Enabled MCP tools are authorized independently of native filesystem permissions. When the agentikz server is attached, use its tools to inspect actual canvas state and submit a proposal. If canvas source was omitted from the prompt, read it with get_canvas_source instead of asking the user to attach it. Read get_canvas_source first, then pass its revision and sourceHash to proposal tools. MCP proposals require user review; do not duplicate a tool-created proposal as a second replacement code block or claim it has been applied.",
+        cwd.display()
     );
 
     let permission_app = app_handle.clone();
     let permission_request_id = request_id.clone();
+    let session_app = app_handle.clone();
+    let session_request_id = request_id.clone();
+    let session_window = window.label().to_string();
     let session = Client.v1()
         .on_receive_notification(
             async move |notification: SessionNotification, _cx| {
@@ -914,27 +984,87 @@ pub async fn acp_send_prompt(
             agent_client_protocol::on_receive_notification!(),
         )
         .on_receive_request(
-            async move |_request: RequestPermissionRequest, responder, _cx| {
-                // There is no user approval UI yet. A drawing prompt is not consent
-                // to arbitrary filesystem/terminal actions or persistent permission.
-                let _ = permission_app.emit("acp:stream", AcpStreamEvent::text(
-                    &permission_request_id, "permission_denied",
-                    "This client has no approval UI. Filesystem and command permission requests are denied; return proposed TikZ as text instead.",
-                ));
-                responder.respond(RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled))
+            async move |request: RequestPermissionRequest, responder, _cx| {
+                let mcp_authorized = request.tool_call.fields.name.as_deref().is_some_and(|name| {
+                    allowed_mcp_names.iter().any(|server| {
+                        name.strip_prefix(&format!("mcp__{server}__")).is_some_and(|tool| {
+                            server != "agentikz" || crate::mcp::builtin_tools().iter().any(|spec| spec.name == tool)
+                        })
+                    })
+                });
+                let response = access::permission_response(&request, full_access || mcp_authorized);
+                if response.outcome == RequestPermissionOutcome::Cancelled {
+                    let message = if full_access {
+                        "Agent 未提供单次授权选项，权限请求已取消。"
+                    } else {
+                        "请在设置 → Agent 中开启「完整本机访问」，允许跨文件夹读写和执行命令。"
+                    };
+                    let _ = permission_app.emit(
+                        "acp:stream",
+                        AcpStreamEvent::text(&permission_request_id, "permission_denied", message),
+                    );
+                }
+                responder.respond(response)
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: ReadTextFileRequest, responder, _cx| {
+                let result = tokio::task::spawn_blocking(move || {
+                    access::read_text_file(full_access, &request)
+                })
+                .await.map_err(|error| protocol_error(&error.to_string()))?;
+                responder.respond_with_result(
+                    result.map(ReadTextFileResponse::new)
+                        .map_err(|error| protocol_error(&error)),
+                )
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: WriteTextFileRequest, responder, _cx| {
+                let result = tokio::task::spawn_blocking(move || {
+                    access::write_text_file(full_access, &request.path, &request.content)
+                })
+                .await.map_err(|error| protocol_error(&error.to_string()))?;
+                responder.respond_with_result(
+                    result.map(|()| WriteTextFileResponse::new())
+                        .map_err(|error| protocol_error(&error)),
+                )
             },
             agent_client_protocol::on_receive_request!(),
         )
         .connect_with(agent, |connection: ConnectionTo<_>| async move {
             let init = timeout(Duration::from_secs(30), connection
-                .send_request(InitializeRequest::new(ProtocolVersion::V1)).block_task()).await
+                .send_request(InitializeRequest::new(ProtocolVersion::V1)
+                    .client_capabilities(access::client_capabilities(full_access))).block_task()).await
                 .map_err(|_| protocol_error("ACP initialize timed out after 30 seconds"))??;
             if init.protocol_version != ProtocolVersion::V1 {
                 return Err(protocol_error("Agent does not support ACP v1"));
             }
+            let (mut mcp_servers, skipped) = crate::mcp::select_servers(
+                prepared_servers, init.agent_capabilities.mcp_capabilities.http,
+            ).map_err(|error| protocol_error(&error))?;
+            if let Some(server) = builtin_server { mcp_servers.insert(0, server); }
+            let names: Vec<String> = mcp_servers.iter().map(|server| match server {
+                agent_client_protocol::v1::schema::McpServer::Stdio(server) => server.name.clone(),
+                agent_client_protocol::v1::schema::McpServer::Http(server) => server.name.clone(),
+                _ => "MCP".into(),
+            }).collect();
             let session = timeout(Duration::from_secs(30), connection
-                .send_request(NewSessionRequest::new(cwd)).block_task()).await
+                .send_request(NewSessionRequest::new(cwd).mcp_servers(mcp_servers)).block_task()).await
                 .map_err(|_| protocol_error("ACP session creation timed out after 30 seconds"))??;
+            let status = format!("MCP 配置已提交：{}。{}\n实际可用性以 Agent 调用结果为准。",
+                if names.is_empty() { "未挂载服务".into() } else { names.join("、") },
+                skipped.join("\n"));
+            let _ = session_app.emit_to(&session_window, "acp:stream", AcpStreamEvent::text(&session_request_id, "mcp_status", status));
+            if let Some(mode_id) = full_access
+                .then(|| access::full_access_mode(session.modes.as_ref())).flatten()
+            {
+                timeout(Duration::from_secs(30), connection
+                    .send_request(SetSessionModeRequest::new(session.session_id.clone(), mode_id)).block_task()).await
+                    .map_err(|_| protocol_error("ACP access mode selection timed out after 30 seconds"))??;
+            }
             let response = timeout(Duration::from_secs(180), connection
                 .send_request(PromptRequest::new(session.session_id,
                     vec![ContentBlock::Text(TextContent::new(structured_prompt))])).block_task()).await
@@ -945,10 +1075,12 @@ pub async fn acp_send_prompt(
             Ok(())
         });
     // Also bound transport shutdown. Dropping the SDK connection terminates its child.
-    let run_result = timeout(Duration::from_secs(250), session)
-        .await
-        .map_err(|_| "ACP connection timed out".to_string())
-        .and_then(|result| result.map_err(|e| format!("ACP request failed: {e}")));
+    let run_result = tokio::select! {
+        _ = cancelled.changed() => Err("Agent 请求已取消。".to_string()),
+        result = timeout(Duration::from_secs(280), session) =>
+            result.map_err(|_| "ACP connection timed out".to_string())
+                .and_then(|result| result.map_err(|e| format!("ACP request failed: {e}"))),
+    };
     let _ = app_handle.emit(
         "acp:stream",
         AcpStreamEvent::text(
@@ -962,8 +1094,11 @@ pub async fn acp_send_prompt(
         ),
     );
     run_result?;
-    let reply = message_buf.lock().unwrap().clone();
+    let mut reply = message_buf.lock().unwrap().clone();
     let thought = thought_buf.lock().unwrap().clone();
+    if reply.trim().is_empty() && lease.as_ref().is_some_and(|lease| lease.has_proposal()) {
+        reply = "已通过 MCP 工具提交画布修改提案，请审查后应用。".into();
+    }
     if reply.trim().is_empty() {
         return Err(
             "ACP agent completed without a text response. No canvas changes were proposed.".into(),
@@ -1037,6 +1172,7 @@ fn build_tikz_prompt_with_prefs(
         personal_prompt,
         template_references,
         None,
+        false,
     )
 }
 
@@ -1049,8 +1185,9 @@ fn build_tikz_prompt_with_agent_context(
     personal_prompt: Option<&str>,
     template_references: Option<&str>,
     agent_context: Option<&str>,
+    full_access: bool,
 ) -> String {
-    let mut parts = vec!["You are assisting in AgenTikZ, a TikZ & PGFPlots editor. Work from the supplied conversation and canvas, not local files. Return proposed changes for the user to review; do not execute commands or write files. Tool permission requests are denied by this client.".to_string()];
+    let mut parts = vec![access::prompt_instructions(full_access).to_string()];
     if let Some(lang) = response_language.map(str::trim).filter(|l| !l.is_empty() && *l != "auto") {
         let lang_instruction = match lang {
             "zh-CN" => "Respond in Simplified Chinese (简体中文) for explanations and rationale while keeping LaTeX/TikZ identifiers in standard ASCII.",

@@ -62,6 +62,7 @@ export interface LastTikzChangeInfo {
 
 interface WorkspaceState {
   tikzCode: string;
+  sourceRevision: number;
   parsedDoc: ParsedTikzDocument;
   activeThemeId: JournalThemeId;
   activeTemplateId: string;
@@ -239,6 +240,7 @@ function computeLineRangeForSelection(
 
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   tikzCode: initialCode,
+  sourceRevision: 0,
   parsedDoc: initialParsed,
   activeThemeId: initialThemeId,
   activeTemplateId: '',
@@ -409,6 +411,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     const nextDoc = parseTikzDocument(newCode, activeThemeId);
     set({
       tikzCode: newCode,
+      sourceRevision: get().sourceRevision + 1,
       compiledSvg: null,
       texCompilerStatus: null,
       activeTemplateId: FULL_FIGURE_TEMPLATES.find((t) => t.tikzCode === newCode)?.id ?? '',
@@ -426,6 +429,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     const nextDoc = parseTikzDocument(prevCode, activeThemeId);
     set({
       tikzCode: prevCode,
+      sourceRevision: get().sourceRevision + 1,
       compiledSvg: null,
       texCompilerStatus: null,
       activeTemplateId: FULL_FIGURE_TEMPLATES.find((t) => t.tikzCode === prevCode)?.id ?? '',
@@ -443,6 +447,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     const nextDoc = parseTikzDocument(nextCode, activeThemeId);
     set({
       tikzCode: nextCode,
+      sourceRevision: get().sourceRevision + 1,
       compiledSvg: null,
       texCompilerStatus: null,
       activeTemplateId: FULL_FIGURE_TEMPLATES.find((t) => t.tikzCode === nextCode)?.id ?? '',
@@ -942,6 +947,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     const nextSelected = primaryTarget ? [primaryTarget.id] : [];
     set({
       tikzCode: docState.tikzCode,
+      sourceRevision: get().sourceRevision + 1,
       activeTemplateId: FULL_FIGURE_TEMPLATES.find((t) => t.tikzCode === docState.tikzCode)?.id ?? '',
       parsedDoc: nextDoc,
       activeThemeId: nextThemeId,

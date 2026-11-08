@@ -1,0 +1,13 @@
+[package]
+name = "agentikz-mcp"
+version = "0.4.3"
+edition = "2021"
+license = "MIT"
+description = "AgenTikZ stdio MCP bridge and transport diagnostics"
+
+[dependencies]
+rmcp = { version = "=3.9.0", default-features = false, features = ["server", "client", "transport-io", "transport-child-process", "transport-streamable-http-client-reqwest", "reqwest"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "io-std", "process"] }

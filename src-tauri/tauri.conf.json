@@ -1,12 +1,12 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "AgenTikZ",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "identifier": "ai.agentikz.studio",
   "build": {
-    "beforeDevCommand": "npm run adapters:stage && npm run dev",
+    "beforeDevCommand": "npm run adapters:stage && npm run mcp:stage && npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run adapters:stage && npm run build",
+    "beforeBuildCommand": "npm run adapters:stage && npm run mcp:stage -- --release && npm run build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -35,6 +35,7 @@
       "adapters/codex-cli/index.mjs",
       "adapters/codex-cli/xdg-open"
     ],
+    "externalBin": ["binaries/agentikz-mcp"],
     "windows": {
       "nsis": {
         "installerHooks": "windows/installer-hooks.nsh"

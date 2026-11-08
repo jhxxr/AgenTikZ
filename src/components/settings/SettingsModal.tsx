@@ -8,11 +8,13 @@ import {
   Copy,
   Cpu,
   ExternalLink,
+  FolderOpen,
   Globe,
   HelpCircle,
   Keyboard,
   Loader2,
   Play,
+  Plug,
   RefreshCw,
   RotateCcw,
   Settings,
@@ -40,6 +42,7 @@ import {
   ImageGenProviderId,
 } from '../../core/agent/illustration-prompt';
 import { useAgentStore } from '../../store/useAgentStore';
+import { McpSettingsPane } from './McpSettingsPane';
 import { useWorkspaceStore } from '../../store/useWorkspaceStore';
 import { JOURNAL_THEMES } from '../../core/themes/journal-presets';
 import { JournalThemeId } from '../../types/theme';
@@ -59,6 +62,12 @@ const NAV_ITEMS: Array<{
   sublabel: string;
   icon: React.ReactNode;
 }> = [
+  {
+    id: 'mcp',
+    label: 'MCP 服务',
+    sublabel: '画布工具与外部服务',
+    icon: <Plug className="w-4 h-4" />,
+  },
   {
     id: 'agent',
     label: 'Agent (ACP)',
@@ -132,6 +141,8 @@ export const SettingsModal: React.FC = () => {
     defaultAttachCanvas,
     defaultAttachSelection,
     autoSelectAffectedNodes,
+    agentFullAccess,
+    agentWorkingDirectory,
     proxyEnabled,
     proxyUrl,
     personalPrompt,
@@ -170,6 +181,8 @@ export const SettingsModal: React.FC = () => {
     defaultAttachCanvas: s.defaultAttachCanvas,
     defaultAttachSelection: s.defaultAttachSelection,
     autoSelectAffectedNodes: s.autoSelectAffectedNodes,
+    agentFullAccess: s.agentFullAccess,
+    agentWorkingDirectory: s.agentWorkingDirectory,
     proxyEnabled: s.proxyEnabled,
     proxyUrl: s.proxyUrl,
     personalPrompt: s.personalPrompt,
@@ -228,6 +241,8 @@ export const SettingsModal: React.FC = () => {
     Array<{ binDir: string; label: string; hasXelatex: boolean; hasDvisvgm: boolean }>
   >([]);
   const [isScanningTex, setIsScanningTex] = useState(false);
+  const [isPickingAgentDirectory, setIsPickingAgentDirectory] = useState(false);
+  const [agentDirectoryError, setAgentDirectoryError] = useState('');
 
   // Sync Escape key to close modal
   useEffect(() => {
@@ -375,12 +390,14 @@ export const SettingsModal: React.FC = () => {
             <div className="flex items-center justify-between font-medium text-slate-700 mb-1">
               <span className="flex items-center gap-1">
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-                BYOA 零密钥策略
+                {activeSection === 'mcp' ? 'MCP 本机凭据' : 'BYOA 零密钥策略'}
               </span>
               <span className="font-mono text-[9.5px] text-slate-400">ACP v1</span>
             </div>
             <p className="leading-relaxed text-[10px] text-slate-500">
-              复用本机已登录的 CLI Agent 与内置 ACP 适配器，不上传或托管任何 API Key。
+              {activeSection === 'mcp'
+                ? '敏感值保存在系统凭据库或本次运行内存；导出配置时排除密钥。'
+                : '复用本机已登录的 CLI Agent 与内置 ACP 适配器，不上传或托管任何 API Key。'}
             </p>
           </div>
         </aside>
@@ -409,6 +426,7 @@ export const SettingsModal: React.FC = () => {
 
           {/* Scrollable Pane Body */}
           <div className="flex-1 overflow-y-auto px-6 py-5">
+            {activeSection === 'mcp' && <McpSettingsPane />}
             {/* ==================== 1. AGENT (ACP) PANE ==================== */}
             {activeSection === 'agent' && (
               <div>
@@ -539,6 +557,76 @@ export const SettingsModal: React.FC = () => {
                       }
                     />
                   </SettingsRow>
+                </SettingsGroup>
+
+                <SettingsSectionLabel
+                  title="本机访问与工具权限"
+                  description="修改后从下一次发送消息起生效，已有会话无需重建。"
+                />
+                <SettingsGroup>
+                  <SettingsRow
+                    label="完整本机访问"
+                    description="开启后，Agent 可跨文件夹读取和修改本机文件，并执行命令；工具权限请求会自动批准。请仅为信任的本地 Agent 开启。"
+                    badge={<StatusBadge tone={agentFullAccess ? 'amber' : 'slate'}>
+                      {agentFullAccess ? '已开启' : '受限模式'}
+                    </StatusBadge>}
+                  >
+                    <SettingsToggle
+                      label="完整本机访问"
+                      checked={agentFullAccess}
+                      onChange={(checked) => updateSettings({ agentFullAccess: checked })}
+                    />
+                  </SettingsRow>
+                  <div className="px-4 py-3">
+                    <label htmlFor="agent-working-directory" className="text-[12.5px] font-medium text-slate-800">
+                      Agent 工作目录
+                    </label>
+                    <p className="mt-0.5 text-[11px] leading-relaxed text-slate-500">
+                      留空时使用当前项目文件夹；未打开项目时使用应用工作目录。开启完整访问后，也可通过绝对路径访问其他文件夹。
+                    </p>
+                    <div className="mt-2 flex gap-2">
+                      <input
+                        id="agent-working-directory"
+                        value={agentWorkingDirectory}
+                        disabled={!agentFullAccess}
+                        onChange={(e) => {
+                          updateSettings({ agentWorkingDirectory: e.target.value });
+                          setAgentDirectoryError('');
+                        }}
+                        placeholder="留空跟随当前项目，或输入文件夹绝对路径"
+                        className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[12px] text-slate-800 outline-none focus:border-blue-500 disabled:opacity-50"
+                      />
+                      <button
+                        type="button"
+                        disabled={!agentFullAccess || isPickingAgentDirectory}
+                        onClick={async () => {
+                          setAgentDirectoryError('');
+                          if (!('__TAURI_INTERNALS__' in window)) {
+                            setAgentDirectoryError('选择本机文件夹需要在桌面客户端中运行。');
+                            return;
+                          }
+                          setIsPickingAgentDirectory(true);
+                          try {
+                            const { invoke } = await import('@tauri-apps/api/core');
+                            const path = await invoke<string | null>('project_pick_directory', {
+                              initialDir: agentWorkingDirectory || null,
+                              title: '选择 Agent 工作目录',
+                            });
+                            if (path) updateSettings({ agentWorkingDirectory: path });
+                          } catch (error) {
+                            setAgentDirectoryError(String(error));
+                          } finally {
+                            setIsPickingAgentDirectory(false);
+                          }
+                        }}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[11.5px] text-slate-700 hover:bg-slate-50 disabled:opacity-50 cursor-pointer"
+                      >
+                        <FolderOpen className="h-3.5 w-3.5" />
+                        选择文件夹
+                      </button>
+                    </div>
+                    {agentDirectoryError && <p role="alert" className="mt-1 text-[11px] text-rose-600">{agentDirectoryError}</p>}
+                  </div>
                 </SettingsGroup>
 
                 {/* Common Agents Catalog (Agentero 2-layer detection + Handshake Probe) */}
@@ -1182,7 +1270,7 @@ export const SettingsModal: React.FC = () => {
 
                 <SettingsSectionLabel
                   title="重置偏好设置"
-                  description="将所有设置项恢复为出厂默认状态（不会清空当前画布代码）。"
+                  description="恢复通用、画布、Agent 与编辑器偏好。MCP 服务在独立页面管理。"
                 />
                 <SettingsGroup>
                   <SettingsRow
@@ -1204,7 +1292,7 @@ export const SettingsModal: React.FC = () => {
                       className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-[11.5px] font-medium text-rose-700 hover:bg-rose-100 cursor-pointer"
                     >
                       <RotateCcw className="h-3.5 w-3.5" />
-                      <span>重置所有设置</span>
+                      <span>重置偏好设置</span>
                     </button>
                   </SettingsRow>
                 </SettingsGroup>

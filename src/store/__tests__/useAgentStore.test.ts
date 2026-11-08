@@ -5,15 +5,22 @@ const bridge = vi.hoisted(() => ({
   listen: vi.fn(),
   unlisten: vi.fn(),
   setTikzCode: vi.fn(),
+  canvasCode: '% original canvas',
+  revision: 0,
   onEvent: undefined as undefined | ((event: { payload: Record<string, unknown> }) => void),
 }));
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: bridge.invoke }));
 vi.mock('@tauri-apps/api/event', () => ({ listen: bridge.listen }));
+vi.mock('../../core/mcp/runtime', () => ({ ensureMcpRuntime: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('../useProjectStore', () => ({
+  useProjectStore: { getState: () => ({ projectDir: 'E:\\Research\\current-project' }) },
+}));
 vi.mock('../useWorkspaceStore', () => ({
   useWorkspaceStore: {
     getState: () => ({
-      tikzCode: '% original canvas',
+      tikzCode: bridge.canvasCode,
+      sourceRevision: bridge.revision,
       selectedIds: [],
       parsedDoc: { nodes: [], edges: [], charts: [] },
       setTikzCode: bridge.setTikzCode,
@@ -38,6 +45,9 @@ beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
   bridge.onEvent = undefined;
+  bridge.canvasCode = '% original canvas';
+  bridge.revision = 0;
+  bridge.setTikzCode.mockImplementation((code: string) => { bridge.canvasCode = code; bridge.revision += 1; });
   vi.stubGlobal('window', { __TAURI_INTERNALS__: {} });
   bridge.listen.mockImplementation(async (_name, callback) => {
     bridge.onEvent = callback;
@@ -51,6 +61,88 @@ afterEach(() => {
 });
 
 describe('real ACP frontend contract', () => {
+  it('preserves an MCP proposal instead of replacing it with a duplicate text proposal', async () => {
+    const store = await freshStore();
+    bridge.invoke.mockImplementation(async (_command, args) => {
+      store.setState((state) => ({ sessions: state.sessions.map((session) => ({ ...session,
+        messages: session.messages.map((message) => message.id === `asst_${args.requestId}` ? { ...message,
+          patchProposal: { id: 'real-mcp-proposal', summary: 'MCP', rationale: '', newTikzCode: '% MCP',
+            affectedElementIds: [], status: 'pending' as const },
+        } : message),
+      })) }));
+      return { usedNativeCli: true, reply: 'A proposal is ready.', proposedTikz: '% duplicate text proposal' };
+    });
+    await store.getState().sendPromptToAgent('Edit with a tool');
+    expect(store.getState().sessions[0].messages.at(-1)?.patchProposal?.id).toBe('real-mcp-proposal');
+  });
+
+  it('forwards cancellation to the active backend request and clears its id at completion', async () => {
+    const store = await freshStore();
+    let complete: (value: unknown) => void = () => {};
+    bridge.invoke.mockImplementation((command) => command === 'acp_send_prompt'
+      ? new Promise((resolve) => { complete = resolve; }) : Promise.resolve());
+    const sending = store.getState().sendPromptToAgent('Long task');
+    await vi.waitFor(() => expect(store.getState().activeRequestId).toBeTruthy());
+    const id = store.getState().activeRequestId;
+    await store.getState().cancelPrompt();
+    expect(bridge.invoke).toHaveBeenCalledWith('acp_cancel_prompt', { requestId: id });
+    complete({ usedNativeCli: true, reply: 'Stopped.' });
+    await sending;
+    expect(store.getState().activeRequestId).toBeNull();
+  });
+
+  it('blocks a text proposal when the user edits the source before applying it', async () => {
+    bridge.invoke.mockResolvedValue({ usedNativeCli: true, reply: 'Review this.', proposedTikz: '% replacement' });
+    const store = await freshStore();
+    await store.getState().sendPromptToAgent('Edit');
+    const message = store.getState().sessions[0].messages.find((m) => m.patchProposal)!;
+    bridge.canvasCode = '% User edit';
+    bridge.revision += 1;
+    expect(store.getState().applyPatchProposal(message.id)).toBe(false);
+    expect(bridge.setTikzCode).not.toHaveBeenCalled();
+    expect(store.getState().sessions[0].messages.find((m) => m.id === message.id)?.content).toContain('源码已变化');
+  });
+
+  it('keeps local access disabled by default and excludes project paths', async () => {
+    const store = await freshStore();
+    await store.getState().sendPromptToAgent('Read my local notes');
+    expect(bridge.invoke.mock.calls[0][1]).toMatchObject({
+      fullAccess: false,
+      workingDirectory: undefined,
+    });
+  });
+
+  it('uses the enabled access setting and follows the project when no directory is specified', async () => {
+    const { useSettingsStore } = await import('../useSettingsStore');
+    const store = await freshStore();
+    useSettingsStore.getState().updateSettings({ agentFullAccess: true });
+    await store.getState().sendPromptToAgent('Read notes outside my project');
+    expect(bridge.invoke.mock.calls[0][1]).toMatchObject({
+      fullAccess: true,
+      workingDirectory: 'E:\\Research\\current-project',
+    });
+  });
+
+  it('uses a custom directory and honors disabling access on the next message', async () => {
+    const { useSettingsStore } = await import('../useSettingsStore');
+    const store = await freshStore();
+    useSettingsStore.getState().updateSettings({
+      agentFullAccess: true,
+      agentWorkingDirectory: '  E:\\Other Folder\\notes  ',
+    });
+    await store.getState().sendPromptToAgent('Read local notes');
+    expect(bridge.invoke.mock.calls[0][1]).toMatchObject({
+      fullAccess: true,
+      workingDirectory: 'E:\\Other Folder\\notes',
+    });
+    useSettingsStore.getState().updateSettings({ agentFullAccess: false });
+    await store.getState().sendPromptToAgent('Continue from the canvas');
+    expect(bridge.invoke.mock.calls[1][1]).toMatchObject({
+      fullAccess: false,
+      workingDirectory: undefined,
+    });
+  });
+
   it('does not simulate an agent when the desktop bridge is unavailable', async () => {
     vi.stubGlobal('window', {});
     const store = await freshStore();

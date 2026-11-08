@@ -10,6 +10,7 @@ import { PUBLICATION_WORKFLOW_TEMPLATES } from '../../core/agent/figure-contract
 import { parseTikzDocument } from '../../core/parser/parser';
 import { generateScientificIllustration } from '../../core/agent/illustration-prompt';
 import { AcpAgentId } from '../../types/acp';
+import { currentCanvasTarget, sameCanvas } from '../../core/mcp/context';
 import {
   Bot,
   Check,
@@ -26,11 +27,13 @@ import {
   PanelRightClose,
   PanelRightOpen,
   Plus,
+  Plug,
   RotateCcw,
   ScanSearch,
   Send,
   Settings,
   Sparkles,
+  Square,
   Terminal,
   Wand2,
   Wrench,
@@ -46,6 +49,8 @@ export const RightAgentPanel: React.FC = () => {
     attachSelectionContext,
     autoLayoutRepairEnabled,
     isStreaming,
+    activeRequestId,
+    cancelPrompt,
     sessions,
     activeSessionId,
     setActiveAgentId,
@@ -69,6 +74,8 @@ export const RightAgentPanel: React.FC = () => {
     attachSelectionContext: s.attachSelectionContext,
     autoLayoutRepairEnabled: s.autoLayoutRepairEnabled,
     isStreaming: s.isStreaming,
+    activeRequestId: s.activeRequestId,
+    cancelPrompt: s.cancelPrompt,
     sessions: s.sessions,
     activeSessionId: s.activeSessionId,
     setActiveAgentId: s.setActiveAgentId,
@@ -172,6 +179,18 @@ export const RightAgentPanel: React.FC = () => {
   ) => {
     const directives = parseTikzDocument(tikzSource).imageDirectives || [];
     if (directives.length === 0 || generatingImgMsgId === msgId) return;
+    const imageTarget = currentCanvasTarget(activeSessionId);
+    const proposalTarget = activeSession?.messages.find((message) => message.id === msgId)?.patchProposal?.targetCanvas;
+    if (proposalTarget && !sameCanvas(proposalTarget)) {
+      setImgGenStatusByMsgId((prev) => ({ ...prev, [msgId]: '请先切回提案所属的画布。' }));
+      return;
+    }
+    let expectedSource = useWorkspaceStore.getState().tikzCode;
+    const checkImageTarget = () => {
+      if (!sameCanvas(imageTarget) || useWorkspaceStore.getState().tikzCode !== expectedSource) {
+        throw new Error('画布或源码已变化，已停止将生成结果写入画布。');
+      }
+    };
     setGeneratingImgMsgId(msgId);
     setImgGenStatusByMsgId((prev) => ({
       ...prev,
@@ -180,6 +199,7 @@ export const RightAgentPanel: React.FC = () => {
     try {
       let okCount = 0;
       for (const dir of directives) {
+        checkImageTarget();
         const targetRel = dir.path || `figures/assets/ai/${dir.nodeId}.png`;
         const res = await generateScientificIllustration({
           provider: settings.imageGenProvider,
@@ -196,13 +216,16 @@ export const RightAgentPanel: React.FC = () => {
           proxyUrl: settings.proxyEnabled ? settings.proxyUrl : undefined,
         });
         if (res.ok && res.dataUrl) {
+          checkImageTarget();
           const savedRel = await registerGeneratedAsset(
             res.savedRelativePath || targetRel,
             res.dataUrl
           );
+          checkImageTarget();
           useWorkspaceStore
             .getState()
             .updateImageNodePathById(dir.nodeId, savedRel);
+          expectedSource = useWorkspaceStore.getState().tikzCode;
           okCount++;
         }
       }
@@ -221,7 +244,7 @@ export const RightAgentPanel: React.FC = () => {
   };
 
   const handleApplyPatchAndAutoCutout = (msgId: string, newTikzCode: string) => {
-    applyPatchProposal(msgId);
+    if (!applyPatchProposal(msgId)) return;
     const directives = parseTikzDocument(newTikzCode).imageDirectives || [];
     if (directives.length > 0) {
       void executeAgentImageDirectives(msgId, newTikzCode);
@@ -404,6 +427,21 @@ export const RightAgentPanel: React.FC = () => {
           </button>
         </div>
 
+        <button
+          type="button"
+          onClick={() => openSettings('agent')}
+          title={settings.agentFullAccess
+            ? `工作目录：${settings.agentWorkingDirectory.trim() || projectDir || '应用工作目录'}`
+            : '打开设置可开启跨文件夹访问和命令执行'}
+          className={`text-[10.5px] cursor-pointer ${settings.agentFullAccess ? 'text-amber-700' : 'text-slate-500'}`}
+        >
+          {settings.agentFullAccess ? '完整本机访问已开启' : '受限模式 · 配置本机访问'}
+        </button>
+        <button type="button" onClick={() => openSettings('mcp')}
+          className="inline-flex items-center gap-1 text-[10.5px] text-blue-600 hover:text-blue-700 cursor-pointer">
+          <Plug className="h-3 w-3" />MCP 服务
+        </button>
+
         {/* Collapsible ACP Command Inspector (Agentero style BYOA transparency) */}
         {showAgentConfig && (
           <div className="p-2 rounded-lg bg-white border border-slate-200 text-[11px] space-y-1">
@@ -534,7 +572,7 @@ export const RightAgentPanel: React.FC = () => {
                             {tc.toolName.replace(/^mcp__agen?tikz__/, '')}
                           </strong>
                           <span className="text-slate-400 truncate">
-                            ({tc.argsSummary})
+                            ({tc.source === 'local' ? '本地快捷操作' : tc.source === 'mcp' ? 'MCP' : 'Agent 工具'} · {tc.argsSummary}{tc.durationMs !== undefined ? ` · ${tc.durationMs} ms` : ''})
                           </span>
                         </span>
                         {tc.status === 'completed' ? (
@@ -759,7 +797,7 @@ export const RightAgentPanel: React.FC = () => {
                               disabled={isBusy}
                               onClick={async () => {
                                 if (patch.status !== 'applied') {
-                                  applyPatchProposal(msg.id);
+                                  if (!applyPatchProposal(msg.id)) return;
                                 }
                                 await executeAgentImageDirectives(
                                   msg.id,
@@ -1057,12 +1095,12 @@ export const RightAgentPanel: React.FC = () => {
               增量 Diff · 契约自愈 · 透明插图联动
             </span>
             <button
-              onClick={handleSend}
-              disabled={!inputText.trim() || isStreaming}
+              onClick={isStreaming ? () => void cancelPrompt() : handleSend}
+              disabled={isStreaming ? !activeRequestId : !inputText.trim()}
               className="px-2.5 py-1 rounded-xl bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-500 hover:to-blue-600 disabled:from-slate-200 disabled:to-slate-200 text-white text-[11px] font-medium flex items-center gap-1 transition-all cursor-pointer shadow-sm"
             >
-              <span>发送</span>
-              <Send className="w-3 h-3" />
+              <span>{isStreaming ? '停止' : '发送'}</span>
+              {isStreaming ? <Square className="w-3 h-3" /> : <Send className="w-3 h-3" />}
             </button>
           </div>
         </div>

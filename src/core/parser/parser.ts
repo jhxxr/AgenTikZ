@@ -19,6 +19,7 @@ import {
   registerCustomTikzColors,
 } from '../themes/journal-presets';
 import { parsePragmaDirectivesFromSource } from '../agent/figure-contract';
+import { getExactPreviewReasons, maskLatexComments } from '../tex/source';
 
 // ── Depth-aware scanning utilities ──────────────────────────────────────
 // These replace naive non-greedy regex matches that would break on nested
@@ -1118,6 +1119,20 @@ export function parseTikzDocument(
   const edges: TikzEdgeElement[] = [];
   const charts: TikzChartElement[] = [];
   const diagnostics: ParsedTikzDocument['diagnostics'] = [];
+  const exactPreviewReasons = getExactPreviewReasons(source);
+  if (exactPreviewReasons.length) {
+    diagnostics.push({
+      line: 1,
+      severity: 'warning',
+      message: `包含${exactPreviewReasons.join('、')}，需要 TeX 精确预览；交互画布仅支持部分语法。`,
+    });
+  }
+  // Macro bodies in the preamble are definitions, not nodes on the canvas.
+  const visibleCode = maskLatexComments(source);
+  const pictureRanges = Array.from(
+    visibleCode.matchAll(/\\begin\{tikzpicture\}[\s\S]*?(?:\\end\{tikzpicture\}|$)/g),
+    (match) => ({ start: match.index!, end: match.index! + match[0].length })
+  );
 
   // Extract overall Figure Caption (% \caption{...} or \caption{...}) and \label{...}
   let figureCaption = '';
@@ -1166,6 +1181,7 @@ export function parseTikzDocument(
   while ((sMatch = stmtStartRegex.exec(source)) !== null) {
     const start = sMatch.index;
     if (isInsideAxis(start)) continue;
+    if (pictureRanges.length && !pictureRanges.some((r) => start >= r.start && start < r.end)) continue;
     const end = findStatementEnd(source, start);
     if (end === -1) continue;
 

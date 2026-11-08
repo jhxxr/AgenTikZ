@@ -9,6 +9,9 @@ import {
   TikzPatchProposal,
 } from '../types/acp';
 import { useWorkspaceStore } from './useWorkspaceStore';
+import { useProjectStore } from './useProjectStore';
+import { useMcpStore } from './useMcpStore';
+import { currentCanvasTarget, endMcpRequest, proposalConflict, registerMcpRequest } from '../core/mcp/context';
 import { FULL_FIGURE_TEMPLATES } from '../core/templates/dl-templates';
 import { buildTemplateReferenceContext } from '../core/templates/template-reference';
 import { buildAgentSkillAndLibraryContext } from '../core/agent/agent-knowledge';
@@ -64,16 +67,15 @@ interface AgentStoreState {
   providers: AcpAgentProvider[];
   activeAgentId: AcpAgentId;
   customCommand: string;
-  mcpServerEnabled: boolean;
   attachCanvasContext: boolean;
   attachSelectionContext: boolean;
   autoLayoutRepairEnabled: boolean;
   isStreaming: boolean;
+  activeRequestId: string | null;
   sessions: AgentSession[];
   activeSessionId: string;
   setActiveAgentId: (id: AcpAgentId) => void;
   setCustomCommand: (cmd: string) => void;
-  setMcpServerEnabled: (enabled: boolean) => void;
   setAttachCanvasContext: (attach: boolean) => void;
   setAttachSelectionContext: (attach: boolean) => void;
   setAutoLayoutRepairEnabled: (enabled: boolean) => void;
@@ -83,8 +85,9 @@ interface AgentStoreState {
   probeLocalAgents: () => Promise<void>;
   testAgentHandshake: (agentId: AcpAgentId) => Promise<AcpHandshakeResult>;
   sendPromptToAgent: (promptText: string) => Promise<void>;
+  cancelPrompt: () => Promise<void>;
   runLocalAgentSkill: (skillId: LocalAgentSkillId) => void;
-  applyPatchProposal: (messageId: string) => void;
+  applyPatchProposal: (messageId: string) => boolean;
   revertPatchProposal: (messageId: string) => void;
 }
 
@@ -107,11 +110,11 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
     initialSettings.customAcpArgs,
     initialSettings.customAcpEnvJson
   ),
-  mcpServerEnabled: true,
   attachCanvasContext: initialSettings.defaultAttachCanvas,
   attachSelectionContext: initialSettings.defaultAttachSelection,
   autoLayoutRepairEnabled: true,
   isStreaming: false,
+  activeRequestId: null,
   sessions: [initialSession],
   activeSessionId: initialSessionId,
 
@@ -120,7 +123,6 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
     set({ customCommand });
     useSettingsStore.getState().updateSettings({ customAcpCommand: customCommand });
   },
-  setMcpServerEnabled: (mcpServerEnabled) => set({ mcpServerEnabled }),
   setAttachCanvasContext: (attachCanvasContext) => set({ attachCanvasContext }),
   setAttachSelectionContext: (attachSelectionContext) => set({ attachSelectionContext }),
   setAutoLayoutRepairEnabled: (autoLayoutRepairEnabled) => set({ autoLayoutRepairEnabled }),
@@ -251,6 +253,14 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
       return res;
     }
   },
+  cancelPrompt: async () => {
+    const requestId = get().activeRequestId;
+    if (!requestId) return;
+    endMcpRequest(requestId);
+    const { invoke } = await import('@tauri-apps/api/core');
+    try { await invoke('acp_cancel_prompt', { requestId }); }
+    catch (error) { useMcpStore.setState({ sessionStatus: String(error) }); }
+  },
   sendPromptToAgent: async (promptText) => {
     if (!promptText.trim() || get().isStreaming) return;
     const { activeAgentId, activeSessionId, attachSelectionContext, attachCanvasContext, customCommand, sessions } = get();
@@ -370,8 +380,8 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
         timestamp,
         thoughtProcess: `执行 AST 几何碰撞检测与 ${theme.name} 配色审查...`,
         mcpToolCalls: [
-          { toolName: 'get_canvas_ast', argsSummary: '解析画布节点与边集合', status: 'completed' },
-          { toolName: 'inspect_layout_diagnostics', argsSummary: `theme=${activeThemeId}`, status: 'completed' },
+          { toolName: 'get_canvas_ast', argsSummary: '解析画布节点与边集合', status: 'completed', source: 'local' },
+          { toolName: 'inspect_layout_diagnostics', argsSummary: `theme=${activeThemeId}`, status: 'completed', source: 'local' },
         ],
         content: `### 📐 画布 AST 与几何布局诊断报告\n- **布局健康评分**：\`${beforeReport.score} / 100\`\n- **当前顶刊主题**：${theme.name}\n\n${issueLines.join('\n')}${
           beforeReport.issues.length > 0
@@ -410,9 +420,9 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
       timestamp,
       thoughtProcess: `分析画布 AST -> 检测垂直间距/重叠/无框标签 -> 注入 ${theme.name} 语义色板 -> 生成增量 Diff 补丁`,
       mcpToolCalls: [
-        { toolName: 'get_canvas_ast', argsSummary: '提取节点坐标与包围盒', status: 'completed' },
-        { toolName: 'inspect_layout_diagnostics', argsSummary: `score=${beforeReport.score}->${repairResult.afterReport.score}`, status: 'completed' },
-        { toolName: 'auto_repair_layout', argsSummary: `${repairResult.repairs.length} 项优化`, status: 'completed' },
+        { toolName: 'get_canvas_ast', argsSummary: '提取节点坐标与包围盒', status: 'completed', source: 'local' },
+        { toolName: 'inspect_layout_diagnostics', argsSummary: `score=${beforeReport.score}->${repairResult.afterReport.score}`, status: 'completed', source: 'local' },
+        { toolName: 'auto_repair_layout', argsSummary: `${repairResult.repairs.length} 项优化`, status: 'completed', source: 'local' },
       ],
       content: `### ${skillTitles[skillId]}\n${repairBullets}\n\n- **布局健康度提升**：\`${beforeReport.score}/100\` → \`${repairResult.afterReport.score}/100\`\n- **AST 变更统计**：新增 \`${diff.addedCount}\` 项 / 修改 \`${diff.modifiedCount}\` 项 / 移除 \`${diff.removedCount}\` 项（共涉及 ${diff.affectedElementIds.length} 个元素）`,
       patchProposal: hasChanges
@@ -429,6 +439,9 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
             autoRepairs: repairResult.repairs,
             layoutScore: repairResult.afterReport.score,
             fitCanvasOnApply: true,
+            targetCanvas: currentCanvasTarget(activeSessionId),
+            baseTikzCode: currentTikz,
+            baseRevision: workspace.sourceRevision ?? 0,
           }
         : undefined,
     };
@@ -442,7 +455,12 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
   applyPatchProposal: (messageId) => {
     const { sessions, activeSessionId } = get();
     const message = sessions.find((session) => session.id === activeSessionId)?.messages.find((item) => item.id === messageId);
-    if (!message?.patchProposal || message.patchProposal.status === 'applied') return;
+    if (!message?.patchProposal || message.patchProposal.status === 'applied') return false;
+    const conflict = proposalConflict(message.patchProposal);
+    if (conflict) {
+      updateAgentMessage(activeSessionId, messageId, (item) => ({ ...item, content: `${item.content}\n\n提案未应用：${conflict}` }));
+      return false;
+    }
     const workspace = useWorkspaceStore.getState();
     const currentCode = workspace.tikzCode;
     const recTheme = message.patchProposal.recommendedThemeId;
@@ -462,14 +480,20 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
     updateAgentMessage(activeSessionId, messageId, (item) => ({ ...item,
       patchProposal: item.patchProposal ? { ...item.patchProposal, status: 'applied', previousTikzCode: currentCode } : undefined,
     }));
+    return true;
   },
   revertPatchProposal: (messageId) => {
     const { sessions, activeSessionId } = get();
     const message = sessions.find((session) => session.id === activeSessionId)?.messages.find((item) => item.id === messageId);
     if (!message?.patchProposal || message.patchProposal.previousTikzCode === undefined) return;
+    const conflict = proposalConflict(message.patchProposal, true);
+    if (conflict) {
+      updateAgentMessage(activeSessionId, messageId, (item) => ({ ...item, content: `${item.content}\n\n提案未撤回：${conflict}` }));
+      return;
+    }
     useWorkspaceStore.getState().setTikzCode(message.patchProposal.previousTikzCode, true);
     updateAgentMessage(activeSessionId, messageId, (item) => ({ ...item,
-      patchProposal: item.patchProposal ? { ...item.patchProposal, status: 'pending' } : undefined,
+      patchProposal: item.patchProposal ? { ...item.patchProposal, status: 'pending', baseRevision: useWorkspaceStore.getState().sourceRevision ?? 0 } : undefined,
     }));
   },
 }));
@@ -561,12 +585,26 @@ async function sendViaRealAcp(
   const { listen } = await import('@tauri-apps/api/event');
   const requestId = crypto.randomUUID();
   const messageId = `asst_${requestId}`;
+  const target = currentCanvasTarget(activeSessionId);
+  const baseTikzCode = useWorkspaceStore.getState().tikzCode;
+  const baseRevision = useWorkspaceStore.getState().sourceRevision ?? 0;
   let finished = false;
   let unlisten: (() => void) | undefined;
+  let releaseMcp: (() => void) | undefined;
   try {
+    const { ensureMcpRuntime } = await import('../core/mcp/runtime');
+    await ensureMcpRuntime();
+    releaseMcp = registerMcpRequest(requestId, { target, agentId, messageId });
     // Establish delivery before creating a placeholder or invoking the backend.
     unlisten = await listen<AcpStreamEvent>('acp:stream', ({ payload: event }) => {
       if (finished || event.requestId !== requestId) return;
+      if (event.kind === 'mcp_status') {
+        useMcpStore.setState({ sessionStatus: event.text });
+        return;
+      }
+      if (event.kind === 'tool_call' && event.toolName?.startsWith('mcp__')) {
+        useMcpStore.setState({ sessionStatus: `本轮已发起 MCP 调用：${event.toolName}。结果见聊天中的工具记录。` });
+      }
       if (event.kind === 'permission_denied') {
         const noticeId = `permission_${requestId}`;
         useAgentStore.setState((state) => ({ sessions: state.sessions.map((session) =>
@@ -583,9 +621,11 @@ async function sendViaRealAcp(
         if (event.kind === 'message') return { ...message, content: message.content + event.text };
         if (event.kind === 'thought') return { ...message, thoughtProcess: (message.thoughtProcess || '') + event.text };
         if (event.kind === 'tool_call') {
+          if (event.toolName?.startsWith('mcp__agentikz__')) return message;
           const status = event.toolStatus === 'completed' || event.toolStatus === 'failed' ? event.toolStatus : 'running';
           return { ...message, mcpToolCalls: [...(message.mcpToolCalls || []), {
             toolName: event.toolName || event.text, argsSummary: event.toolCallId || '', status,
+            callId: event.toolCallId, source: event.toolName?.startsWith('mcp__') ? 'mcp' : 'agent',
           }] };
         }
         if (event.kind === 'tool_update') {
@@ -607,6 +647,8 @@ async function sendViaRealAcp(
     const settings = useSettingsStore.getState();
     const proxyUrl = settings.proxyEnabled ? settings.proxyUrl : undefined;
     const userAgent = resolveEffectiveUserAgent(settings.userAgentPreset, settings.customUserAgent);
+    useAgentStore.setState({ activeRequestId: requestId });
+    useMcpStore.setState({ sessionStatus: '正在建立 Agent 会话并提交 MCP 配置…' });
     const response = await invoke<{
       usedNativeCli: boolean; thought?: string | null; reply?: string | null; proposedTikz?: string | null;
     }>('acp_send_prompt', {
@@ -623,13 +665,20 @@ async function sendViaRealAcp(
       userAgent,
       responseLanguage: settings.responseLanguage,
       personalPrompt: settings.personalPrompt || undefined,
+      fullAccess: settings.agentFullAccess,
+      mcpTarget: target,
+      workingDirectory: settings.agentFullAccess
+        ? settings.agentWorkingDirectory.trim() || useProjectStore.getState().projectDir || undefined
+        : undefined,
     });
     finished = true;
     if (!response?.usedNativeCli) throw new Error('本地 ACP Agent 未启动。请检查安装和 CLI 登录状态。');
     if (!response.reply?.trim()) throw new Error('ACP Agent 未返回文本。未生成画布修改。');
 
     const autoRepair = useAgentStore.getState().autoLayoutRepairEnabled;
-    const patchProposal = buildEnrichedPatchProposal(
+    const existingProposal = useAgentStore.getState().sessions
+      .find((session) => session.id === activeSessionId)?.messages.find((message) => message.id === messageId)?.patchProposal;
+    const patchProposal = existingProposal ? undefined : buildEnrichedPatchProposal(
       requestId,
       response.reply,
       canvasTikz,
@@ -644,17 +693,22 @@ async function sendViaRealAcp(
       // The IPC response is authoritative, not an extra stream chunk.
       content: response.reply!,
       thoughtProcess: response.thought ?? message.thoughtProcess,
-      patchProposal,
+      patchProposal: message.patchProposal ?? (patchProposal
+        ? { ...patchProposal, targetCanvas: target, baseTikzCode, baseRevision }
+        : undefined),
     }));
   } catch (error) {
+    useMcpStore.setState({ sessionStatus: `Agent 会话未完成：${error instanceof Error ? error.message : String(error)}` });
     // Keep real partial output; remove only a completely empty placeholder.
     useAgentStore.setState((state) => ({ sessions: state.sessions.map((session) => session.id === activeSessionId
       ? { ...session, messages: session.messages.filter((message) =>
-          message.id !== messageId || message.content || message.thoughtProcess || message.mcpToolCalls?.length) }
+          message.id !== messageId || message.content || message.thoughtProcess || message.patchProposal || message.mcpToolCalls?.length) }
       : session) }));
     throw error;
   } finally {
     finished = true;
+    useAgentStore.setState({ activeRequestId: null });
+    releaseMcp?.();
     unlisten?.();
   }
 }

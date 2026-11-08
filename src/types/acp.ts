@@ -1,3 +1,5 @@
+import type { CanvasTarget } from './mcp';
+
 export type AcpAgentId =
   | 'claude-code'
   | 'codex-cli'
@@ -59,7 +61,7 @@ export interface EnvironmentDiagnostics {
 /** Streamed from the Rust backend via Tauri event `acp:stream`. */
 export interface AcpStreamEvent {
   requestId: string;
-  kind: 'message' | 'thought' | 'tool_call' | 'tool_update' | 'completed' | 'failed' | 'permission_denied';
+  kind: 'message' | 'thought' | 'tool_call' | 'tool_update' | 'completed' | 'failed' | 'permission_denied' | 'mcp_status';
   text: string;
   toolName?: string;
   toolCallId?: string;
@@ -95,6 +97,10 @@ export interface TikzPatchProposal {
   layoutScore?: number;
   recommendedThemeId?: string;
   fitCanvasOnApply?: boolean;
+  targetCanvas?: CanvasTarget;
+  baseRevision?: number;
+  baseSourceHash?: string;
+  baseTikzCode?: string;
 }
 
 export interface AgentChatMessage {
@@ -109,6 +115,9 @@ export interface AgentChatMessage {
   templateReferenceId?: string;
   patchProposal?: TikzPatchProposal;
   mcpToolCalls?: Array<{
+    callId?: string;
+    source?: 'mcp' | 'agent' | 'local';
+    durationMs?: number;
     toolName: string;
     argsSummary: string;
     status: 'running' | 'completed' | 'failed';

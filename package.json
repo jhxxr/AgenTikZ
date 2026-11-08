@@ -1,7 +1,7 @@
 {
   "name": "agentikz",
   "private": true,
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "AI-era Visual TikZ & PGFPlots Editor for Scientific Research with BYOA (ACP/MCP)",
   "license": "MIT",
   "repository": {
@@ -16,6 +16,8 @@
   "scripts": {
     "adapters:stage": "node scripts/prepare-adapters.mjs",
     "adapters:verify": "node scripts/verify-adapters.mjs",
+    "mcp:stage": "node scripts/prepare-mcp.mjs",
+    "test:mcp": "node --test scripts/tests/mcp-integration.mjs",
     "test:packaging": "node --test scripts/tests/adapter-packaging.mjs",
     "dev": "vite",
     "build": "tsc -b && vite build",

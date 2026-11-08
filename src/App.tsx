@@ -15,6 +15,7 @@ import { PaperWorkspaceView } from './components/paper/PaperWorkspaceView';
 import { InsertFigureModal } from './components/paper/InsertFigureModal';
 import { useSettingsStore } from './store/useSettingsStore';
 import { useProjectStore } from './store/useProjectStore';
+import { useMcpStore } from './store/useMcpStore';
 
 export const App: React.FC = () => {
   const { isOpen, openSettings, closeSettings } = useSettingsStore(useShallow((s) => ({
@@ -26,6 +27,11 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     void useProjectStore.getState().initOnStartup();
+    if ('__TAURI_INTERNALS__' in window) {
+      void import('./core/mcp/runtime').then(({ ensureMcpRuntime }) => ensureMcpRuntime())
+        .catch((error) => useMcpStore.setState({ error: String(error) }));
+      void useMcpStore.getState().load();
+    }
   }, []);
 
   useEffect(() => {

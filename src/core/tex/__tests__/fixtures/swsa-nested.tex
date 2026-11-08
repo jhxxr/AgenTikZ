@@ -1,0 +1,399 @@
+\documentclass[border=4pt]{standalone}
+\usepackage{tikz}
+\usepackage{pgfplots}
+\usepackage{graphicx}
+\usepackage{amsmath,amssymb}
+\pgfplotsset{
+  compat=1.18,
+  id/.code={},
+  chart_type/.code={},
+  subcaption/.code={},
+  uncertainty_note/.code={},
+  direct_labels/.code={},
+  title_offset/.code={},
+  xlabel_offset/.code={},
+  ylabel_offset/.code={},
+  legend_scale/.code={},
+  legend/.code={}
+}
+\usepgfplotslibrary{statistics}
+\usetikzlibrary{arrows.meta,positioning,calc,fit,backgrounds,shapes.geometric}
+% --- Publication Theme Color Palette (NeurIPS · ICLR) ---
+\definecolor{nips_blue}{HTML}{2B5B84}
+\definecolor{nips_amber}{HTML}{B4690E}
+\definecolor{nips_sage}{HTML}{28664B}
+\definecolor{nips_purple}{HTML}{5E438B}
+\definecolor{nips_rose}{HTML}{9E3333}
+\definecolor{nips_slate}{HTML}{475569}
+\definecolor{cvpr_navy}{HTML}{1D4ED8}
+\definecolor{cvpr_coral}{HTML}{C2410C}
+\definecolor{cvpr_teal}{HTML}{0F766E}
+\definecolor{cvpr_indigo}{HTML}{4338CA}
+\definecolor{cvpr_gold}{HTML}{A16207}
+\definecolor{cvpr_gray}{HTML}{334155}
+\definecolor{npg_blue}{HTML}{3C5488}
+\definecolor{npg_red}{HTML}{E64B35}
+\definecolor{npg_teal}{HTML}{00A087}
+\definecolor{npg_sand}{HTML}{B09C85}
+\definecolor{npg_sky}{HTML}{4DBBD5}
+\definecolor{npg_dark}{HTML}{333333}
+\definecolor{ieee_blue}{HTML}{00629B}
+\definecolor{ieee_amber}{HTML}{9A5B13}
+\definecolor{ieee_teal}{HTML}{115E59}
+% --- AgenTikZ Semantic Attribute Keys & Default Node Styles ---
+\tikzset{
+  every node/.append style={align=center},
+  subtype/.code={},
+  role/.code={},
+  depth/.code={},
+  channels/.code={},
+  sublabel/.code={},
+  dl_block/.style={draw=nips_blue!85!black, fill=nips_blue!14, rounded corners=2.5pt, line width=0.7pt, minimum width=2.8cm, minimum height=0.82cm, align=center},
+  mha_block/.style={draw=nips_amber!85!black, fill=nips_amber!16, rounded corners=2.5pt, line width=0.7pt, minimum width=3.0cm, minimum height=0.92cm, align=center},
+  addnorm_block/.style={draw=nips_sage!85!black, fill=nips_sage!15, rounded corners=2.5pt, line width=0.7pt, minimum width=2.8cm, minimum height=0.65cm, align=center},
+  conv_block/.style={draw=nips_sage!85!black, fill=nips_sage!15, rounded corners=2.5pt, line width=0.7pt, minimum width=2.6cm, minimum height=0.85cm, align=center},
+  feature_cube/.style={draw=nips_blue!85!black, fill=nips_blue!14, line width=0.7pt, minimum width=1.2cm, minimum height=2.0cm, align=center},
+  op_circle/.style={circle, draw=nips_slate!80!black, fill=white, line width=0.7pt, minimum size=0.6cm, inner sep=1pt, align=center},
+  stage_box/.style={draw=nips_slate!55, fill=nips_slate!5, dashed, rounded corners=4pt, line width=0.7pt, align=center},
+  subcaption/.style={draw=none, fill=none, align=center}
+}
+\begin{document}
+\documentclass[10pt]{article}
+\usepackage[T1]{fontenc}
+\usepackage[paperwidth=260mm, paperheight=176mm, margin=2mm]{geometry}
+\usepackage{tikz}
+\usepackage{xcolor}
+\usepackage{amsmath,amssymb}
+\usepackage[scaled=0.95]{helvet}
+\renewcommand{\familydefault}{\sfdefault}
+\pagestyle{empty}
+
+\usetikzlibrary{arrows.meta, calc, positioning, shapes.geometric}
+
+% =========================================================================
+% Color Palette (Exact RGB hex codes sampled from original figure)
+% =========================================================================
+\definecolor{bgcontainer}{HTML}{F8F8F8}
+\definecolor{convgreen}{HTML}{E2F0D9}
+\definecolor{bnyellow}{HTML}{FFE699}
+\definecolor{mppurple}{HTML}{C882C2}
+\definecolor{swsablue}{HTML}{80B2F7}
+\definecolor{linearpeach}{HTML}{FBE5D7}
+\definecolor{classpurple}{HTML}{B9C1EF}
+\definecolor{dwtblue}{HTML}{BDD7EF}
+\definecolor{concatgrey}{HTML}{BABABA}
+\definecolor{lifred}{HTML}{C9211E}
+
+% 16-level blue-white ramp for the 3x3 input patch grid
+\definecolor{pA}{HTML}{07468D}
+\definecolor{pB}{HTML}{125496}
+\definecolor{pC}{HTML}{2D7BB7}
+\definecolor{pD}{HTML}{3D8ABF}
+\definecolor{pE}{HTML}{4F99C8}
+\definecolor{pF}{HTML}{549DCA}
+\definecolor{pG}{HTML}{61A3CB}
+\definecolor{pH}{HTML}{73AFD2}
+\definecolor{pI}{HTML}{7DB5D5}
+\definecolor{pJ}{HTML}{8BBCD8}
+\definecolor{pK}{HTML}{97C3DC}
+\definecolor{pL}{HTML}{B1D1E5}
+\definecolor{pM}{HTML}{CFE4F3}
+\definecolor{pN}{HTML}{EBF9FD}
+\definecolor{pO}{HTML}{F2FCFE}
+\definecolor{pP}{HTML}{F9FEFE}
+
+% Compact row/column helpers for the 3x3 input image patch tiles
+\newcommand{\Y}[2]{\def\yA{#1}\def\yB{#2}}
+\newcommand{\X}[3]{\fill[#1](#2,\yA)rectangle(#3,\yB);}
+
+% Vertical rounded block with -90 deg rotated label
+% #1: x1, #2: y1, #3: x2, #4: y2, #5: fill color, #6: label, #7: corner radius, #8: font size cmd
+\newcommand{\vblock}[8]{%
+  \filldraw[fill=#5, draw=black, line width=1.05pt, rounded corners=#7] (#1,#2) rectangle (#3,#4);
+  \node[rotate=-90, align=center, font=#8, inner sep=0pt] at ({0.5*(#1+#3)}, {0.5*(#2+#4)}) {#6};
+}
+
+% LIF Neuron circle with exact red spiking waveform
+% #1: cx, #2: cy, #3: radius
+\newcommand{\lifneuron}[3]{%
+  \begin{scope}
+    \fill[white] (#1,#2) circle (#3);
+    \clip (#1,#2) circle (#3);
+    \draw[lifred, line width=1.15pt, line join=round, line cap=round]
+      ({#1 - 0.98*#3}, {#2 + 0.08*#3}) --
+      ({#1 - 0.68*#3}, {#2 + 0.08*#3})
+      .. controls ({#1 - 0.52*#3}, {#2 + 0.08*#3}) and ({#1 - 0.44*#3}, {#2 + 0.86*#3}) ..
+      ({#1 - 0.33*#3}, {#2 + 0.86*#3})
+      .. controls ({#1 - 0.22*#3}, {#2 + 0.86*#3}) and ({#1 - 0.08*#3}, {#2 - 0.88*#3}) ..
+      ({#1 + 0.02*#3}, {#2 - 0.88*#3})
+      .. controls ({#1 + 0.11*#3}, {#2 - 0.88*#3}) and ({#1 + 0.17*#3}, {#2 + 0.43*#3}) ..
+      ({#1 + 0.27*#3}, {#2 + 0.43*#3})
+      .. controls ({#1 + 0.35*#3}, {#2 + 0.43*#3}) and ({#1 + 0.42*#3}, {#2 + 0.13*#3}) ..
+      ({#1 + 0.50*#3}, {#2 + 0.13*#3}) --
+      ({#1 + 0.98*#3}, {#2 + 0.13*#3});
+  \end{scope}
+  \draw[black, line width=1.05pt] (#1,#2) circle (#3);
+}
+
+% Element-wise Add circle (+)
+% #1: cx, #2: cy, #3: radius
+\newcommand{\addnode}[3]{%
+  \filldraw[fill=white, draw=black, line width=1.05pt] (#1,#2) circle (#3);
+  \draw[black, line width=1.05pt] ({#1 - #3}, #2) -- ({#1 + #3}, #2);
+  \draw[black, line width=1.05pt] (#1, {#2 - #3}) -- (#1, {#2 + #3});
+}
+
+% Matrix Dot-Product circle (x)
+% #1: cx, #2: cy, #3: radius
+\newcommand{\mulnode}[3]{%
+  \filldraw[fill=white, draw=black, line width=1.05pt] (#1,#2) circle (#3);
+  \draw[black, line width=1.05pt] ({#1 - 0.7071*#3}, {#2 - 0.7071*#3}) -- ({#1 + 0.7071*#3}, {#2 + 0.7071*#3});
+  \draw[black, line width=1.05pt] ({#1 - 0.7071*#3}, {#2 + 0.7071*#3}) -- ({#1 + 0.7071*#3}, {#2 - 0.7071*#3});
+}
+
+\begin{document}
+\noindent\centering
+\begin{tikzpicture}[
+  x=0.25mm, y=-0.25mm,
+  >={Triangle[length=5.2pt, width=4.8pt]},
+  lineline/.style={draw=black, line width=1.05pt},
+  arrowline/.style={draw=black, line width=1.05pt, ->},
+  dashedbox/.style={fill=bgcontainer, draw=black, line width=1.15pt, dash pattern=on 4.2pt off 2.8pt}
+]
+
+% Coordinate space matches the 1023 x 688 original diagram 1:1
+\useasboundingbox (0,0) rectangle (1023,688);
+
+% =========================================================================
+% 1. TOP LEFT: 3x3 Input Image Patch Grid
+% =========================================================================
+\begin{scope}
+  \Y{86.0}{89.5}\X{pN}{18.0}{21.7}\X{pM}{21.5}{60.0}\X{pM}{64.0}{98.4}\X{pL}{98.2}{105.0}\X{pM}{109.0}{112.6}\X{pL}{112.4}{116.0}\X{pK}{115.8}{136.5}\X{pL}{136.3}{150.0}
+  \Y{89.3}{92.9}\X{pM}{18.0}{21.7}\X{pL}{21.5}{28.7}\X{pK}{28.5}{35.7}\X{pJ}{35.5}{53.2}\X{pK}{53.0}{60.0}\X{pL}{64.0}{77.9}\X{pM}{77.7}{91.5}\X{pL}{91.3}{98.4}\X{pK}{98.2}{101.8}\X{pJ}{101.6}{105.0}\X{pL}{109.0}{112.6}\X{pI}{112.4}{116.0}\X{pH}{115.8}{133.1}\X{pI}{132.9}{139.9}\X{pJ}{139.8}{146.8}\X{pK}{146.6}{150.0}
+  \Y{92.7}{96.2}\X{pM}{18.0}{21.7}\X{pL}{21.5}{32.2}\X{pK}{32.0}{35.7}\X{pJ}{35.5}{49.7}\X{pK}{49.5}{60.0}\X{pL}{64.0}{67.6}\X{pK}{67.4}{71.0}\X{pL}{70.8}{77.9}\X{pM}{77.7}{91.5}\X{pL}{91.3}{95.0}\X{pK}{94.8}{98.4}\X{pJ}{98.2}{105.0}\X{pL}{109.0}{112.6}\X{pH}{112.4}{129.7}\X{pI}{129.5}{136.5}\X{pJ}{136.3}{146.8}\X{pK}{146.6}{150.0}
+  \Y{96.0}{99.5}\X{pM}{18.0}{21.7}\X{pL}{21.5}{35.7}\X{pK}{35.5}{42.7}\X{pJ}{42.5}{49.7}\X{pK}{49.5}{60.0}\X{pL}{64.0}{67.6}\X{pK}{67.4}{71.0}\X{pL}{70.8}{81.3}\X{pM}{81.1}{88.1}\X{pL}{87.9}{95.0}\X{pK}{94.8}{98.4}\X{pJ}{98.2}{101.8}\X{pI}{101.6}{105.0}\X{pL}{109.0}{112.6}\X{pH}{112.4}{126.3}\X{pI}{126.1}{133.1}\X{pJ}{132.9}{146.8}\X{pK}{146.6}{150.0}
+  \Y{99.3}{102.9}\X{pM}{18.0}{21.7}\X{pL}{21.5}{42.7}\X{pK}{42.5}{60.0}\X{pL}{64.0}{67.6}\X{pK}{67.4}{77.9}\X{pL}{77.7}{91.5}\X{pK}{91.3}{95.0}\X{pJ}{94.8}{98.4}\X{pI}{98.2}{101.8}\X{pH}{101.6}{105.0}\X{pK}{109.0}{112.6}\X{pH}{112.4}{122.9}\X{pI}{122.7}{129.7}\X{pJ}{129.5}{139.9}\X{pK}{139.8}{150.0}
+  \Y{102.7}{106.2}\X{pM}{18.0}{21.7}\X{pL}{21.5}{32.2}\X{pM}{32.0}{39.2}\X{pL}{39.0}{46.2}\X{pK}{46.0}{56.7}\X{pJ}{56.5}{60.0}\X{pL}{64.0}{67.6}\X{pJ}{67.4}{77.9}\X{pI}{77.7}{88.1}\X{pH}{87.9}{95.0}\X{pG}{94.8}{105.0}\X{pK}{109.0}{112.6}\X{pH}{112.4}{119.5}\X{pI}{119.2}{126.3}\X{pJ}{126.1}{133.1}\X{pK}{132.9}{150.0}
+  \Y{106.0}{109.5}\X{pM}{18.0}{21.7}\X{pL}{21.5}{28.7}\X{pM}{28.5}{46.2}\X{pL}{46.0}{49.7}\X{pK}{49.5}{53.2}\X{pJ}{53.0}{60.0}\X{pL}{64.0}{67.6}\X{pI}{67.4}{71.0}\X{pH}{70.8}{77.9}\X{pG}{77.7}{88.1}\X{pF}{87.9}{101.8}\X{pG}{101.6}{105.0}\X{pK}{109.0}{112.6}\X{pH}{112.4}{116.0}\X{pI}{115.8}{122.9}\X{pJ}{122.7}{129.7}\X{pK}{129.5}{143.4}\X{pJ}{143.2}{146.8}\X{pK}{146.6}{150.0}
+  \Y{109.3}{112.9}\X{pL}{18.0}{28.7}\X{pM}{28.5}{35.7}\X{pN}{35.5}{42.7}\X{pM}{42.5}{46.2}\X{pL}{46.0}{53.2}\X{pJ}{53.0}{56.7}\X{pI}{56.5}{60.0}\X{pK}{64.0}{67.6}\X{pH}{67.4}{74.5}\X{pG}{74.2}{77.9}\X{pF}{77.7}{81.3}\X{pE}{81.1}{101.8}\X{pF}{101.6}{105.0}\X{pK}{109.0}{112.6}\X{pH}{112.4}{116.0}\X{pI}{115.8}{119.5}\X{pJ}{119.2}{126.3}\X{pK}{126.1}{150.0}
+  \Y{112.7}{116.2}\X{pL}{18.0}{28.7}\X{pM}{28.5}{35.7}\X{pN}{35.5}{46.2}\X{pM}{46.0}{49.7}\X{pL}{49.5}{53.2}\X{pJ}{53.0}{56.7}\X{pG}{56.5}{60.0}\X{pK}{64.0}{67.6}\X{pH}{67.4}{71.0}\X{pG}{70.8}{77.9}\X{pF}{77.7}{81.3}\X{pE}{81.1}{101.8}\X{pF}{101.6}{105.0}\X{pK}{109.0}{112.6}\X{pI}{112.4}{116.0}\X{pJ}{115.8}{122.9}\X{pK}{122.7}{139.9}\X{pL}{139.8}{150.0}
+  \Y{116.0}{119.5}\X{pL}{18.0}{21.7}\X{pK}{21.5}{25.2}\X{pL}{25.0}{32.2}\X{pM}{32.0}{39.2}\X{pN}{39.0}{46.2}\X{pM}{46.0}{49.7}\X{pL}{49.5}{53.2}\X{pH}{53.0}{56.7}\X{pF}{56.5}{60.0}\X{pJ}{64.0}{67.6}\X{pG}{67.4}{77.9}\X{pF}{77.7}{81.3}\X{pE}{81.1}{101.8}\X{pF}{101.6}{105.0}\X{pK}{109.0}{112.6}\X{pI}{112.4}{116.0}\X{pJ}{115.8}{119.5}\X{pK}{119.2}{129.7}\X{pL}{129.5}{150.0}
+  \Y{119.3}{122.9}\X{pL}{18.0}{21.7}\X{pK}{21.5}{25.2}\X{pL}{25.0}{35.7}\X{pM}{35.5}{49.7}\X{pL}{49.5}{53.2}\X{pG}{53.0}{56.7}\X{pE}{56.5}{60.0}\X{pJ}{64.0}{67.6}\X{pG}{67.4}{74.5}\X{pF}{74.2}{81.3}\X{pE}{81.1}{95.0}\X{pF}{94.8}{105.0}\X{pK}{109.0}{112.6}\X{pH}{112.4}{116.0}\X{pI}{115.8}{119.5}\X{pK}{119.2}{122.9}\X{pL}{122.7}{129.7}\X{pM}{129.5}{150.0}
+  \Y{122.7}{126.0}\X{pL}{18.0}{21.7}\X{pK}{21.5}{28.7}\X{pL}{28.5}{49.7}\X{pK}{49.5}{53.2}\X{pG}{53.0}{56.7}\X{pE}{56.5}{60.0}\X{pJ}{64.0}{67.6}\X{pG}{67.4}{81.3}\X{pF}{81.1}{91.5}\X{pG}{91.3}{105.0}\X{pK}{109.0}{112.6}\X{pH}{112.4}{119.5}\X{pK}{119.2}{122.9}\X{pL}{122.7}{126.3}\X{pM}{126.1}{133.1}\X{pN}{132.9}{146.8}\X{pM}{146.6}{150.0}
+  \Y{130.0}{133.5}\X{pK}{18.0}{21.7}\X{pJ}{21.5}{25.2}\X{pK}{25.0}{32.2}\X{pL}{32.0}{42.7}\X{pK}{42.5}{49.7}\X{pH}{49.5}{53.2}\X{pG}{53.0}{60.0}\X{pH}{64.0}{67.6}\X{pF}{67.4}{77.9}\X{pE}{77.7}{91.5}\X{pF}{91.3}{98.4}\X{pG}{98.2}{105.0}\X{pH}{109.0}{112.6}\X{pF}{112.4}{116.0}\X{pG}{115.8}{119.5}\X{pK}{119.2}{122.9}\X{pM}{122.7}{129.7}\X{pN}{129.5}{150.0}
+  \Y{133.3}{136.9}\X{pK}{18.0}{21.7}\X{pI}{21.5}{25.2}\X{pJ}{25.0}{28.7}\X{pK}{28.5}{46.2}\X{pI}{46.0}{49.7}\X{pH}{49.5}{53.2}\X{pG}{53.0}{60.0}\X{pH}{64.0}{67.6}\X{pE}{67.4}{88.1}\X{pF}{87.9}{101.8}\X{pG}{101.6}{105.0}\X{pH}{109.0}{112.6}\X{pF}{112.4}{116.0}\X{pG}{115.8}{119.5}\X{pJ}{119.2}{122.9}\X{pL}{122.7}{126.3}\X{pM}{126.1}{129.7}\X{pN}{129.5}{150.0}
+  \Y{136.7}{140.2}\X{pK}{18.0}{21.7}\X{pI}{21.5}{28.7}\X{pJ}{28.5}{46.2}\X{pH}{46.0}{49.7}\X{pG}{49.5}{56.7}\X{pH}{56.5}{60.0}\X{pH}{64.0}{67.6}\X{pF}{67.4}{71.0}\X{pE}{70.8}{84.7}\X{pF}{84.5}{105.0}\X{pH}{109.0}{112.6}\X{pF}{112.4}{116.0}\X{pG}{115.8}{119.5}\X{pI}{119.2}{122.9}\X{pL}{122.7}{126.3}\X{pM}{126.1}{129.7}\X{pN}{129.5}{150.0}
+  \Y{140.0}{143.5}\X{pK}{18.0}{21.7}\X{pI}{21.5}{35.7}\X{pJ}{35.5}{39.2}\X{pI}{39.0}{46.2}\X{pH}{46.0}{49.7}\X{pG}{49.5}{56.7}\X{pH}{56.5}{60.0}\X{pI}{64.0}{67.6}\X{pF}{67.4}{71.0}\X{pE}{70.8}{81.3}\X{pF}{81.1}{101.8}\X{pG}{101.6}{105.0}\X{pH}{109.0}{112.6}\X{pF}{112.4}{116.0}\X{pG}{115.8}{119.5}\X{pH}{119.2}{122.9}\X{pJ}{122.7}{126.3}\X{pM}{126.1}{129.7}\X{pN}{129.5}{139.9}\X{pO}{139.8}{150.0}
+  \Y{143.3}{146.9}\X{pK}{18.0}{21.7}\X{pI}{21.5}{46.2}\X{pH}{46.0}{53.2}\X{pG}{53.0}{56.7}\X{pH}{56.5}{60.0}\X{pI}{64.0}{67.6}\X{pG}{67.4}{71.0}\X{pF}{70.8}{74.5}\X{pE}{74.2}{81.3}\X{pF}{81.1}{91.5}\X{pE}{91.3}{101.8}\X{pF}{101.6}{105.0}\X{pH}{109.0}{112.6}\X{pE}{112.4}{122.9}\X{pH}{122.7}{126.3}\X{pL}{126.1}{129.7}\X{pM}{129.5}{133.1}\X{pN}{132.9}{139.9}\X{pO}{139.8}{150.0}
+  \Y{146.7}{150.2}\X{pK}{18.0}{21.7}\X{pI}{21.5}{49.7}\X{pH}{49.5}{56.7}\X{pI}{56.5}{60.0}\X{pJ}{64.0}{67.6}\X{pH}{67.4}{71.0}\X{pG}{70.8}{74.5}\X{pF}{74.2}{77.9}\X{pE}{77.7}{81.3}\X{pF}{81.1}{88.1}\X{pE}{87.9}{105.0}\X{pG}{109.0}{112.6}\X{pD}{112.4}{122.9}\X{pG}{122.7}{126.3}\X{pL}{126.1}{129.7}\X{pM}{129.5}{133.1}\X{pN}{132.9}{139.9}\X{pO}{139.8}{150.0}
+  \Y{150.0}{153.5}\X{pK}{18.0}{21.7}\X{pI}{21.5}{46.2}\X{pJ}{46.0}{49.7}\X{pI}{49.5}{60.0}\X{pJ}{64.0}{67.6}\X{pH}{67.4}{71.0}\X{pG}{70.8}{77.9}\X{pF}{77.7}{81.3}\X{pE}{81.1}{98.4}\X{pD}{98.2}{105.0}\X{pE}{109.0}{112.6}\X{pC}{112.4}{119.5}\X{pD}{119.2}{122.9}\X{pI}{122.7}{126.3}\X{pL}{126.1}{129.7}\X{pM}{129.5}{133.1}\X{pN}{132.9}{139.9}\X{pO}{139.8}{150.0}
+  \Y{153.3}{156.9}\X{pK}{18.0}{21.7}\X{pI}{21.5}{42.7}\X{pJ}{42.5}{60.0}\X{pJ}{64.0}{67.6}\X{pH}{67.4}{71.0}\X{pG}{70.8}{77.9}\X{pF}{77.7}{81.3}\X{pE}{81.1}{88.1}\X{pD}{87.9}{98.4}\X{pC}{98.2}{105.0}\X{pD}{109.0}{112.6}\X{pB}{112.4}{116.0}\X{pC}{115.8}{119.5}\X{pD}{119.2}{122.9}\X{pK}{122.7}{126.3}\X{pM}{126.1}{133.1}\X{pN}{132.9}{139.9}\X{pO}{139.8}{146.8}\X{pN}{146.6}{150.0}
+  \Y{156.7}{160.2}\X{pK}{18.0}{21.7}\X{pI}{21.5}{46.2}\X{pJ}{46.0}{60.0}\X{pJ}{64.0}{67.6}\X{pH}{67.4}{71.0}\X{pG}{70.8}{74.5}\X{pF}{74.2}{77.9}\X{pE}{77.7}{81.3}\X{pD}{81.1}{91.5}\X{pC}{91.3}{101.8}\X{pB}{101.6}{105.0}\X{pC}{109.0}{112.6}\X{pB}{112.4}{119.5}\X{pF}{119.2}{122.9}\X{pK}{122.7}{126.3}\X{pM}{126.1}{129.7}\X{pN}{129.5}{150.0}
+  \Y{160.0}{163.5}\X{pK}{18.0}{21.7}\X{pI}{21.5}{56.7}\X{pJ}{56.5}{60.0}\X{pJ}{64.0}{67.6}\X{pG}{67.4}{71.0}\X{pF}{70.8}{74.5}\X{pE}{74.2}{77.9}\X{pD}{77.7}{88.1}\X{pC}{87.9}{98.4}\X{pB}{98.2}{105.0}\X{pC}{109.0}{112.6}\X{pA}{112.4}{116.0}\X{pC}{115.8}{119.5}\X{pG}{119.2}{122.9}\X{pL}{122.7}{126.3}\X{pM}{126.1}{129.7}\X{pN}{129.5}{150.0}
+  \Y{163.3}{166.9}\X{pK}{18.0}{21.7}\X{pI}{21.5}{39.2}\X{pH}{39.0}{56.7}\X{pI}{56.5}{60.0}\X{pI}{64.0}{67.6}\X{pF}{67.4}{71.0}\X{pE}{70.8}{74.5}\X{pD}{74.2}{81.3}\X{pC}{81.1}{91.5}\X{pB}{91.3}{101.8}\X{pA}{101.6}{105.0}\X{pB}{109.0}{112.6}\X{pA}{112.4}{116.0}\X{pC}{115.8}{119.5}\X{pG}{119.2}{122.9}\X{pK}{122.7}{126.3}\X{pL}{126.1}{129.7}\X{pM}{129.5}{133.1}\X{pN}{132.9}{146.8}\X{pM}{146.6}{150.0}
+  \Y{166.7}{170.0}\X{pM}{18.0}{21.7}\X{pL}{21.5}{60.0}\X{pL}{64.0}{67.6}\X{pK}{67.4}{71.0}\X{pJ}{70.8}{74.5}\X{pI}{74.2}{77.9}\X{pH}{77.7}{88.1}\X{pG}{87.9}{105.0}\X{pJ}{109.0}{112.6}\X{pH}{112.4}{116.0}\X{pJ}{115.8}{119.5}\X{pL}{119.2}{126.3}\X{pM}{126.1}{133.1}\X{pN}{132.9}{150.0}
+  \Y{173.0}{176.5}\X{pK}{18.0}{21.7}\X{pI}{21.5}{28.7}\X{pH}{28.5}{35.7}\X{pG}{35.5}{39.2}\X{pF}{39.0}{42.7}\X{pE}{42.5}{56.7}\X{pG}{56.5}{60.0}\X{pH}{64.0}{67.6}\X{pG}{67.4}{71.0}\X{pE}{70.8}{74.5}\X{pD}{74.2}{81.3}\X{pC}{81.1}{88.1}\X{pB}{87.9}{105.0}\X{pC}{109.0}{116.0}\X{pD}{115.8}{119.5}\X{pH}{119.2}{122.9}\X{pJ}{122.7}{126.3}\X{pL}{126.1}{136.5}\X{pM}{136.3}{146.8}\X{pL}{146.6}{150.0}
+  \Y{176.3}{179.9}\X{pK}{18.0}{21.7}\X{pH}{21.5}{28.7}\X{pG}{28.5}{32.2}\X{pF}{32.0}{35.7}\X{pE}{35.5}{42.7}\X{pD}{42.5}{60.0}\X{pE}{64.0}{67.6}\X{pC}{67.4}{81.3}\X{pB}{81.1}{88.1}\X{pA}{87.9}{105.0}\X{pB}{109.0}{116.0}\X{pC}{115.8}{119.5}\X{pD}{119.2}{122.9}\X{pG}{122.7}{126.3}\X{pI}{126.1}{129.7}\X{pK}{129.5}{146.8}\X{pJ}{146.6}{150.0}
+  \Y{179.7}{183.2}\X{pJ}{18.0}{21.7}\X{pH}{21.5}{25.2}\X{pG}{25.0}{28.7}\X{pF}{28.5}{32.2}\X{pE}{32.0}{39.2}\X{pD}{39.0}{49.7}\X{pC}{49.5}{56.7}\X{pD}{56.5}{60.0}\X{pD}{64.0}{67.6}\X{pC}{67.4}{84.7}\X{pB}{84.5}{91.5}\X{pA}{91.3}{105.0}\X{pB}{109.0}{112.6}\X{pA}{112.4}{116.0}\X{pB}{115.8}{119.5}\X{pC}{119.2}{122.9}\X{pD}{122.7}{126.3}\X{pG}{126.1}{129.7}\X{pH}{129.5}{133.1}\X{pI}{132.9}{139.9}\X{pH}{139.8}{143.4}\X{pG}{143.2}{150.0}
+  \Y{183.0}{186.5}\X{pJ}{18.0}{21.7}\X{pG}{21.5}{25.2}\X{pF}{25.0}{28.7}\X{pE}{28.5}{35.7}\X{pD}{35.5}{46.2}\X{pC}{46.0}{60.0}\X{pD}{64.0}{67.6}\X{pC}{67.4}{91.5}\X{pB}{91.3}{101.8}\X{pA}{101.6}{105.0}\X{pB}{109.0}{112.6}\X{pA}{112.4}{116.0}\X{pB}{115.8}{122.9}\X{pC}{122.7}{126.3}\X{pE}{126.1}{129.7}\X{pG}{129.5}{139.9}\X{pF}{139.8}{143.4}\X{pE}{143.2}{146.8}\X{pD}{146.6}{150.0}
+  \Y{186.3}{189.9}\X{pI}{18.0}{21.7}\X{pG}{21.5}{25.2}\X{pF}{25.0}{28.7}\X{pE}{28.5}{35.7}\X{pD}{35.5}{42.7}\X{pC}{42.5}{60.0}\X{pD}{64.0}{67.6}\X{pC}{67.4}{71.0}\X{pD}{70.8}{91.5}\X{pC}{91.3}{98.4}\X{pB}{98.2}{105.0}\X{pB}{109.0}{112.6}\X{pA}{112.4}{119.5}\X{pB}{119.2}{126.3}\X{pC}{126.1}{129.7}\X{pD}{129.5}{133.1}\X{pE}{132.9}{139.9}\X{pD}{139.8}{146.8}\X{pC}{146.6}{150.0}
+  \Y{189.7}{193.2}\X{pI}{18.0}{21.7}\X{pF}{21.5}{32.2}\X{pD}{32.0}{42.7}\X{pC}{42.5}{60.0}\X{pE}{64.0}{67.6}\X{pD}{67.4}{77.9}\X{pE}{77.7}{91.5}\X{pD}{91.3}{95.0}\X{pC}{94.8}{101.8}\X{pB}{101.6}{105.0}\X{pC}{109.0}{112.6}\X{pA}{112.4}{122.9}\X{pB}{122.7}{129.7}\X{pC}{129.5}{150.0}
+  \Y{193.0}{196.5}\X{pI}{18.0}{21.7}\X{pG}{21.5}{25.2}\X{pF}{25.0}{28.7}\X{pE}{28.5}{32.2}\X{pD}{32.0}{39.2}\X{pC}{39.0}{56.7}\X{pD}{56.5}{60.0}\X{pE}{64.0}{67.6}\X{pD}{67.4}{74.5}\X{pE}{74.2}{77.9}\X{pF}{77.7}{88.1}\X{pE}{87.9}{91.5}\X{pD}{91.3}{95.0}\X{pC}{94.8}{101.8}\X{pB}{101.6}{105.0}\X{pC}{109.0}{112.6}\X{pA}{112.4}{126.3}\X{pB}{126.1}{136.5}\X{pC}{136.3}{150.0}
+  \Y{196.3}{199.9}\X{pI}{18.0}{21.7}\X{pF}{21.5}{28.7}\X{pE}{28.5}{32.2}\X{pD}{32.0}{35.7}\X{pC}{35.5}{56.7}\X{pD}{56.5}{60.0}\X{pF}{64.0}{67.6}\X{pD}{67.4}{71.0}\X{pE}{70.8}{74.5}\X{pF}{74.2}{77.9}\X{pG}{77.7}{88.1}\X{pF}{87.9}{91.5}\X{pE}{91.3}{95.0}\X{pD}{94.8}{98.4}\X{pC}{98.2}{105.0}\X{pC}{109.0}{112.6}\X{pB}{112.4}{116.0}\X{pA}{115.8}{136.5}\X{pB}{136.3}{143.4}\X{pC}{143.2}{150.0}
+  \Y{199.7}{203.2}\X{pH}{18.0}{21.7}\X{pE}{21.5}{28.7}\X{pD}{28.5}{35.7}\X{pC}{35.5}{56.7}\X{pD}{56.5}{60.0}\X{pG}{64.0}{67.6}\X{pD}{67.4}{71.0}\X{pE}{70.8}{74.5}\X{pF}{74.2}{77.9}\X{pG}{77.7}{91.5}\X{pF}{91.3}{95.0}\X{pD}{94.8}{101.8}\X{pC}{101.6}{105.0}\X{pD}{109.0}{112.6}\X{pB}{112.4}{119.5}\X{pA}{119.2}{139.9}\X{pB}{139.8}{150.0}
+  \Y{203.0}{206.5}\X{pH}{18.0}{21.7}\X{pE}{21.5}{25.2}\X{pD}{25.0}{32.2}\X{pC}{32.0}{56.7}\X{pE}{56.5}{60.0}\X{pG}{64.0}{67.6}\X{pE}{67.4}{71.0}\X{pF}{70.8}{74.5}\X{pG}{74.2}{91.5}\X{pF}{91.3}{95.0}\X{pE}{94.8}{98.4}\X{pD}{98.2}{101.8}\X{pC}{101.6}{105.0}\X{pD}{109.0}{112.6}\X{pB}{112.4}{119.5}\X{pA}{119.2}{143.4}\X{pB}{143.2}{150.0}
+  \Y{206.3}{209.9}\X{pH}{18.0}{21.7}\X{pD}{21.5}{28.7}\X{pC}{28.5}{56.7}\X{pE}{56.5}{60.0}\X{pG}{64.0}{67.6}\X{pE}{67.4}{71.0}\X{pF}{70.8}{74.5}\X{pG}{74.2}{91.5}\X{pF}{91.3}{95.0}\X{pE}{94.8}{98.4}\X{pD}{98.2}{101.8}\X{pC}{101.6}{105.0}\X{pD}{109.0}{112.6}\X{pB}{112.4}{119.5}\X{pA}{119.2}{146.8}\X{pB}{146.6}{150.0}
+  \Y{209.7}{213.0}\X{pL}{18.0}{21.7}\X{pJ}{21.5}{56.7}\X{pK}{56.5}{60.0}\X{pJ}{64.0}{67.6}\X{pI}{67.4}{74.5}\X{pJ}{74.2}{91.5}\X{pI}{91.3}{98.4}\X{pH}{98.2}{101.8}\X{pG}{101.6}{105.0}\X{pH}{109.0}{112.6}\X{pD}{112.4}{122.9}\X{pC}{122.7}{150.0}
+\end{scope}
+
+% Arrow from 3x3 Input Grid to SPS
+\draw[arrowline] (156, 155) -- (179, 155);
+
+% =========================================================================
+% 2. TOP LEFT-CENTER: SPS Block
+% =========================================================================
+\node[font=\bfseries\fontsize{16.5}{19}\selectfont] at (279.5, 49) {SPS};
+\path[dashedbox, rounded corners=16pt] (179, 70) rectangle (380, 226);
+
+\vblock{195}{96}{231}{209}{convgreen}{Conv 2D}{4.5pt}{\fontsize{15.5}{17}\selectfont}
+\vblock{238}{96}{275}{209}{bnyellow}{BN}{4.5pt}{\fontsize{15.5}{17}\selectfont}
+\lifneuron{302}{153}{21.5}
+\vblock{329}{97}{365}{210}{mppurple}{MP}{4.5pt}{\fontsize{15.5}{17}\selectfont}
+
+% =========================================================================
+% 3. TOP RIGHT: Encoder Block x L & Classification Head
+% =========================================================================
+\node[font=\bfseries\fontsize{16.5}{19}\selectfont] at (665, 13) {Encoder Block $\boldsymbol{\times\ L}$};
+\path[dashedbox, rounded corners=6pt] (393, 35) rectangle (931, 252);
+
+% Arrow from SPS into SWSA
+\draw[arrowline] (380, 153.5) -- (422, 153.5);
+
+% First Residual Connection (around SWSA)
+\draw[arrowline] (400, 153.5) -- (400, 50) -- (500, 50) -- (500, 134);
+
+% SWSA Block inside Encoder
+\vblock{422}{96}{464}{209}{swsablue}{SWSA}{4.5pt}{\fontsize{15.5}{17}\selectfont}
+
+% Line from SWSA to Add1
+\draw[lineline] (464, 153.5) -- (480.5, 153.5);
+\addnode{500}{153.5}{19.5}
+
+% Arrow from Add1 into MLP (first LIF neuron)
+\draw[arrowline] (519.5, 153.5) -- (565.5, 153.5);
+
+% Second Residual Connection (around MLP)
+\draw[arrowline] (533, 153.5) -- (533, 49) -- (891, 49) -- (891, 135);
+
+% MLP Container inside Encoder
+\path[dashedbox, rounded corners=14pt] (545, 86) rectangle (858, 218);
+\node[font=\bfseries\fontsize{16.5}{19}\selectfont] at (737.5, 234) {MLP};
+
+\lifneuron{587}{153.5}{21.5}
+\vblock{614}{95}{651}{209}{linearpeach}{Linear}{4.5pt}{\fontsize{15.5}{17}\selectfont}
+\vblock{658}{95}{694}{209}{bnyellow}{BN}{4.5pt}{\fontsize{15.5}{17}\selectfont}
+\draw[arrowline] (694, 153.5) -- (716.5, 153.5);
+\lifneuron{738}{153.5}{21.5}
+\vblock{765}{96}{801}{209}{linearpeach}{Linear}{4.5pt}{\fontsize{15.5}{17}\selectfont}
+\vblock{808}{96}{845}{209}{bnyellow}{BN}{4.5pt}{\fontsize{15.5}{17}\selectfont}
+
+% Line from BN2 to Add2
+\draw[lineline] (845, 154.5) -- (871.5, 154.5);
+\addnode{891}{154.5}{19.5}
+
+% Arrow from Add2 to Classification Head
+\draw[arrowline] (910.5, 154.5) -- (955, 154.5);
+
+% Classification Head
+\vblock{955}{73}{1018}{239}{classpurple}{Classification\\[-1pt]Head}{7pt}{\fontsize{15}{16}\selectfont}
+
+% =========================================================================
+% 4. MIDDLE LEFT: Vanilla SSA
+% =========================================================================
+\node[font=\bfseries\fontsize{16.5}{19}\selectfont] at (186, 273.5) {Vanilla SSA};
+\path[dashedbox, rounded corners=16pt] (15, 293) rectangle (352, 480);
+
+% Input line into Vanilla SSA LIF
+\draw[lineline] (3, 391) -- (25.5, 391);
+\lifneuron{47}{391}{21.5}
+\vblock{74}{332}{110}{446}{linearpeach}{Linear}{4.5pt}{\fontsize{15.5}{17}\selectfont}
+\vblock{118}{332}{154}{446}{bnyellow}{BN}{4.5pt}{\fontsize{15.5}{17}\selectfont}
+
+% Branching after BN into Q, K, V
+\draw[lineline] (154, 389) -- (168, 389);
+\draw[lineline] (168, 332) -- (168, 443);
+
+% Q branch
+\draw[lineline] (168, 332) -- (187, 332);
+\node[font=\fontsize{16}{18}\selectfont] at (202.5, 332) {$Q$};
+\draw[lineline] (218, 332) -- (237.5, 332);
+
+% K branch
+\draw[lineline] (168, 389) -- (186, 389);
+\node[font=\fontsize{16}{18}\selectfont] at (202.5, 389) {$K$};
+\draw[lineline] (217, 389) -- (252, 389) -- (252, 346.5);
+
+% First Mul node (Q * K)
+\mulnode{252}{332}{14.5}
+\draw[lineline] (266.5, 332) -- (289, 332) -- (289, 428.5);
+
+% V branch & Second Mul node
+\draw[lineline] (168, 443) -- (187, 443);
+\node[font=\fontsize{16}{18}\selectfont] at (202.5, 443) {$V$};
+\draw[lineline] (214, 443) -- (274.5, 443);
+\mulnode{289}{443}{14.5}
+\draw[arrowline] (303.5, 443) -- (369, 443);
+
+% =========================================================================
+% 5. BOTTOM LEFT: Legend Box
+% =========================================================================
+\filldraw[fill=white, draw=black, line width=1.05pt, rounded corners=18pt] (16, 489) rectangle (353, 682);
+
+% Row 1: Element-wise Add & Matrix Dot-Product
+\addnode{54}{528}{15.0}
+\node[align=center, font=\fontsize{10.5}{12.5}\selectfont] at (125, 528) {Element-\\wise Add};
+
+\mulnode{202}{528}{14.5}
+\node[align=center, font=\fontsize{10.5}{12.5}\selectfont] at (282, 528) {Matrix\\Dot-Product};
+
+% Row 2: LIF neuron & Max Pooling
+\lifneuron{54}{578}{15.0}
+\node[align=center, font=\fontsize{10.5}{12.5}\selectfont] at (127, 578) {LIF neuron};
+
+\filldraw[fill=mppurple, draw=black, line width=1.05pt, rounded corners=3.5pt] (184, 564) rectangle (219, 591);
+\node[font=\fontsize{11.5}{13}\selectfont] at (201.5, 577.5) {MP};
+\node[align=center, font=\fontsize{10.5}{12.5}\selectfont] at (286.5, 578) {Max Pooling};
+
+% Row 3: Discrete Wavelet Transform & Inverse Discrete Wavelet Transform
+\filldraw[fill=dwtblue, draw=black, line width=1.05pt, rounded corners=3.5pt] (35, 620) rectangle (71, 647);
+\node[font=\fontsize{8.5}{10}\selectfont] at (53, 633.5) {DWT};
+\node[align=center, font=\fontsize{9.2}{11}\selectfont] at (127, 635) {Discrete Wavelet\\Transform};
+
+\filldraw[fill=dwtblue, draw=black, line width=1.05pt, rounded corners=3.5pt] (184, 619) rectangle (219, 646);
+\node[font=\fontsize{8.2}{10}\selectfont] at (201.5, 632.5) {IDWT};
+\node[align=center, font=\fontsize{9.2}{11}\selectfont] at (286.5, 635) {Inverse Discrete\\Wavelet Transform};
+
+% =========================================================================
+% 6. BOTTOM RIGHT: Spiking Wavelet Self Attention (SWSA)
+% =========================================================================
+% Dashed zoom lines from top SWSA block to expanded SWSA container
+\draw[black, line width=1.1pt, dash pattern=on 3.2pt off 2.2pt] (442, 209) -- (399, 314);
+\draw[black, line width=1.1pt, dash pattern=on 3.2pt off 2.2pt] (447, 209) -- (945, 291);
+
+\path[dashedbox, rounded corners=26pt] (393, 291) rectangle (976, 683);
+\node[font=\bfseries\fontsize{15.5}{18}\selectfont] at (604.5, 273) {Spiking Wavelet Self Attention (SWSA)};
+
+% Input line & split into top (Q) and bottom (Wavelet) branches
+\draw[lineline] (378, 486) -- (458, 486);
+\draw[lineline] (424, 486) -- (424, 365) -- (456, 365);
+
+% Top branch (Q)
+\vblock{456}{323}{493}{409}{linearpeach}{Linear}{4.5pt}{\fontsize{15.5}{17}\selectfont}
+\vblock{499}{323}{535}{409}{bnyellow}{BN}{4.5pt}{\fontsize{15.5}{17}\selectfont}
+\lifneuron{562}{366}{21.5}
+\draw[lineline] (583.5, 366) -- (847, 366) -- (847, 407);
+\node[font=\fontsize{16}{18}\selectfont] at (610, 349.5) {$Q$};
+
+% Bottom-left branch (Linear -> BN -> LIF -> DWT -> Conv -> IDWT)
+\vblock{458}{443}{494}{529}{linearpeach}{Linear}{4.5pt}{\fontsize{15.5}{17}\selectfont}
+\vblock{501}{444}{537}{530}{bnyellow}{BN}{4.5pt}{\fontsize{15.5}{17}\selectfont}
+\lifneuron{564}{486}{21.5}
+\draw[lineline] (564, 507.5) -- (564, 585);
+
+\vblock{546}{585}{582}{671}{dwtblue}{DWT}{4.5pt}{\fontsize{15.5}{17}\selectfont}
+\vblock{594}{586}{630}{671}{convgreen}{Conv}{4.5pt}{\fontsize{15.5}{17}\selectfont}
+
+% Connection from Conv to IDWT & upward branch to K and V
+\draw[lineline] (630, 629) -- (683, 629);
+\draw[lineline] (657, 629) -- (657, 421) -- (682, 421);
+\draw[lineline] (657, 527) -- (683, 527);
+
+\vblock{683}{585}{719}{671}{dwtblue}{IDWT}{4.5pt}{\fontsize{15.5}{17}\selectfont}
+\draw[lineline] (719, 629) -- (933, 629) -- (933, 573);
+
+% K branch
+\vblock{682}{376}{718}{462}{linearpeach}{Linear}{4.5pt}{\fontsize{15.5}{17}\selectfont}
+\vblock{725}{377}{761}{463}{bnyellow}{BN}{4.5pt}{\fontsize{15.5}{17}\selectfont}
+\lifneuron{788}{421.5}{21.5}
+\draw[lineline] (809.5, 421.5) -- (832.5, 421.5);
+\node[font=\fontsize{16}{18}\selectfont] at (824, 405) {$K$};
+\mulnode{847}{421.5}{14.5}
+\draw[lineline] (861.5, 421.5) -- (886, 421.5) -- (886, 514);
+
+% V branch
+\vblock{683}{484}{719}{570}{linearpeach}{Linear}{4.5pt}{\fontsize{15.5}{17}\selectfont}
+\vblock{725}{484}{761}{570}{bnyellow}{BN}{4.5pt}{\fontsize{15.5}{17}\selectfont}
+\lifneuron{788}{528.5}{21.5}
+\draw[lineline] (809.5, 528.5) -- (871.5, 528.5);
+\node[font=\fontsize{16}{18}\selectfont] at (846.5, 513) {$V$};
+\mulnode{886}{528.5}{14.5}
+\draw[lineline] (900.5, 528.5) -- (915, 528.5);
+
+% Concat & Output Arrow
+\vblock{915}{487}{951}{573}{concatgrey}{Concat}{4.5pt}{\fontsize{15.5}{17}\selectfont}
+\draw[arrowline] (951, 529) -- (1003, 529);
+
+\end{tikzpicture}
+\end{document}
+
+\end{document}

@@ -17,8 +17,14 @@ pub fn run() {
             acp::acp_probe_agents,
             acp::acp_test_agent,
             acp::acp_send_prompt,
+            acp::acp_cancel_prompt,
             acp::sys_probe_environment,
             mcp::mcp_get_manifest,
+            mcp::mcp_get_config,
+            mcp::mcp_save_config,
+            mcp::mcp_test_server,
+            mcp::bridge::mcp_tool_result,
+            mcp::bridge::mcp_test_builtin,
             image_gen::img_generate_illustration,
             image_gen::img_save_processed_asset,
             tex::compiler::tex_compile_preview,
@@ -40,6 +46,12 @@ pub fn run() {
             project::project_read_text_file,
             project::project_write_text_file,
         ])
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                mcp::bridge::revoke_window(window.label());
+                acp::cancel_window(window.label());
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error while running AgenTikZ tauri application");
 }

@@ -253,14 +253,9 @@ function convertForeignObjectToNativeSvg(
     return convertForeignObjectFallback(liveFo, doc);
   }
 
-  // Scale factor from screen CSS px to local SVG user units
-  const originPt = new DOMPoint(0, 0).matrixTransform(invMatrix);
-  const unitXPt = new DOMPoint(1, 0).matrixTransform(invMatrix);
-  const unitYPt = new DOMPoint(0, 1).matrixTransform(invMatrix);
-  const scaleFactor =
-    (Math.hypot(unitXPt.x - originPt.x, unitXPt.y - originPt.y) +
-      Math.hypot(unitYPt.x - originPt.x, unitYPt.y - originPt.y)) /
-    2;
+  // DOM rectangles are measured in screen pixels and need the inverse CTM.
+  // Computed CSS font/border sizes inside foreignObject are already in local
+  // user units; scaling them again makes exported labels grow at low zoom.
 
   const outG = doc.createElementNS(SVG_NS, 'g');
   outG.setAttribute('class', 'agentikz-vector-label');
@@ -291,7 +286,7 @@ function convertForeignObjectToNativeSvg(
         rectEl.setAttribute('height', round2(box.height));
         const rx = Math.min(
           box.height / 2,
-          (parseFloat(cs.borderTopLeftRadius || '0') || 2) * scaleFactor
+          parseFloat(cs.borderTopLeftRadius || '0') || 2
         );
         if (rx > 0) {
           rectEl.setAttribute('rx', round2(rx));
@@ -299,7 +294,7 @@ function convertForeignObjectToNativeSvg(
         rectEl.setAttribute('fill', hasBg ? cs.backgroundColor : 'none');
         if (hasBorder) {
           rectEl.setAttribute('stroke', cs.borderTopColor);
-          rectEl.setAttribute('stroke-width', round2(borderW * scaleFactor));
+          rectEl.setAttribute('stroke-width', round2(borderW));
         } else {
           rectEl.setAttribute('stroke', 'none');
         }
@@ -572,7 +567,7 @@ function convertForeignObjectToNativeSvg(
     styleEl: Element
   ) => {
     const cs = window.getComputedStyle(styleEl);
-    const fontSize = (parseFloat(cs.fontSize || '11') || 11) * scaleFactor;
+    const fontSize = parseFloat(cs.fontSize || '11') || 11;
     const isKatex = Boolean(styleEl.closest('.katex'));
     const isSansText = Boolean(styleEl.closest('.text, .textrm, .textsf'));
     const isItalic =
@@ -628,7 +623,7 @@ function convertForeignObjectToNativeSvg(
       if (!lineBox) continue;
 
       const cs = window.getComputedStyle(lineContainer);
-      const fontSize = (parseFloat(cs.fontSize || '11') || 11) * scaleFactor;
+      const fontSize = parseFloat(cs.fontSize || '11') || 11;
       const baselineY = lineBox.minY + lineBox.height * 0.78;
 
       const textEl = doc.createElementNS(SVG_NS, 'text');
@@ -1188,7 +1183,14 @@ export async function exportCleanCanvasPng(
   svgEl: SVGSVGElement,
   scale = 3
 ): Promise<Blob> {
-  const cleanSvgString = exportCleanCanvasSvg(svgEl);
+  return exportSvgStringPng(exportCleanCanvasSvg(svgEl), scale);
+}
+
+/** Rasterize either the interactive export or exact TeX SVG. */
+export async function exportSvgStringPng(
+  cleanSvgString: string,
+  scale = 3
+): Promise<Blob> {
   const parser = new DOMParser();
   const svgDoc = parser.parseFromString(cleanSvgString, 'image/svg+xml');
   const root = svgDoc.documentElement;

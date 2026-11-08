@@ -77,6 +77,7 @@ test("Tauri resource allowlist matches the compact bundle layout", (t) => {
     [...config.bundle.resources].sort(),
     ["manifest.json", ...Object.keys(manifest.files)].map((name) => `adapters/${name}`).sort(),
   );
+  assert.deepEqual(config.bundle.externalBin, ["binaries/agentikz-mcp"]);
 });
 
 test("inventory enforces native/dev file and byte limits", (t) => {

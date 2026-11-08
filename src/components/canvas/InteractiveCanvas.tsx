@@ -10,7 +10,10 @@ import {
   ptToPx,
   resolveTikzColor,
 } from '../../core/themes/journal-presets';
-import { exportCleanCanvasSvg } from '../../core/export/svg-exporter';
+import { getExactPreviewReasons } from '../../core/tex/source';
+import { compileWorkspaceTexPreview } from '../../core/tex/preview';
+import { buildVectorPreview } from '../../core/tex/vector-preview';
+import { VectorPathPreview } from './VectorPathPreview';
 import { LatexLabel } from './LatexLabel';
 import { ChartSubTarget, PgfChartRenderer } from './PgfChartRenderer';
 import {
@@ -134,6 +137,7 @@ export const InteractiveCanvas: React.FC = () => {
     previewMode,
     compiledSvg,
     texCompilerStatus,
+    isCompilingTex,
     setSelectedIds,
     setLeftTab,
     setAgentPanelCollapsed,
@@ -145,7 +149,6 @@ export const InteractiveCanvas: React.FC = () => {
     fitCanvasToContent,
     setZoom,
     setPan,
-    setCompiledSvg,
     moveElementsByPosition,
     moveChartLegend,
     updateChartById,
@@ -177,6 +180,7 @@ export const InteractiveCanvas: React.FC = () => {
     previewMode: s.previewMode,
     compiledSvg: s.compiledSvg,
     texCompilerStatus: s.texCompilerStatus,
+    isCompilingTex: s.isCompilingTex,
     setSelectedIds: s.setSelectedIds,
     setLeftTab: s.setLeftTab,
     setAgentPanelCollapsed: s.setAgentPanelCollapsed,
@@ -188,7 +192,6 @@ export const InteractiveCanvas: React.FC = () => {
     fitCanvasToContent: s.fitCanvasToContent,
     setZoom: s.setZoom,
     setPan: s.setPan,
-    setCompiledSvg: s.setCompiledSvg,
     moveElementsByPosition: s.moveElementsByPosition,
     moveChartLegend: s.moveChartLegend,
     updateChartById: s.updateChartById,
@@ -214,6 +217,19 @@ export const InteractiveCanvas: React.FC = () => {
   })));
 
   const svgRef = useRef<SVGSVGElement | null>(null);
+  const exactPreviewReasons = useMemo(() => getExactPreviewReasons(tikzCode), [tikzCode]);
+  const requiresExactPreview = exactPreviewReasons.length > 0;
+  const vectorPreview = useMemo(() => requiresExactPreview ? buildVectorPreview(tikzCode) : null, [tikzCode, requiresExactPreview]);
+  const { texEngine, texLiveBinDir, openSettings } = useSettingsStore(useShallow((s) => ({
+    texEngine: s.texEngine,
+    texLiveBinDir: s.texLiveBinDir,
+    openSettings: s.openSettings,
+  })));
+  const { projectDir, activeCanvasFileName } = useProjectStore(useShallow((s) => ({
+    projectDir: s.projectDir,
+    activeCanvasFileName: s.activeCanvasFileName,
+  })));
+  const lastAttemptRef = useRef<string | null>(null);
   const theme = JOURNAL_THEMES[activeThemeId];
   const nodesById = useMemo(() => {
     const index = new Map<string, TikzNodeElement>();
@@ -229,20 +245,27 @@ export const InteractiveCanvas: React.FC = () => {
     [parsedDoc.nodes]
   );
 
-  // Keep built-in vector preview synchronized when editing while preview pane is open
+  // Complex drawings bypass the editable subset. Recompile after edits, and
+  // retain real compiler errors rather than replacing them with an approximation.
   useEffect(() => {
-    if (previewMode === 'interactive') return;
-    if (texCompilerStatus?.startsWith('本地 TeX Live')) return;
-    const raf = requestAnimationFrame(() => {
-      if (svgRef.current) {
-        setCompiledSvg(
-          exportCleanCanvasSvg(svgRef.current),
-          '内置高保真矢量引擎渲染 (无背景/纯矢量公式)'
-        );
-      }
-    });
-    return () => cancelAnimationFrame(raf);
-  }, [tikzCode, activeThemeId, previewMode, texCompilerStatus, assetDataUrls, canvasWidthCm, canvasHeightCm, setCompiledSvg]);
+    if (!requiresExactPreview && previewMode === 'interactive') {
+      lastAttemptRef.current = null;
+      return;
+    }
+    if (isCompilingTex) return;
+    const key = JSON.stringify([tikzCode, activeThemeId, projectDir, activeCanvasFileName, texEngine, texLiveBinDir]);
+    if (lastAttemptRef.current === key) return;
+    // A manual compilation has already produced a result for this document.
+    if (lastAttemptRef.current === null && texCompilerStatus) {
+      lastAttemptRef.current = key;
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      lastAttemptRef.current = key;
+      void compileWorkspaceTexPreview();
+    }, 650);
+    return () => window.clearTimeout(timer);
+  }, [tikzCode, activeThemeId, requiresExactPreview, previewMode, isCompilingTex, projectDir, activeCanvasFileName, texEngine, texLiveBinDir, texCompilerStatus]);
 
   // Preload image data URLs for any `\includegraphics` nodes in the parsed AST
   useEffect(() => {
@@ -1545,7 +1568,7 @@ export const InteractiveCanvas: React.FC = () => {
               addImageAssetToCanvas(relPath, snapX, snapY);
             }
           }}
-          className="w-full h-full bg-slate-200/80"
+          className={requiresExactPreview ? 'hidden' : 'w-full h-full min-w-0 bg-slate-200/80'}
           style={{
             cursor:
               dragState?.mode === 'pan'
@@ -2091,21 +2114,22 @@ export const InteractiveCanvas: React.FC = () => {
         </svg>
 
         {/* Optional TeX Live Exact Preview Overlay or Split View */}
-        {(previewMode === 'tex_overlay' || previewMode === 'tex_split') && (
+        {(requiresExactPreview || previewMode === 'tex_overlay' || previewMode === 'tex_split') && (
           <div
             className={`${
-              previewMode === 'tex_split'
-                ? 'w-1/2 border-l border-slate-200 bg-slate-50/40'
+              requiresExactPreview
+                ? 'w-full min-w-0 bg-slate-50/40'
+                : previewMode === 'tex_split'
+                ? 'w-1/2 shrink-0 border-l border-slate-200 bg-slate-50/40'
                 : 'absolute inset-0 bg-white/85 pointer-events-none'
             } flex flex-col items-center p-4 overflow-auto`}
           >
             <div className="text-xs font-medium text-slate-600 mb-3 flex items-center gap-2 bg-white px-3 py-1 rounded-full border border-slate-200 shadow-2xs shrink-0">
-              <span className="w-2 h-2 rounded-full bg-emerald-500" />
-              <span>
-                {texCompilerStatus ||
-                  (compiledSvg
-                    ? '本地 TeX Live 精确编译输出 (standalone + tikz + pgfplots)'
-                    : '高保真学术论文白纸打印预览 (Vector Print View)')}
+              <span className={`w-2 h-2 shrink-0 rounded-full ${isCompilingTex ? 'bg-blue-500 animate-pulse' : compiledSvg ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+              <span className="whitespace-pre-wrap select-text">
+                {compiledSvg || !vectorPreview
+                  ? texCompilerStatus || '准备 TeX 精确预览…'
+                  : isCompilingTex ? 'SVG 兼容预览 · 正在编译 TeX 精确版本…' : 'SVG 兼容预览 · TeX 尚未编译成功'}
               </span>
             </div>
             {compiledSvg ? (
@@ -2117,9 +2141,26 @@ export const InteractiveCanvas: React.FC = () => {
                     .replace(/\bon\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, ''),
                 }}
               />
+            ) : vectorPreview ? (
+              <div className="w-full flex-1 min-h-0 flex flex-col bg-white p-4 rounded-xl border border-slate-200 overflow-auto">
+                <VectorPathPreview scene={vectorPreview} />
+                {!isCompilingTex && texCompilerStatus && (
+                  <details className="text-xs text-slate-500 shrink-0 mt-3 select-text">
+                    <summary className="cursor-pointer">TeX 编译详情</summary>
+                    <p className="whitespace-pre-wrap mt-2">{texCompilerStatus}</p>
+                    <button onClick={() => openSettings('editor')} className="text-blue-600 cursor-pointer mt-2">配置 TeX Live</button>
+                  </details>
+                )}
+              </div>
             ) : (
-              <div className="text-xs text-slate-500 text-center max-w-sm bg-slate-50/80 border border-slate-200 rounded-lg p-4">
-                当前采用内置矢量 SVG + KaTeX 引擎 1:1 渲染顶刊视觉效果。
+              <div className="text-xs text-slate-600 text-center max-w-md bg-white border border-slate-200 rounded-lg p-5">
+                <p>{requiresExactPreview ? `此图包含${exactPreviewReasons.join('、')}，将通过 TeX 编译显示完整图形。` : '通过本地 TeX 编译显示精确图形。'}</p>
+                {!isCompilingTex && (
+                  <div className="mt-4 flex justify-center gap-3">
+                    <button onClick={() => void compileWorkspaceTexPreview()} className="text-blue-600 cursor-pointer">重新编译</button>
+                    <button onClick={() => openSettings('editor')} className="text-blue-600 cursor-pointer">配置 TeX Live</button>
+                  </div>
+                )}
               </div>
             )}
           </div>

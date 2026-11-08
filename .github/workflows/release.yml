@@ -162,7 +162,9 @@ jobs:
       - name: Cache Rust cargo target
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: "src-tauri -> target"
+          workspaces: |
+            src-tauri -> target
+            crates/agentikz-mcp -> target
 
       - name: Install frontend dependencies
         run: npm ci

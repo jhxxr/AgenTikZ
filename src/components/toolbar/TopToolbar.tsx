@@ -11,10 +11,12 @@ import { JournalThemeId } from '../../types/theme';
 import {
   buildPaperFigureEnvironment,
   buildStandaloneLatexDocument,
-} from '../editor/TikzCodePanel';
+} from '../../core/tex/document';
+import { getExactPreviewReasons } from '../../core/tex/source';
+import { compileWorkspaceTexPreview } from '../../core/tex/preview';
 import {
-  exportCleanCanvasPng,
   exportCleanCanvasSvg,
+  exportSvgStringPng,
 } from '../../core/export/svg-exporter';
 import {
   AlignCenterHorizontal,
@@ -78,8 +80,8 @@ export const TopToolbar: React.FC = () => {
     tikzCode, parsedDoc, activeTool, activeThemeId, selectedIds,
     previewMode, undoStack, redoStack, isCompilingTex,
     isAgentPanelCollapsed,
-    setActiveTool, setActiveTheme, setPreviewMode, setCompiledSvg,
-    setIsCompilingTex, undo, redo, alignSelectedNodes, toggleAgentPanel,
+    setActiveTool, setActiveTheme, setPreviewMode,
+    undo, redo, alignSelectedNodes, toggleAgentPanel,
   } = useWorkspaceStore(useShallow((s) => ({
     tikzCode: s.tikzCode,
     parsedDoc: s.parsedDoc,
@@ -94,17 +96,13 @@ export const TopToolbar: React.FC = () => {
     setActiveTool: s.setActiveTool,
     setActiveTheme: s.setActiveTheme,
     setPreviewMode: s.setPreviewMode,
-    setCompiledSvg: s.setCompiledSvg,
-    setIsCompilingTex: s.setIsCompilingTex,
     undo: s.undo,
     redo: s.redo,
     alignSelectedNodes: s.alignSelectedNodes,
     toggleAgentPanel: s.toggleAgentPanel,
   })));
-  const { openSettings, texEngine, texLiveBinDir } = useSettingsStore(useShallow((s) => ({
+  const { openSettings } = useSettingsStore(useShallow((s) => ({
     openSettings: s.openSettings,
-    texEngine: s.texEngine,
-    texLiveBinDir: s.texLiveBinDir,
   })));
   const {
     projectDir,
@@ -135,6 +133,7 @@ export const TopToolbar: React.FC = () => {
   })));
 
   const stem = activeCanvasFileName.replace(/\.canvas\.json$/i, '') || 'figure';
+  const requiresExactPreview = getExactPreviewReasons(tikzCode).length > 0;
 
   const [showExportMenu, setShowExportMenu] = useState(false);
   const exportMenuRef = useRef<HTMLDivElement>(null);
@@ -184,67 +183,36 @@ export const TopToolbar: React.FC = () => {
 
   const handleCompileTex = async () => {
     if (useWorkspaceStore.getState().isCompilingTex) return;
-    if (previewMode !== 'interactive') {
+    if (previewMode !== 'interactive' && !requiresExactPreview) {
       setPreviewMode('interactive');
       return;
     }
-    const targetProject = useProjectStore.getState().projectDir;
-    const targetCanvas = useProjectStore.getState().activeCanvasFileName;
-    const isCurrentDocument = () => {
-      const workspace = useWorkspaceStore.getState();
-      const project = useProjectStore.getState();
-      return workspace.tikzCode === tikzCode &&
-        workspace.activeThemeId === activeThemeId &&
-        project.projectDir === targetProject &&
-        project.activeCanvasFileName === targetCanvas;
-    };
-    setIsCompilingTex(true);
-    try {
-      const fullTex = buildStandaloneLatexDocument(tikzCode, activeThemeId);
-      const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
-      if (isTauri) {
-        const { invoke } = await import('@tauri-apps/api/core');
-        const res = await invoke<{ ok: boolean; svg?: string; message: string }>('tex_compile_preview', {
-          texSource: fullTex,
-          texEngine,
-          projectDir: targetProject,
-          texLiveBinDir: texLiveBinDir || undefined,
-        });
-        if (!isCurrentDocument()) return;
-        if (res.ok && res.svg) {
-          setCompiledSvg(res.svg, res.message);
-          setPreviewMode('tex_split');
-          return;
-        }
-      }
-      if (!isCurrentDocument()) return;
-      const svgEl = document.getElementById('agentikz-canvas-svg') as SVGSVGElement | null;
-      if (svgEl) setCompiledSvg(exportCleanCanvasSvg(svgEl), '内置高保真矢量引擎渲染 (无背景/纯矢量公式)');
-      setPreviewMode('tex_split');
-    } catch {
-      if (!isCurrentDocument()) return;
-      const svgEl = document.getElementById('agentikz-canvas-svg') as SVGSVGElement | null;
-      if (svgEl) setCompiledSvg(exportCleanCanvasSvg(svgEl), '内置高保真矢量引擎渲染 (无背景/纯矢量公式)');
-      setPreviewMode('tex_split');
-    } finally {
-      setIsCompilingTex(false);
-    }
+    await compileWorkspaceTexPreview();
+  };
+
+  const getFigureSvg = (): string | null => {
+    const compiled = useWorkspaceStore.getState().compiledSvg;
+    if (compiled) return compiled;
+    const svgEl = document.getElementById(requiresExactPreview
+      ? 'agentikz-vector-preview-svg' : 'agentikz-canvas-svg') as SVGSVGElement | null;
+    if (svgEl) return exportCleanCanvasSvg(svgEl);
+    void compileWorkspaceTexPreview();
+    return null;
   };
 
   const handleExportSvg = () => {
-    const svgEl = document.getElementById('agentikz-canvas-svg') as SVGSVGElement | null;
-    if (!svgEl) return;
-    const cleanSvg = exportCleanCanvasSvg(svgEl);
-    triggerFileDownload(`${stem}.svg`, cleanSvg, 'image/svg+xml;charset=utf-8');
+    const svg = getFigureSvg();
+    if (!svg) return;
+    triggerFileDownload(`${stem}.svg`, svg, 'image/svg+xml;charset=utf-8');
     setShowExportMenu(false);
   };
 
   const handleExportPng = async () => {
-    const svgEl = document.getElementById('agentikz-canvas-svg') as SVGSVGElement | null;
-    if (!svgEl) return;
+    const svg = getFigureSvg();
+    if (!svg) return;
     setShowExportMenu(false);
     try {
-      const pngBlob = await exportCleanCanvasPng(svgEl, 3);
+      const pngBlob = await exportSvgStringPng(svg, 3);
       const url = URL.createObjectURL(pngBlob);
       const a = document.createElement('a');
       a.href = url;
@@ -264,19 +232,18 @@ export const TopToolbar: React.FC = () => {
   };
 
   const handleProjectExportSvg = async () => {
-    const svgEl = document.getElementById('agentikz-canvas-svg') as SVGSVGElement | null;
-    if (!svgEl) return;
+    const svg = getFigureSvg();
+    if (!svg) return;
     setShowExportMenu(false);
-    const cleanSvg = exportCleanCanvasSvg(svgEl);
-    await exportFileToProject(`${stem}.svg`, cleanSvg, false);
+    await exportFileToProject(`${stem}.svg`, svg, false);
   };
 
   const handleProjectExportPng = async () => {
-    const svgEl = document.getElementById('agentikz-canvas-svg') as SVGSVGElement | null;
-    if (!svgEl) return;
+    const svg = getFigureSvg();
+    if (!svg) return;
     setShowExportMenu(false);
     try {
-      const pngBlob = await exportCleanCanvasPng(svgEl, 3);
+      const pngBlob = await exportSvgStringPng(svg, 3);
       const base64Data = await blobToBase64(pngBlob);
       await exportFileToProject(`${stem}.png`, base64Data, true);
     } catch (err) {
@@ -472,7 +439,7 @@ export const TopToolbar: React.FC = () => {
                 : 'bg-white/70 text-slate-600 border-slate-200/70 hover:bg-white shadow-sm'
             }`}>
             {previewMode !== 'interactive' ? <Eye className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-            <span>{previewMode !== 'interactive' ? '退出预览' : 'TeX'}</span>
+            <span>{isCompilingTex ? '编译中…' : requiresExactPreview ? '重新编译 TeX' : previewMode !== 'interactive' ? '退出预览' : 'TeX'}</span>
           </button>
         )}
 

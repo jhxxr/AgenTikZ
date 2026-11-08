@@ -5,6 +5,7 @@ import { ImageGenProviderId } from '../core/agent/illustration-prompt';
 export type SettingsSection =
   | 'general'
   | 'agent'
+  | 'mcp'
   | 'illustration'
   | 'editor'
   | 'doctor'
@@ -49,6 +50,8 @@ export interface PersistedSettings {
   defaultAttachCanvas: boolean;
   defaultAttachSelection: boolean;
   autoSelectAffectedNodes: boolean;
+  agentFullAccess: boolean;
+  agentWorkingDirectory: string;
   proxyEnabled: boolean;
   proxyUrl: string;
   personalPrompt: string;
@@ -90,6 +93,8 @@ export const DEFAULT_SETTINGS: PersistedSettings = {
   defaultAttachCanvas: true,
   defaultAttachSelection: true,
   autoSelectAffectedNodes: true,
+  agentFullAccess: false,
+  agentWorkingDirectory: '',
   proxyEnabled: false,
   proxyUrl: 'http://127.0.0.1:7890',
   personalPrompt: '',
@@ -231,6 +236,8 @@ export const useSettingsStore = create<SettingsState>((set) => {
           defaultAttachCanvas: patch.defaultAttachCanvas ?? state.defaultAttachCanvas,
           defaultAttachSelection: patch.defaultAttachSelection ?? state.defaultAttachSelection,
           autoSelectAffectedNodes: patch.autoSelectAffectedNodes ?? state.autoSelectAffectedNodes,
+          agentFullAccess: patch.agentFullAccess ?? state.agentFullAccess,
+          agentWorkingDirectory: patch.agentWorkingDirectory ?? state.agentWorkingDirectory,
           proxyEnabled: patch.proxyEnabled ?? state.proxyEnabled,
           proxyUrl: patch.proxyUrl ?? state.proxyUrl,
           personalPrompt: patch.personalPrompt ?? state.personalPrompt,

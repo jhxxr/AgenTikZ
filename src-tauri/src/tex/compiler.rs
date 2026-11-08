@@ -23,6 +23,37 @@ fn paper_compile_succeeded(process_ok: bool, pdf_path: &Path) -> bool {
             .unwrap_or(false)
 }
 
+fn preview_log_excerpt(log: &str) -> String {
+    let lines: Vec<&str> = log.lines().collect();
+    let start = lines
+        .iter()
+        .position(|line| {
+            line.starts_with("! ")
+                || line.contains(": error:")
+                || line.contains(" Error:")
+                || line.contains("Undefined control sequence")
+        })
+        .unwrap_or_else(|| lines.len().saturating_sub(12));
+    lines[start..lines.len().min(start + 12)]
+        .join("\n")
+        .chars()
+        .take(2400)
+        .collect()
+}
+
+fn preview_command_error(command: &str, error: &std::io::Error) -> String {
+    if error.kind() == std::io::ErrorKind::TimedOut {
+        format!(
+            "{} 编译超时（60 秒），请检查源码或减少图形复杂度。",
+            command
+        )
+    } else if error.kind() == std::io::ErrorKind::NotFound {
+        format!("未找到 {}。请在「设置 → 编辑器与 TeX」中配置 TeX Live bin 目录（需要 TeX 编译器和 dvisvgm）。", command)
+    } else {
+        format!("无法执行 {}：{}", command, error)
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct TexCompileResult {
     pub ok: bool,
@@ -96,7 +127,10 @@ fn build_tex_command(bin_name: &str, tex_live_bin_dir: Option<&str>) -> Command 
     if let Some(dir) = custom_dir {
         let sep = if cfg!(windows) { ";" } else { ":" };
         let existing_path = std::env::var("PATH").unwrap_or_default();
-        cmd.env("PATH", format!("{}{}{}", dir.to_string_lossy(), sep, existing_path));
+        cmd.env(
+            "PATH",
+            format!("{}{}{}", dir.to_string_lossy(), sep, existing_path),
+        );
     }
 
     cmd
@@ -114,7 +148,6 @@ fn apply_project_texinputs(cmd: &mut Command, project_dir: Option<&str>) {
         }
     }
 }
-
 
 /// Scans standard system locations and an optional custom directory for TeX Live / MiKTeX / MacTeX installations.
 #[tauri::command]
@@ -153,9 +186,15 @@ pub async fn tex_scan_installations(custom_bin_dir: Option<String>) -> Vec<TexIn
         ));
     }
 
-    candidates.push((PathBuf::from("/Library/TeX/texbin"), "MacTeX (/Library/TeX/texbin)".into()));
+    candidates.push((
+        PathBuf::from("/Library/TeX/texbin"),
+        "MacTeX (/Library/TeX/texbin)".into(),
+    ));
     candidates.push((PathBuf::from("/usr/bin"), "System TeX (/usr/bin)".into()));
-    candidates.push((PathBuf::from("/usr/local/bin"), "Local TeX (/usr/local/bin)".into()));
+    candidates.push((
+        PathBuf::from("/usr/local/bin"),
+        "Local TeX (/usr/local/bin)".into(),
+    ));
 
     let mut results = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -201,7 +240,9 @@ pub async fn tex_compile_preview(
     project_dir: Option<String>,
     tex_live_bin_dir: Option<String>,
 ) -> TexCompileResult {
-    let has_cjk = tex_source.chars().any(|c| ('\u{4E00}'..='\u{9FFF}').contains(&c));
+    let has_cjk = tex_source
+        .chars()
+        .any(|c| ('\u{4E00}'..='\u{9FFF}').contains(&c));
     let engine = match tex_engine.as_deref() {
         Some("pdflatex") => "pdflatex",
         Some("xelatex") => "xelatex",
@@ -254,69 +295,98 @@ pub async fn tex_compile_preview(
     latex_cmd
         .args([
             "-interaction=nonstopmode",
+            "-file-line-error",
             "-halt-on-error",
+            "-no-shell-escape",
             "figure.tex",
         ])
         .current_dir(&temp_dir);
 
     let latex_out = run_bounded_command(&mut latex_cmd, 60).await;
 
-    let result = if let Ok(output) = latex_out {
-        if output.status.success() && intermediate_path.exists() {
-            let mut dvisvgm_cmd = build_tex_command("dvisvgm", tex_live_bin_dir.as_deref());
-            if engine == "pdflatex" {
-                dvisvgm_cmd.arg("--pdf");
-            }
-            dvisvgm_cmd
-                .args(["--no-fonts", "--bbox=min", intermediate_file, "-o", "figure.svg"])
-                .current_dir(&temp_dir);
-            let dvisvgm_out = run_bounded_command(&mut dvisvgm_cmd, 60).await;
+    let result = match latex_out {
+        Ok(output) => {
+            if output.status.success() && intermediate_path.exists() {
+                let mut dvisvgm_cmd = build_tex_command("dvisvgm", tex_live_bin_dir.as_deref());
+                if engine == "pdflatex" {
+                    dvisvgm_cmd.arg("--pdf");
+                }
+                dvisvgm_cmd
+                    .args([
+                        "--no-fonts",
+                        "--bbox=min",
+                        intermediate_file,
+                        "-o",
+                        "figure.svg",
+                    ])
+                    .current_dir(&temp_dir);
+                let dvisvgm_out = run_bounded_command(&mut dvisvgm_cmd, 60).await;
 
-            if let Ok(svg_res) = dvisvgm_out {
-                if svg_res.status.success() && svg_path.exists() {
-                    if let Ok(svg_content) = fs::read_to_string(&svg_path) {
-                        TexCompileResult {
-                            ok: true,
-                            svg: Some(svg_content),
-                            message: format!("本地 TeX Live ({} + dvisvgm) 编译成功", engine),
-                        }
-                    } else {
-                        TexCompileResult {
-                            ok: false,
-                            svg: None,
-                            message: "dvisvgm 输出的 SVG 文件无法读取".into(),
+                match dvisvgm_out {
+                    Ok(svg_res) => {
+                        if svg_res.status.success() && svg_path.exists() {
+                            if let Ok(svg_content) = fs::read_to_string(&svg_path) {
+                                TexCompileResult {
+                                    ok: true,
+                                    svg: Some(svg_content),
+                                    message: format!(
+                                        "本地 TeX Live ({} + dvisvgm) 编译成功",
+                                        engine
+                                    ),
+                                }
+                            } else {
+                                TexCompileResult {
+                                    ok: false,
+                                    svg: None,
+                                    message: "dvisvgm 输出的 SVG 文件无法读取".into(),
+                                }
+                            }
+                        } else {
+                            TexCompileResult {
+                                ok: false,
+                                svg: None,
+                                message: format!(
+                                    "dvisvgm 转换失败：\n{}",
+                                    preview_log_excerpt(&format!(
+                                        "{}\n{}",
+                                        String::from_utf8_lossy(&svg_res.stdout),
+                                        String::from_utf8_lossy(&svg_res.stderr)
+                                    ))
+                                ),
+                            }
                         }
                     }
-                } else {
-                    TexCompileResult {
+                    Err(error) => TexCompileResult {
                         ok: false,
                         svg: None,
-                        message: "dvisvgm 转换失败".into(),
-                    }
+                        message: preview_command_error("dvisvgm", &error),
+                    },
                 }
             } else {
                 TexCompileResult {
                     ok: false,
                     svg: None,
-                    message: "未检测到本地 dvisvgm 命令，请在设置中配置 TeX Live bin 目录".into(),
+                    message: format!(
+                        "{} 编译失败：\n{}",
+                        engine,
+                        preview_log_excerpt(
+                            &fs::read_to_string(temp_dir.join("figure.log")).unwrap_or_else(
+                                |_| format!(
+                                    "{}\n{}",
+                                    String::from_utf8_lossy(&output.stdout),
+                                    String::from_utf8_lossy(&output.stderr)
+                                )
+                            )
+                        )
+                    ),
                 }
             }
-        } else {
-            TexCompileResult {
-                ok: false,
-                svg: None,
-                message: format!("{} 编译失败，请检查 TikZ 源码或宏包依赖", engine),
-            }
         }
-    } else {
-        TexCompileResult {
+        Err(error) => TexCompileResult {
             ok: false,
             svg: None,
-            message: format!(
-                "未检测到本地 {}/dvisvgm 命令，已使用内置高保真 SVG+KaTeX 矢量渲染引擎（可在设置中指定 TeX Live 安装路径）",
-                engine
-            ),
-        }
+            message: preview_command_error(engine, &error),
+        },
     };
 
     let _ = fs::remove_dir_all(&temp_dir);
@@ -362,7 +432,9 @@ pub async fn tex_compile_paper(
     }
 
     let source_str = fs::read_to_string(&entry_path).unwrap_or_default();
-    let has_cjk = source_str.chars().any(|c| ('\u{4E00}'..='\u{9FFF}').contains(&c));
+    let has_cjk = source_str
+        .chars()
+        .any(|c| ('\u{4E00}'..='\u{9FFF}').contains(&c));
     let engine = match tex_engine.as_deref() {
         Some("xelatex") => "xelatex",
         Some("pdflatex") => "pdflatex",
@@ -411,12 +483,10 @@ pub async fn tex_compile_paper(
             let mut bib_cmd = build_tex_command("bibtex", tex_live_bin_dir.as_deref());
             bib_cmd.arg(stem).current_dir(&root);
             match run_bounded_command(&mut bib_cmd, 60).await {
-                Ok(out) if out.status.success() => {
-                    match run_pass().await {
-                        Ok(out) => final_out = out,
-                        Err(err) => execution_errors.push(format!("TeX pass failed: {}", err)),
-                    }
-                }
+                Ok(out) if out.status.success() => match run_pass().await {
+                    Ok(out) => final_out = out,
+                    Err(err) => execution_errors.push(format!("TeX pass failed: {}", err)),
+                },
                 Ok(out) => execution_errors.push(format!(
                     "BibTeX failed: {}",
                     String::from_utf8_lossy(&out.stdout)
@@ -466,7 +536,10 @@ pub async fn tex_compile_paper(
             ok: false,
             pdf_path: None,
             pdf_data_url: None,
-            message: format!("{} 编译失败或未生成有效 PDF，请查看编译日志定位错误", engine),
+            message: format!(
+                "{} 编译失败或未生成有效 PDF，请查看编译日志定位错误",
+                engine
+            ),
             log_excerpt,
             errors,
         }
@@ -476,6 +549,25 @@ pub async fn tex_compile_paper(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_errors_include_the_relevant_tex_context() {
+        let log = "package loaded\n! LaTeX Error: Can be used only in preamble.\nl.91 \\documentclass\nmore detail";
+        assert_eq!(
+            preview_log_excerpt(log),
+            "! LaTeX Error: Can be used only in preamble.\nl.91 \\documentclass\nmore detail"
+        );
+        assert!(preview_command_error(
+            "latex",
+            &std::io::Error::from(std::io::ErrorKind::NotFound)
+        )
+        .contains("未找到"));
+        assert!(preview_command_error(
+            "latex",
+            &std::io::Error::from(std::io::ErrorKind::TimedOut)
+        )
+        .contains("超时"));
+    }
 
     #[test]
     fn failed_process_never_accepts_an_existing_pdf() {
