@@ -1,3 +1,4 @@
+import { useShallow } from 'zustand/react/shallow';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
 import {
@@ -186,7 +187,12 @@ export const LiveCodeSyncBanner: React.FC<{
   onExpandCodeTab?: () => void;
 }> = ({ compact = false, onExpandCodeTab }) => {
   const { tikzCode, highlightedLineRange, lastChangeInfo, selectedIds } =
-    useWorkspaceStore();
+    useWorkspaceStore(useShallow((s) => ({
+    tikzCode: s.tikzCode,
+    highlightedLineRange: s.highlightedLineRange,
+    lastChangeInfo: s.lastChangeInfo,
+    selectedIds: s.selectedIds,
+  })));
 
   const lines = useMemo(() => tikzCode.split('\n'), [tikzCode]);
 
@@ -323,8 +329,19 @@ export const TikzCodePanel: React.FC = () => {
     setTikzCode,
     setSelectedIds,
     loadTemplate,
-  } = useWorkspaceStore();
-  const { codeFontSize, showLineNumbers } = useSettingsStore();
+  } = useWorkspaceStore(useShallow((s) => ({
+    tikzCode: s.tikzCode,
+    parsedDoc: s.parsedDoc,
+    activeThemeId: s.activeThemeId,
+    activeTemplateId: s.activeTemplateId,
+    selectedIds: s.selectedIds,
+    highlightedLineRange: s.highlightedLineRange,
+    lastChangeInfo: s.lastChangeInfo,
+    setTikzCode: s.setTikzCode,
+    setSelectedIds: s.setSelectedIds,
+    loadTemplate: s.loadTemplate,
+  })));
+  const { codeFontSize, showLineNumbers } = useSettingsStore(useShallow((s) => ({ codeFontSize: s.codeFontSize, showLineNumbers: s.showLineNumbers })));
 
   const [copiedMode, setCopiedMode] = useState<'tikz' | 'standalone' | null>(
     null

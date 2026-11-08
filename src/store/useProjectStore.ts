@@ -292,6 +292,7 @@ interface ProjectState {
   openPaperFile: (relativePath: string) => Promise<string>;
   updatePaperFileContent: (relativePath: string, content: string) => void;
   savePaperFileNow: (relativePath?: string) => Promise<boolean>;
+  saveAllDirtyPaperFiles: () => Promise<boolean>;
   createNewPaperFile: (relativePath: string, initialContent?: string) => Promise<boolean>;
   ensureAgentikzMacrosSty: () => Promise<void>;
   insertFigureIntoPaper: (
@@ -366,6 +367,11 @@ function buildCurrentCanvasDoc(
 
 let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
 const paperAutoSaveTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+let paperWorkspaceVersion = 0;
+const inFlightPaperSaves = new Map<
+  string,
+  { content: string; promise: Promise<boolean> }
+>();
 let isApplyingCanvasSwitch = false;
 let inFlightSavePromise: Promise<boolean> | null = null;
 let inFlightSaveTarget: {
@@ -559,6 +565,9 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       } else if (currentProjectDir === null) {
         await get().saveActiveCanvasNow();
       }
+
+      // Flush every edited paper file before replacing its project-scoped cache.
+      if (!await get().saveAllDirtyPaperFiles()) return false;
 
       set({ errorMessage: null });
 
@@ -848,6 +857,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
 
     refreshPaperFiles: async () => {
       const { projectDir } = get();
+      const workspaceVersion = paperWorkspaceVersion;
       if (!projectDir) {
         // Provide default in-memory paper files when no project folder is bound yet
         const currentContents = get().paperFileContents;
@@ -878,6 +888,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
             'project_list_paper_files',
             { projectDir }
           );
+          if (workspaceVersion !== paperWorkspaceVersion) return;
           set({ paperFiles: list });
           if (list.length > 0) {
             const curActive = get().activePaperFilePath;
@@ -888,8 +899,12 @@ export const useProjectStore = create<ProjectState>((set, get) => {
             await get().openPaperFile(target);
           }
           return;
-        } catch {
-          // Fall through to VFS if Tauri command fails
+        } catch (err) {
+          // A failed native read must not create a simulated project over it.
+          if (workspaceVersion === paperWorkspaceVersion) {
+            set({ errorMessage: String(err) });
+          }
+          return;
         }
       }
 
@@ -911,7 +926,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       );
       set({
         paperFiles: items,
-        paperFileContents: { ...get().paperFileContents, ...paperMap },
+        paperFileContents: { ...paperMap, ...get().paperFileContents },
       });
     },
 
@@ -926,6 +941,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       }
 
       const { projectDir } = get();
+      const workspaceVersion = paperWorkspaceVersion;
       if (projectDir && isTauriRuntime()) {
         try {
           const { invoke } = await import('@tauri-apps/api/core');
@@ -933,6 +949,10 @@ export const useProjectStore = create<ProjectState>((set, get) => {
             projectDir,
             relativePath: cleanRel,
           });
+          if (workspaceVersion !== paperWorkspaceVersion) return '';
+          // Typing may have started before the disk read completed.
+          const currentContent = get().paperFileContents[cleanRel];
+          if (typeof currentContent === 'string') return currentContent;
           set((s) => ({
             paperFileContents: { ...s.paperFileContents, [cleanRel]: content },
           }));
@@ -955,6 +975,8 @@ export const useProjectStore = create<ProjectState>((set, get) => {
 
     updatePaperFileContent: (relativePath, content) => {
       const cleanRel = relativePath.replace(/\\/g, '/').trim();
+      if (!cleanRel || get().paperFileContents[cleanRel] === content) return;
+      const workspaceVersion = paperWorkspaceVersion;
       set((s) => ({
         paperFileContents: { ...s.paperFileContents, [cleanRel]: content },
         paperDirtyFiles: { ...s.paperDirtyFiles, [cleanRel]: true },
@@ -964,7 +986,9 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       }
       paperAutoSaveTimers[cleanRel] = setTimeout(() => {
         delete paperAutoSaveTimers[cleanRel];
-        void get().savePaperFileNow(cleanRel);
+        if (workspaceVersion === paperWorkspaceVersion) {
+          void get().savePaperFileNow(cleanRel);
+        }
       }, 500);
     },
 
@@ -978,36 +1002,79 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         clearTimeout(paperAutoSaveTimers[targetRel]);
         delete paperAutoSaveTimers[targetRel];
       }
-      const content = get().paperFileContents[targetRel] ?? '';
       const { projectDir } = get();
-
-      if (projectDir && isTauriRuntime()) {
-        try {
-          const { invoke } = await import('@tauri-apps/api/core');
-          await invoke('project_write_text_file', {
-            projectDir,
-            relativePath: targetRel,
-            content,
-          });
-          set((s) => ({
-            paperDirtyFiles: { ...s.paperDirtyFiles, [targetRel]: false },
-          }));
-          return true;
-        } catch (err) {
-          set({ errorMessage: String(err) });
-          return false;
+      const workspaceVersion = paperWorkspaceVersion;
+      const saveKey = JSON.stringify([workspaceVersion, projectDir, targetRel]);
+      // Serialize writes for a file, but allow different files to save in parallel.
+      // A waiting save takes a fresh snapshot after the previous write completes.
+      while (inFlightPaperSaves.has(saveKey)) {
+        const pending = inFlightPaperSaves.get(saveKey)!;
+        const sameContent = get().paperFileContents[targetRel] === pending.content;
+        const ok = await pending.promise;
+        if (workspaceVersion !== paperWorkspaceVersion) return false;
+        if (sameContent && get().paperFileContents[targetRel] === pending.content) {
+          return ok;
         }
       }
+      if (workspaceVersion !== paperWorkspaceVersion) return false;
+      const content = get().paperFileContents[targetRel];
+      if (typeof content !== 'string') return false;
 
-      if (projectDir) {
-        const vfs = readVirtualProject(projectDir);
-        vfs.paperFiles = { ...(vfs.paperFiles || {}), [targetRel]: content };
-        writeVirtualProject(projectDir, vfs);
+      const runSave = (async (): Promise<boolean> => {
+        try {
+          if (projectDir && isTauriRuntime()) {
+            const { invoke } = await import('@tauri-apps/api/core');
+            await invoke('project_write_text_file', {
+              projectDir,
+              relativePath: targetRel,
+              content,
+            });
+          } else if (projectDir) {
+            const vfs = readVirtualProject(projectDir);
+            vfs.paperFiles = { ...(vfs.paperFiles || {}), [targetRel]: content };
+            const result = writeVirtualProject(projectDir, vfs);
+            if (!result.ok) throw new Error(result.error);
+          }
+          if (
+            workspaceVersion === paperWorkspaceVersion &&
+            get().paperFileContents[targetRel] === content
+          ) {
+            set((s) => ({
+              paperDirtyFiles: { ...s.paperDirtyFiles, [targetRel]: false },
+            }));
+          }
+          return true;
+        } catch (err) {
+          if (workspaceVersion === paperWorkspaceVersion) {
+            set({ errorMessage: String(err) });
+          }
+          return false;
+        }
+      })();
+      inFlightPaperSaves.set(saveKey, { content, promise: runSave });
+      try {
+        return await runSave;
+      } finally {
+        if (inFlightPaperSaves.get(saveKey)?.promise === runSave) {
+          inFlightPaperSaves.delete(saveKey);
+        }
       }
-      set((s) => ({
-        paperDirtyFiles: { ...s.paperDirtyFiles, [targetRel]: false },
-      }));
-      return true;
+    },
+
+    saveAllDirtyPaperFiles: async () => {
+      const workspaceVersion = paperWorkspaceVersion;
+      while (workspaceVersion === paperWorkspaceVersion) {
+        const paths = Object.keys(get().paperDirtyFiles).filter(
+          (path) => get().paperDirtyFiles[path]
+        );
+        if (paths.length === 0) return true;
+        const results = await Promise.all(
+          paths.map((path) => get().savePaperFileNow(path))
+        );
+        if (results.some((ok) => !ok)) return false;
+        // Edits made while writing must be drained before switching or compiling.
+      }
+      return false;
     },
 
     createNewPaperFile: async (relativePath, initialContent = '') => {
@@ -1023,6 +1090,10 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     ensureAgentikzMacrosSty: async () => {
       const styContent = generateAgentikzMacrosSty();
       const styPath = 'styles/agentikz-macros.sty';
+      if (
+        get().paperFileContents[styPath] === styContent &&
+        !get().paperDirtyFiles[styPath]
+      ) return;
       get().updatePaperFileContent(styPath, styContent);
       await get().savePaperFileNow(styPath);
     },
@@ -2155,6 +2226,23 @@ export const useProjectStore = create<ProjectState>((set, get) => {
 
     clearExportNotice: () => set({ lastExportedNotice: null }),
   };
+});
+
+// Paper caches and delayed work belong to a workspace, never just a relative path.
+useProjectStore.subscribe((state, prev) => {
+  if (state.projectDir === prev.projectDir) return;
+  paperWorkspaceVersion += 1;
+  for (const path of Object.keys(paperAutoSaveTimers)) {
+    clearTimeout(paperAutoSaveTimers[path]);
+    delete paperAutoSaveTimers[path];
+  }
+  useProjectStore.setState({
+    paperFiles: [],
+    paperFileContents: {},
+    paperDirtyFiles: {},
+    activePaperFilePath: 'main.tex',
+    lastPaperCursorOffset: null,
+  });
 });
 
 // Subscribe to workspace code/theme/size changes so edits automatically mark the active canvas file dirty and auto-save

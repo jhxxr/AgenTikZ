@@ -1,3 +1,4 @@
+import { useShallow } from 'zustand/react/shallow';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   BookOpen,
@@ -114,16 +115,43 @@ export const PaperWorkspaceView: React.FC = () => {
     refreshPaperFiles,
     openPaperFile,
     updatePaperFileContent,
-    savePaperFileNow,
     createNewPaperFile,
     ensureAgentikzMacrosSty,
     switchCanvasFile,
     createNewCanvasFile,
-  } = useProjectStore();
+  } = useProjectStore(useShallow((s) => ({
+    projectDir: s.projectDir,
+    projectName: s.projectName,
+    paperFiles: s.paperFiles,
+    activePaperFilePath: s.activePaperFilePath,
+    paperFileContents: s.paperFileContents,
+    paperDirtyFiles: s.paperDirtyFiles,
+    canvases: s.canvases,
+    activeCanvasFileName: s.activeCanvasFileName,
+    workbenchMode: s.workbenchMode,
+    setWorkbenchMode: s.setWorkbenchMode,
+    setPickerOpen: s.setPickerOpen,
+    setInsertFigureModalOpen: s.setInsertFigureModalOpen,
+    setLastPaperCursorOffset: s.setLastPaperCursorOffset,
+    quickInsertActiveFigureIntoPaper: s.quickInsertActiveFigureIntoPaper,
+    initPaperWorkspace: s.initPaperWorkspace,
+    refreshPaperFiles: s.refreshPaperFiles,
+    openPaperFile: s.openPaperFile,
+    updatePaperFileContent: s.updatePaperFileContent,
+    createNewPaperFile: s.createNewPaperFile,
+    ensureAgentikzMacrosSty: s.ensureAgentikzMacrosSty,
+    switchCanvasFile: s.switchCanvasFile,
+    createNewCanvasFile: s.createNewCanvasFile,
+  })));
 
-  const { setTikzCode } = useWorkspaceStore();
-  const { texEngine, texLiveBinDir, openSettings } = useSettingsStore();
+  const { setTikzCode } = useWorkspaceStore(useShallow((s) => ({ setTikzCode: s.setTikzCode })));
+  const { texEngine, texLiveBinDir, openSettings } = useSettingsStore(useShallow((s) => ({
+    texEngine: s.texEngine,
+    texLiveBinDir: s.texLiveBinDir,
+    openSettings: s.openSettings,
+  })));
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const compilationId = useRef(0);
 
   const [selectedTemplateId, setSelectedTemplateId] =
     useState<PaperVenueTemplateId>('nature');
@@ -142,6 +170,13 @@ export const PaperWorkspaceView: React.FC = () => {
   } | null>(null);
   const [showCompilerDrawer, setShowCompilerDrawer] = useState<boolean>(false);
   const [statusNotice, setStatusNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    compilationId.current += 1;
+    setCompileResult(null);
+    setIsCompilingPaper(false);
+    return () => { compilationId.current += 1; };
+  }, [projectDir]);
 
   useEffect(() => {
     if (projectDir && paperFiles.length === 0) {
@@ -256,11 +291,23 @@ export const PaperWorkspaceView: React.FC = () => {
   };
 
   const handleCompileFullPaper = async () => {
-    await savePaperFileNow();
-    await ensureAgentikzMacrosSty();
+    if (isCompilingPaper) return;
+    const requestId = ++compilationId.current;
     setIsCompilingPaper(true);
     setShowCompilerDrawer(true);
     try {
+      const project = useProjectStore.getState();
+      const saved = await Promise.all([
+        project.saveActiveCanvasNow(),
+        project.saveAllDirtyPaperFiles(),
+      ]);
+      if (requestId !== compilationId.current) return;
+      if (saved.some((ok) => !ok)) throw new Error('文件保存失败，已停止编译以避免使用旧内容');
+      await ensureAgentikzMacrosSty();
+      if (requestId !== compilationId.current) return;
+      if (useProjectStore.getState().paperDirtyFiles['styles/agentikz-macros.sty']) {
+        throw new Error('绘图宏文件保存失败，已停止编译');
+      }
       const isTauri =
         typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
       if (isTauri && projectDir) {
@@ -280,10 +327,11 @@ export const PaperWorkspaceView: React.FC = () => {
           logExcerpt?: string;
         }>('tex_compile_paper', {
           projectDir,
-          mainTexRelPath: mainTex,
+          mainTexFile: mainTex,
           texEngine,
           texLiveBinDir: texLiveBinDir || undefined,
         });
+        if (requestId !== compilationId.current) return;
 
         let pdfDataUrl: string | undefined;
         if (res.ok && res.pdfPath) {
@@ -311,12 +359,13 @@ export const PaperWorkspaceView: React.FC = () => {
         });
       }
     } catch (e) {
+      if (requestId !== compilationId.current) return;
       setCompileResult({
         ok: false,
         message: `编译异常: ${String(e)}`,
       });
     } finally {
-      setIsCompilingPaper(false);
+      if (requestId === compilationId.current) setIsCompilingPaper(false);
     }
   };
 

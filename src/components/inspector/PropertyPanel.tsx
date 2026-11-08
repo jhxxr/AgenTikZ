@@ -1,3 +1,4 @@
+import { useShallow } from 'zustand/react/shallow';
 import React, { useState, useEffect } from 'react';
 import { useWorkspaceStore } from '../../store/useWorkspaceStore';
 import { useProjectStore } from '../../store/useProjectStore';
@@ -45,7 +46,20 @@ export const FloatingSelectionBar: React.FC = () => {
     duplicateSelectedElements,
     deleteSelectedElements,
     setLeftTab,
-  } = useWorkspaceStore();
+  } = useWorkspaceStore(useShallow((s) => ({
+    parsedDoc: s.parsedDoc,
+    selectedIds: s.selectedIds,
+    activeThemeId: s.activeThemeId,
+    isInspectorDrawerOpen: s.isInspectorDrawerOpen,
+    setInspectorDrawerOpen: s.setInspectorDrawerOpen,
+    updateNodeLabelById: s.updateNodeLabelById,
+    updateNodeOptionsById: s.updateNodeOptionsById,
+    updateEdgeById: s.updateEdgeById,
+    updateChartById: s.updateChartById,
+    duplicateSelectedElements: s.duplicateSelectedElements,
+    deleteSelectedElements: s.deleteSelectedElements,
+    setLeftTab: s.setLeftTab,
+  })));
 
   const firstId = selectedIds[0];
   const selectedNode = firstId
@@ -335,9 +349,40 @@ export const PropertyPanel: React.FC = () => {
     duplicateSelectedElements,
     deleteSelectedElements,
     setLeftTab,
-  } = useWorkspaceStore();
+  } = useWorkspaceStore(useShallow((s) => ({
+    parsedDoc: s.parsedDoc,
+    selectedIds: s.selectedIds,
+    setSelectedIds: s.setSelectedIds,
+    activeThemeId: s.activeThemeId,
+    setActiveTheme: s.setActiveTheme,
+    canvasWidthCm: s.canvasWidthCm,
+    canvasHeightCm: s.canvasHeightCm,
+    setCanvasSizeCm: s.setCanvasSizeCm,
+    fitCanvasToContent: s.fitCanvasToContent,
+    showGrid: s.showGrid,
+    setShowGrid: s.setShowGrid,
+    snapToGrid: s.snapToGrid,
+    setSnapToGrid: s.setSnapToGrid,
+    isInspectorDrawerOpen: s.isInspectorDrawerOpen,
+    setInspectorDrawerOpen: s.setInspectorDrawerOpen,
+    moveElementsByPosition: s.moveElementsByPosition,
+    updateNodeLabelById: s.updateNodeLabelById,
+    updateNodeOptionsById: s.updateNodeOptionsById,
+    updateImageNodePathById: s.updateImageNodePathById,
+    updateFigureCaption: s.updateFigureCaption,
+    updateEdgeById: s.updateEdgeById,
+    updateChartById: s.updateChartById,
+    moveChartLegend: s.moveChartLegend,
+    duplicateSelectedElements: s.duplicateSelectedElements,
+    deleteSelectedElements: s.deleteSelectedElements,
+    setLeftTab: s.setLeftTab,
+  })));
 
-  const { assets, projectDir, registerGeneratedAsset } = useProjectStore();
+  const { assets, projectDir, registerGeneratedAsset } = useProjectStore(useShallow((s) => ({
+    assets: s.assets,
+    projectDir: s.projectDir,
+    registerGeneratedAsset: s.registerGeneratedAsset,
+  })));
   const settings = useSettingsStore();
 
   const [activeSeriesIdx, setActiveSeriesIdx] = useState(0);

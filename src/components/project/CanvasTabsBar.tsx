@@ -1,3 +1,4 @@
+import { useShallow } from 'zustand/react/shallow';
 import React, { useState } from 'react';
 import {
   FileText,
@@ -29,14 +30,31 @@ export const CanvasTabsBar: React.FC = () => {
     deleteCanvasFile,
     saveActiveCanvasNow,
     setPickerOpen,
-  } = useProjectStore();
+  } = useProjectStore(useShallow((s) => ({
+    projectDir: s.projectDir,
+    canvases: s.canvases,
+    activeCanvasFileName: s.activeCanvasFileName,
+    saveStatus: s.saveStatus,
+    switchCanvasFile: s.switchCanvasFile,
+    createNewCanvasFile: s.createNewCanvasFile,
+    duplicateCurrentCanvasFile: s.duplicateCurrentCanvasFile,
+    renameCanvasFile: s.renameCanvasFile,
+    deleteCanvasFile: s.deleteCanvasFile,
+    saveActiveCanvasNow: s.saveActiveCanvasNow,
+    setPickerOpen: s.setPickerOpen,
+  })));
 
   const {
     isInspectorDrawerOpen,
     toggleInspectorDrawer,
     canvasWidthCm,
     canvasHeightCm,
-  } = useWorkspaceStore();
+  } = useWorkspaceStore(useShallow((s) => ({
+    isInspectorDrawerOpen: s.isInspectorDrawerOpen,
+    toggleInspectorDrawer: s.toggleInspectorDrawer,
+    canvasWidthCm: s.canvasWidthCm,
+    canvasHeightCm: s.canvasHeightCm,
+  })));
 
   const [editingFileName, setEditingFileName] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');

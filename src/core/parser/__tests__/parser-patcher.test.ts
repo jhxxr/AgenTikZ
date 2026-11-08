@@ -25,6 +25,53 @@ const SAMPLE_TIKZ = `% Header comment that must NEVER be lost
 \\end{tikzpicture}`;
 
 describe('Lossless TikZ CST/AST Parser & Surgical Patcher', () => {
+  it('preserves exact line numbers for all spans in mixed, out-of-order documents', () => {
+    for (const newline of ['\n', '\r\n']) {
+      const source = [
+        '% Leading comment',
+        '\\begin{tikzpicture}',
+        '\\node[minimum width=2cm] (before) at (1,2) {Multi',
+        'line label};',
+        '\\begin{axis}[id=chart, legend style={at={(0.5,1.0)}}]',
+        '\\addplot coordinates {(0,1) (1,2)};',
+        '\\end{axis}',
+        '\\node (after) at (3,4) {Last};',
+        '\\draw (before) -- (after);',
+        '\\end{tikzpicture}',
+      ].join(newline);
+      const doc = parseTikzDocument(source);
+      expect(doc.nodes).toHaveLength(2);
+      expect(doc.charts).toHaveLength(1);
+      expect(doc.edges).toHaveLength(1);
+      for (const element of doc.elements) {
+        for (const value of Object.values(element)) {
+          if (value && typeof value === 'object' && 'startLine' in value && 'start' in value && 'end' in value) {
+            const span = value as { start: number; end: number; startLine: number; endLine: number };
+            expect(span.startLine).toBe(source.slice(0, span.start).split('\n').length);
+            expect(span.endLine).toBe(source.slice(0, Math.max(span.start, span.end - 1)).split('\n').length);
+          }
+        }
+      }
+    }
+  });
+
+  it('batch-patches nodes of changing coordinate length without shifting other spans', () => {
+    const source = Array.from({ length: 300 }, (_, i) =>
+      `\\node (n${i}) at (${i}, 0) {Node ${i}}; % keep ${i}`
+    ).join('\n');
+    const doc = parseTikzDocument(source);
+    const next = patchElementsCoordinates(source, doc.nodes.map((element, i) => ({
+      element, x: -i * 10, y: i / 2,
+    })).reverse());
+    const parsed = parseTikzDocument(next);
+    expect(parsed.nodes).toHaveLength(300);
+    parsed.nodes.forEach((node, i) => {
+      expect(node.x).toBe(i === 0 ? 0 : -i * 10);
+      expect(node.y).toBe(i / 2);
+      expect(next).toContain(`% keep ${i}`);
+    });
+  });
+
   it('parses nodes, standard edges, and residual skip edges with exact SourceSpans', () => {
     const doc = parseTikzDocument(SAMPLE_TIKZ);
     expect(doc.nodes.length).toBe(2);

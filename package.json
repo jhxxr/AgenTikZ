@@ -19,6 +19,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "test": "vitest run",
+    "benchmark:parser": "node scripts/benchmark-parser.mjs",
     "tauri": "tauri"
   },
   "dependencies": {

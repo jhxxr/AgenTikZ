@@ -122,6 +122,10 @@ describe('useProjectStore', () => {
       assetDataUrls: {},
       isScanningAssets: false,
       errorMessage: null,
+      paperFiles: [],
+      paperFileContents: {},
+      paperDirtyFiles: {},
+      activePaperFilePath: 'main.tex',
     });
   });
 
@@ -135,6 +139,234 @@ describe('useProjectStore', () => {
       globalThis as unknown as { window: Record<string, unknown> }
     ).window.__TAURI_INTERNALS__ = {};
   }
+
+  describe('project-scoped paper persistence', () => {
+    function setupPaper(content = 'first version') {
+      enableTauriRuntime();
+      useProjectStore.setState({ projectDir: 'E:/Papers/PaperA' });
+      useProjectStore.setState({
+        paperFileContents: { 'main.tex': content },
+        paperDirtyFiles: { 'main.tex': true },
+      });
+    }
+
+    it('serializes writes and does not clear edits made during a save', async () => {
+      setupPaper();
+      let finishFirst!: () => void;
+      let finishSecond!: () => void;
+      const firstWrite = new Promise<void>((resolve) => { finishFirst = resolve; });
+      const secondWrite = new Promise<void>((resolve) => { finishSecond = resolve; });
+      mockInvoke.mockReturnValueOnce(firstWrite).mockReturnValueOnce(secondWrite);
+
+      const first = useProjectStore.getState().savePaperFileNow();
+      await vi.dynamicImportSettled();
+      await vi.advanceTimersByTimeAsync(0);
+      useProjectStore.getState().updatePaperFileContent('main.tex', 'latest version');
+      const second = useProjectStore.getState().savePaperFileNow();
+      await vi.dynamicImportSettled();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockInvoke).toHaveBeenCalledTimes(1);
+
+      finishFirst();
+      await first;
+      await vi.dynamicImportSettled();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(useProjectStore.getState().paperDirtyFiles['main.tex']).toBe(true);
+      expect(mockInvoke).toHaveBeenLastCalledWith('project_write_text_file', {
+        projectDir: 'E:/Papers/PaperA',
+        relativePath: 'main.tex',
+        content: 'latest version',
+      });
+      finishSecond();
+      expect(await second).toBe(true);
+      expect(useProjectStore.getState().paperDirtyFiles['main.tex']).toBe(false);
+    });
+
+    it('deduplicates concurrent saves of identical content', async () => {
+      setupPaper();
+      let finish!: () => void;
+      mockInvoke.mockReturnValue(new Promise<void>((resolve) => { finish = resolve; }));
+      const first = useProjectStore.getState().savePaperFileNow();
+      const second = useProjectStore.getState().savePaperFileNow();
+      await vi.dynamicImportSettled();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockInvoke).toHaveBeenCalledTimes(1);
+      finish();
+      expect(await Promise.all([first, second])).toEqual([true, true]);
+    });
+
+    it('allows different files to save concurrently', async () => {
+      setupPaper();
+      useProjectStore.getState().updatePaperFileContent('sections/intro.tex', 'intro');
+      let finish!: () => void;
+      mockInvoke.mockReturnValue(new Promise<void>((resolve) => { finish = resolve; }));
+      const saves = [
+        useProjectStore.getState().savePaperFileNow('main.tex'),
+        useProjectStore.getState().savePaperFileNow('sections/intro.tex'),
+      ];
+      await vi.dynamicImportSettled();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockInvoke).toHaveBeenCalledTimes(2);
+      finish();
+      expect(await Promise.all(saves)).toEqual([true, true]);
+    });
+
+    it('invalidates caches and cancels delayed paper saves on a project change', async () => {
+      setupPaper();
+      useProjectStore.getState().updatePaperFileContent('main.tex', 'unsaved');
+      useProjectStore.setState({ projectDir: 'E:/Papers/PaperB' });
+      expect(useProjectStore.getState().paperFileContents).toEqual({});
+      expect(useProjectStore.getState().paperDirtyFiles).toEqual({});
+      await vi.advanceTimersByTimeAsync(600);
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it('ignores save failures belonging to an old project, including an A-B-A switch', async () => {
+      setupPaper();
+      let fail!: (error: Error) => void;
+      mockInvoke.mockReturnValue(new Promise<void>((_resolve, reject) => { fail = reject; }));
+      const save = useProjectStore.getState().savePaperFileNow();
+      await vi.dynamicImportSettled();
+      await vi.advanceTimersByTimeAsync(0);
+      useProjectStore.setState({ projectDir: 'E:/Papers/PaperB' });
+      useProjectStore.setState({ projectDir: 'E:/Papers/PaperA' });
+      useProjectStore.setState({
+        paperFileContents: { 'main.tex': 'new workspace content' },
+        paperDirtyFiles: { 'main.tex': true },
+      });
+      fail(new Error('old write failed'));
+      expect(await save).toBe(false);
+      expect(useProjectStore.getState().errorMessage).toBeNull();
+      expect(useProjectStore.getState().paperDirtyFiles['main.tex']).toBe(true);
+    });
+
+    it('never lets a delayed file read replace newer edits', async () => {
+      setupPaper();
+      useProjectStore.setState({ paperFileContents: {}, paperDirtyFiles: {} });
+      let finishRead!: (content: string) => void;
+      mockInvoke.mockReturnValue(new Promise<string>((resolve) => { finishRead = resolve; }));
+      const read = useProjectStore.getState().openPaperFile('main.tex');
+      await vi.dynamicImportSettled();
+      await vi.advanceTimersByTimeAsync(0);
+      useProjectStore.getState().updatePaperFileContent('main.tex', 'typed while loading');
+      finishRead('old disk version');
+      expect(await read).toBe('typed while loading');
+      expect(useProjectStore.getState().paperFileContents['main.tex']).toBe('typed while loading');
+    });
+
+    it('discards delayed paper reads and directory scans from an old project', async () => {
+      setupPaper();
+      useProjectStore.setState({ paperFileContents: {} });
+      let finishRead!: (content: string) => void;
+      let finishScan!: (files: unknown[]) => void;
+      let readStarted!: () => void;
+      let scanStarted!: () => void;
+      const reading = new Promise<void>((resolve) => { readStarted = resolve; });
+      const scanning = new Promise<void>((resolve) => { scanStarted = resolve; });
+      mockInvoke.mockImplementation((cmd: string) => {
+        if (cmd === 'project_read_text_file') {
+          return new Promise<string>((resolve) => {
+            finishRead = resolve;
+            readStarted();
+          });
+        }
+        return new Promise<unknown[]>((resolve) => {
+          finishScan = resolve;
+          scanStarted();
+        });
+      });
+      const read = useProjectStore.getState().openPaperFile('main.tex');
+      const scan = useProjectStore.getState().refreshPaperFiles();
+      await Promise.all([reading, scanning]);
+      useProjectStore.setState({ projectDir: 'E:/Papers/PaperB' });
+      finishRead('A content');
+      finishScan([{ relativePath: 'main.tex', category: 'main' }]);
+      expect(await read).toBe('');
+      await scan;
+      expect(useProjectStore.getState().paperFileContents).toEqual({});
+      expect(useProjectStore.getState().paperFiles).toEqual([]);
+    });
+
+    it('keeps a paper dirty and reports a browser storage failure', async () => {
+      useProjectStore.setState({ projectDir: 'E:/Papers/Browser' });
+      useProjectStore.getState().updatePaperFileContent('main.tex', 'important edit');
+      mockStorage.setItem.mockImplementation(() => { throw new Error('quota exceeded'); });
+      expect(await useProjectStore.getState().savePaperFileNow()).toBe(false);
+      expect(useProjectStore.getState().paperDirtyFiles['main.tex']).toBe(true);
+      expect(useProjectStore.getState().errorMessage).toContain('quota exceeded');
+    });
+
+    it('does not manufacture an empty file when saving an unloaded path', async () => {
+      setupPaper();
+      expect(await useProjectStore.getState().savePaperFileNow('missing.tex')).toBe(false);
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it('does not schedule writes for unchanged content', async () => {
+      setupPaper();
+      useProjectStore.setState({ paperDirtyFiles: { 'main.tex': false } });
+      useProjectStore.getState().updatePaperFileContent('main.tex', 'first version');
+      await vi.advanceTimersByTimeAsync(600);
+      expect(mockInvoke).not.toHaveBeenCalled();
+      expect(useProjectStore.getState().paperDirtyFiles['main.tex']).toBe(false);
+    });
+
+    it('flushes dirty paper files before opening a different project', async () => {
+      useProjectStore.setState({ projectDir: 'E:/Papers/BrowserA' });
+      useProjectStore.getState().updatePaperFileContent('main.tex', 'saved before switching');
+      expect(await useProjectStore.getState().openProjectDirectory('E:/Papers/BrowserB')).toBe(true);
+      const stored = Object.values(mockStorage.store).map((value) => JSON.parse(value));
+      expect(stored.some((value) =>
+        value.paperFiles?.['main.tex'] === 'saved before switching'
+      )).toBe(true);
+      expect(useProjectStore.getState().paperFileContents['main.tex']).not.toBe('saved before switching');
+    });
+
+    it('drains edits made during a flush before reporting that all paper files are saved', async () => {
+      setupPaper();
+      let finish!: () => void;
+      let writeStarted!: () => void;
+      const started = new Promise<void>((resolve) => { writeStarted = resolve; });
+      mockInvoke.mockImplementation((_cmd: string, args: { content: string }) => {
+        if (args.content === 'first version') {
+          return new Promise<void>((resolve) => {
+            finish = resolve;
+            writeStarted();
+          });
+        }
+        return Promise.resolve();
+      });
+      const flush = useProjectStore.getState().saveAllDirtyPaperFiles();
+      await started;
+      useProjectStore.getState().updatePaperFileContent('main.tex', 'edited during flush');
+      finish();
+      expect(await flush).toBe(true);
+      expect(mockInvoke).toHaveBeenCalledTimes(2);
+      expect(mockInvoke).toHaveBeenLastCalledWith('project_write_text_file', expect.objectContaining({
+        content: 'edited during flush',
+      }));
+      expect(useProjectStore.getState().paperDirtyFiles['main.tex']).toBe(false);
+    });
+
+    it('blocks project switching when a paper file cannot be saved', async () => {
+      setupPaper();
+      useProjectStore.setState({ saveStatus: 'saved' });
+      mockInvoke.mockRejectedValue(new Error('paper is read-only'));
+      expect(await useProjectStore.getState().openProjectDirectory('E:/Papers/PaperB')).toBe(false);
+      expect(useProjectStore.getState().projectDir).toBe('E:/Papers/PaperA');
+      expect(useProjectStore.getState().paperDirtyFiles['main.tex']).toBe(true);
+      expect(mockInvoke).not.toHaveBeenCalledWith('project_open_workspace', expect.anything());
+    });
+
+    it('does not replace native read failures with a fabricated browser project', async () => {
+      setupPaper();
+      mockInvoke.mockRejectedValue(new Error('directory unavailable'));
+      await useProjectStore.getState().refreshPaperFiles();
+      expect(useProjectStore.getState().errorMessage).toContain('directory unavailable');
+      expect(mockStorage.setItem).not.toHaveBeenCalled();
+      expect(useProjectStore.getState().paperFileContents['main.tex']).toBe('first version');
+    });
+  });
 
   describe('blank-first canvas creation', () => {
     it('creates an empty canvas without changing the previous drawing', async () => {

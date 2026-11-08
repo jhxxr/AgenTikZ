@@ -113,21 +113,31 @@ function extractBraceContent(
 
 // ── End depth-aware utilities ───────────────────────────────────────────
 
-function offsetToLine(source: string, offset: number): number {
-  let line = 1;
-  for (let i = 0; i < offset && i < source.length; i++) {
-    if (source[i] === '\n') line++;
-  }
-  return line;
-}
+type SpanFactory = (start: number, end: number) => SourceSpan;
 
-function makeSpan(source: string, start: number, end: number): SourceSpan {
-  return {
+function createSpanFactory(source: string): SpanFactory {
+  // Build once per parse, not twice per span. Lookups are O(log lines) and
+  // remain valid when charts are parsed before nodes earlier in the source.
+  const lineStarts = [0];
+  for (let i = 0; i < source.length; i++) {
+    if (source[i] === '\n') lineStarts.push(i + 1);
+  }
+  const offsetToLine = (offset: number): number => {
+    let low = 0;
+    let high = lineStarts.length;
+    while (low < high) {
+      const mid = (low + high) >>> 1;
+      if (lineStarts[mid] <= offset) low = mid + 1;
+      else high = mid;
+    }
+    return Math.max(1, low);
+  };
+  return (start, end) => ({
     start,
     end,
-    startLine: offsetToLine(source, start),
-    endLine: offsetToLine(source, Math.max(start, end - 1)),
-  };
+    startLine: offsetToLine(start),
+    endLine: offsetToLine(Math.max(start, end - 1)),
+  });
 }
 
 /**
@@ -386,7 +396,8 @@ function parseSingleNodeStatement(
   stmtStart: number,
   stmtEnd: number,
   preambleStyles: Record<string, Record<string, string>>,
-  autoIdx: number
+  autoIdx: number,
+  makeSpan: SpanFactory
 ): TikzNodeElement | null {
   const rawStmt = source.slice(stmtStart, stmtEnd);
   if (!rawStmt.trimStart().startsWith('\\node')) return null;
@@ -403,7 +414,7 @@ function parseSingleNodeStatement(
       if (extracted) {
         const contentStart = stmtStart + afterNode + 1;
         const contentEnd = stmtStart + extracted.closeIdx;
-        optionsSpan = makeSpan(source, contentStart, contentEnd);
+        optionsSpan = makeSpan(contentStart, contentEnd);
         rawOptions = parseTikzOptionString(extracted.content);
       }
     }
@@ -444,7 +455,6 @@ function parseSingleNodeStatement(
     const openParenOffset = rawStmt.indexOf('(', atMatch.index);
     const closeParenOffset = rawStmt.indexOf(')', openParenOffset);
     coordSpan = makeSpan(
-      source,
       stmtStart + openParenOffset + 1,
       stmtStart + closeParenOffset
     );
@@ -475,7 +485,6 @@ function parseSingleNodeStatement(
     if (closeBraceIdx !== -1) {
       label = rawStmt.slice(firstBraceAfterAt + 1, closeBraceIdx).trim();
       labelSpan = makeSpan(
-        source,
         stmtStart + firstBraceAfterAt + 1,
         stmtStart + closeBraceIdx
       );
@@ -616,7 +625,7 @@ function parseSingleNodeStatement(
     roundedCorners: mergedOpts['rounded corners'],
     dashed: mergedOpts['dashed'] === 'true' || mergedOpts['densely dashed'] === 'true',
     rawOptions,
-    span: makeSpan(source, stmtStart, stmtEnd),
+    span: makeSpan(stmtStart, stmtEnd),
     coordSpan,
     optionsSpan,
     labelSpan,
@@ -649,7 +658,8 @@ function parseSingleDrawStatement(
   stmtStart: number,
   stmtEnd: number,
   preambleStyles: Record<string, Record<string, string>>,
-  autoIdx: number
+  autoIdx: number,
+  makeSpan: SpanFactory
 ): TikzEdgeElement | null {
   const rawStmt = source.slice(stmtStart, stmtEnd);
   if (!rawStmt.trimStart().startsWith('\\draw')) return null;
@@ -664,7 +674,7 @@ function parseSingleDrawStatement(
       if (extracted) {
         const contentStart = stmtStart + afterDraw + 1;
         const contentEnd = stmtStart + extracted.closeIdx;
-        optionsSpan = makeSpan(source, contentStart, contentEnd);
+        optionsSpan = makeSpan(contentStart, contentEnd);
         rawOptions = parseTikzOptionString(extracted.content);
       }
     }
@@ -722,7 +732,7 @@ function parseSingleDrawStatement(
       lineStyle,
       styleClass,
       rawOptions,
-      span: makeSpan(source, stmtStart, stmtEnd),
+      span: makeSpan(stmtStart, stmtEnd),
       optionsSpan,
     };
   }
@@ -794,7 +804,7 @@ function parseSingleDrawStatement(
         lineStyle,
         styleClass,
         rawOptions,
-        span: makeSpan(source, stmtStart, stmtEnd),
+        span: makeSpan(stmtStart, stmtEnd),
         optionsSpan,
       };
     }
@@ -835,7 +845,7 @@ function parseSingleDrawStatement(
     lineStyle,
     styleClass,
     rawOptions,
-    span: makeSpan(source, stmtStart, stmtEnd),
+    span: makeSpan(stmtStart, stmtEnd),
     optionsSpan,
   };
 }
@@ -844,7 +854,8 @@ function parsePgfAxisBlock(
   source: string,
   blockStart: number,
   blockEnd: number,
-  autoIdx: number
+  autoIdx: number,
+  makeSpan: SpanFactory
 ): TikzChartElement {
   const rawBlock = source.slice(blockStart, blockEnd);
 
@@ -861,7 +872,7 @@ function parsePgfAxisBlock(
     y = parseFloat(shiftMatch[2]);
     const openParen = rawBlock.indexOf('(', shiftMatch.index);
     const closeParen = rawBlock.indexOf(')', openParen);
-    coordSpan = makeSpan(source, blockStart + openParen + 1, blockStart + closeParen);
+    coordSpan = makeSpan(blockStart + openParen + 1, blockStart + closeParen);
   }
 
   // Extract \begin{axis}[...] options
@@ -908,7 +919,6 @@ function parsePgfAxisBlock(
     const openParen = legendAtMatch[0].indexOf('(', atIdx);
     const closeParen = legendAtMatch[0].indexOf(')', openParen);
     legendCoordSpan = makeSpan(
-      source,
       blockStart + legendAtMatch.index + openParen + 1,
       blockStart + legendAtMatch.index + closeParen
     );
@@ -1085,7 +1095,7 @@ function parsePgfAxisBlock(
     heatmapXLabels: ['Q_1', 'Q_2', 'Q_3', 'Q_4'],
     heatmapYLabels: ['K_1', 'K_2', 'K_3', 'K_4'],
     boxplots,
-    span: makeSpan(source, blockStart, blockEnd),
+    span: makeSpan(blockStart, blockEnd),
     coordSpan,
     legendCoordSpan,
   };
@@ -1099,6 +1109,7 @@ export function parseTikzDocument(
   source: string,
   activeThemeId: JournalThemeId = 'neurips'
 ): ParsedTikzDocument {
+  const makeSpan = createSpanFactory(source);
   registerCustomTikzColors(source);
   const preambleStyles = parsePreambleStyles(source, activeThemeId);
   const { contract, panels, imageDirectives } = parsePragmaDirectivesFromSource(source);
@@ -1136,7 +1147,7 @@ export function parseTikzDocument(
     const start = aMatch.index;
     const end = start + aMatch[0].length;
     axisRanges.push({ start, end });
-    const chartEl = parsePgfAxisBlock(source, start, end, chartIdx++);
+    const chartEl = parsePgfAxisBlock(source, start, end, chartIdx++, makeSpan);
     elements.push(chartEl);
     charts.push(chartEl);
   }
@@ -1170,7 +1181,8 @@ export function parseTikzDocument(
         start,
         end,
         preambleStyles,
-        nodeIdx++
+        nodeIdx++,
+        makeSpan
       );
       if (node) {
         elements.push(node);
@@ -1182,7 +1194,8 @@ export function parseTikzDocument(
         start,
         end,
         preambleStyles,
-        edgeIdx++
+        edgeIdx++,
+        makeSpan
       );
       if (edge) {
         elements.push(edge);

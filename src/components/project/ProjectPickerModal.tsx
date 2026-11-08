@@ -1,3 +1,4 @@
+import { useShallow } from 'zustand/react/shallow';
 import React, { useState } from 'react';
 import {
   FolderOpen,
@@ -56,7 +57,26 @@ export const ProjectPickerModal: React.FC = () => {
     removeRecentProject,
     revealInFileManager,
     errorMessage,
-  } = useProjectStore();
+  } = useProjectStore(useShallow((s) => ({
+    isPickerOpen: s.isPickerOpen,
+    setPickerOpen: s.setPickerOpen,
+    projectDir: s.projectDir,
+    projectName: s.projectName,
+    lastProjectDir: s.lastProjectDir,
+    autoOpenLastProject: s.autoOpenLastProject,
+    setAutoOpenLastProject: s.setAutoOpenLastProject,
+    autoSyncTikz: s.autoSyncTikz,
+    setAutoSyncTikz: s.setAutoSyncTikz,
+    recentProjects: s.recentProjects,
+    pickAndOpenDirectory: s.pickAndOpenDirectory,
+    openProjectDirectory: s.openProjectDirectory,
+    initPaperWorkspace: s.initPaperWorkspace,
+    setWorkbenchMode: s.setWorkbenchMode,
+    togglePinRecentProject: s.togglePinRecentProject,
+    removeRecentProject: s.removeRecentProject,
+    revealInFileManager: s.revealInFileManager,
+    errorMessage: s.errorMessage,
+  })));
 
   const [manualPath, setManualPath] = useState(
     projectDir || lastProjectDir || ''

@@ -1,4 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useWorkspaceStore } from '../../store/useWorkspaceStore';
 import { useProjectStore } from '../../store/useProjectStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
@@ -160,13 +161,73 @@ export const InteractiveCanvas: React.FC = () => {
     deleteSelectedElements,
     undo,
     redo,
-  } = useWorkspaceStore();
+  } = useWorkspaceStore(useShallow((s) => ({
+    tikzCode: s.tikzCode,
+    parsedDoc: s.parsedDoc,
+    activeThemeId: s.activeThemeId,
+    activeTool: s.activeTool,
+    selectedIds: s.selectedIds,
+    showGrid: s.showGrid,
+    snapToGrid: s.snapToGrid,
+    columnGuideMode: s.columnGuideMode,
+    canvasWidthCm: s.canvasWidthCm,
+    canvasHeightCm: s.canvasHeightCm,
+    zoom: s.zoom,
+    pan: s.pan,
+    previewMode: s.previewMode,
+    compiledSvg: s.compiledSvg,
+    texCompilerStatus: s.texCompilerStatus,
+    setSelectedIds: s.setSelectedIds,
+    setLeftTab: s.setLeftTab,
+    setAgentPanelCollapsed: s.setAgentPanelCollapsed,
+    setActiveTool: s.setActiveTool,
+    setShowGrid: s.setShowGrid,
+    setSnapToGrid: s.setSnapToGrid,
+    setColumnGuideMode: s.setColumnGuideMode,
+    setCanvasSizeCm: s.setCanvasSizeCm,
+    fitCanvasToContent: s.fitCanvasToContent,
+    setZoom: s.setZoom,
+    setPan: s.setPan,
+    setCompiledSvg: s.setCompiledSvg,
+    moveElementsByPosition: s.moveElementsByPosition,
+    moveChartLegend: s.moveChartLegend,
+    updateChartById: s.updateChartById,
+    addPrimitiveToCanvas: s.addPrimitiveToCanvas,
+    addImageAssetToCanvas: s.addImageAssetToCanvas,
+    addEdgeBetweenNodes: s.addEdgeBetweenNodes,
+    updateNodeLabelById: s.updateNodeLabelById,
+    updateNodeOptionsById: s.updateNodeOptionsById,
+    updateEdgeById: s.updateEdgeById,
+    updateFigureCaption: s.updateFigureCaption,
+    duplicateSelectedElements: s.duplicateSelectedElements,
+    nudgeSelectedElements: s.nudgeSelectedElements,
+    deleteSelectedElements: s.deleteSelectedElements,
+    undo: s.undo,
+    redo: s.redo,
+  })));
 
   const { activeCanvasName, assetDataUrls, ensureAssetDataUrl } =
-    useProjectStore();
+    useProjectStore(useShallow((s) => ({
+    activeCanvasName: s.activeCanvasName,
+    assetDataUrls: s.assetDataUrls,
+    ensureAssetDataUrl: s.ensureAssetDataUrl,
+  })));
 
   const svgRef = useRef<SVGSVGElement | null>(null);
   const theme = JOURNAL_THEMES[activeThemeId];
+  const nodesById = useMemo(() => {
+    const index = new Map<string, TikzNodeElement>();
+    for (const node of parsedDoc.nodes) {
+      if (!index.has(node.id)) index.set(node.id, node);
+    }
+    return index;
+  }, [parsedDoc.nodes]);
+  const sortedNodes = useMemo(
+    () => [...parsedDoc.nodes].sort((a, b) =>
+      Number(b.subtype === 'container') - Number(a.subtype === 'container')
+    ),
+    [parsedDoc.nodes]
+  );
 
   // Keep built-in vector preview synchronized when editing while preview pane is open
   useEffect(() => {
@@ -181,7 +242,7 @@ export const InteractiveCanvas: React.FC = () => {
       }
     });
     return () => cancelAnimationFrame(raf);
-  }, [tikzCode, activeThemeId, previewMode, texCompilerStatus, setCompiledSvg]);
+  }, [tikzCode, activeThemeId, previewMode, texCompilerStatus, assetDataUrls, canvasWidthCm, canvasHeightCm, setCompiledSvg]);
 
   // Preload image data URLs for any `\includegraphics` nodes in the parsed AST
   useEffect(() => {
@@ -275,6 +336,10 @@ export const InteractiveCanvas: React.FC = () => {
 
   const originX = pan.x;
   const originY = pan.y;
+  const movingIds = useMemo(
+    () => new Set(dragState?.initialPositions.map((p) => p.id)),
+    [dragState]
+  );
 
   const clientToTikzCm = (clientX: number, clientY: number) => {
     if (!svgRef.current) return { x: 3.0, y: 3.0, svgX: 0, svgY: 0 };
@@ -322,7 +387,7 @@ export const InteractiveCanvas: React.FC = () => {
 
     const initialPositions: Array<{ id: string; x: number; y: number }> = [];
     for (const id of nextSelection) {
-      const n = parsedDoc.nodes.find((item) => item.id === id);
+      const n = nodesById.get(id);
       if (n) initialPositions.push({ id: n.id, x: n.x, y: n.y });
       const c = parsedDoc.charts.find((item) => item.id === id);
       if (c) initialPositions.push({ id: c.id, x: c.x, y: c.y });
@@ -577,8 +642,7 @@ export const InteractiveCanvas: React.FC = () => {
           ny = Math.round(ny * 10) / 10;
         }
         for (const other of parsedDoc.nodes) {
-          if (dragState.initialPositions.some((p) => p.id === other.id))
-            continue;
+          if (movingIds.has(other.id)) continue;
           if (Math.abs(other.x - nx) < 0.08) {
             nx = other.x;
             guides.xCm = other.x;
@@ -613,15 +677,9 @@ export const InteractiveCanvas: React.FC = () => {
     setAlignmentGuides({});
   };
 
-  const sortedNodes = [...parsedDoc.nodes].sort((a, b) => {
-    if (a.subtype === 'container' && b.subtype !== 'container') return -1;
-    if (a.subtype !== 'container' && b.subtype === 'container') return 1;
-    return 0;
-  });
-
   const renderEdge = (edge: TikzEdgeElement) => {
-    const fromNode = parsedDoc.nodes.find((n) => n.id === edge.from);
-    const toNode = parsedDoc.nodes.find((n) => n.id === edge.to);
+    const fromNode = nodesById.get(edge.from);
+    const toNode = nodesById.get(edge.to);
     if (!fromNode || !toNode) return null;
 
     const isSelected = selectedIds.includes(edge.id);
@@ -2011,9 +2069,7 @@ export const InteractiveCanvas: React.FC = () => {
               dragState.connectFromId &&
               dragState.connectCurrentPt &&
               (() => {
-                const src = parsedDoc.nodes.find(
-                  (n) => n.id === dragState.connectFromId
-                );
+                const src = nodesById.get(dragState.connectFromId);
                 if (!src) return null;
                 const sx = originX + src.x * CM_TO_PX;
                 const sy = originY - src.y * CM_TO_PX;

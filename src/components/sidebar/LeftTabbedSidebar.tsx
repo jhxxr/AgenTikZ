@@ -1,3 +1,4 @@
+import { useShallow } from 'zustand/react/shallow';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useWorkspaceStore } from '../../store/useWorkspaceStore';
 import { useAgentStore } from '../../store/useAgentStore';
@@ -244,7 +245,18 @@ export const LeftTabbedSidebar: React.FC = () => {
     addPrimitiveToCanvas,
     addImageAssetToCanvas,
     setAgentPanelCollapsed,
-  } = useWorkspaceStore();
+  } = useWorkspaceStore(useShallow((s) => ({
+    leftTab: s.leftTab,
+    activeTemplateId: s.activeTemplateId,
+    activeThemeId: s.activeThemeId,
+    highlightedLineRange: s.highlightedLineRange,
+    isLeftSidebarCollapsed: s.isLeftSidebarCollapsed,
+    setLeftTab: s.setLeftTab,
+    toggleLeftSidebar: s.toggleLeftSidebar,
+    addPrimitiveToCanvas: s.addPrimitiveToCanvas,
+    addImageAssetToCanvas: s.addImageAssetToCanvas,
+    setAgentPanelCollapsed: s.setAgentPanelCollapsed,
+  })));
   const setTemplateReference = useAgentStore((state) => state.setTemplateReference);
   const referenceTemplateId = useAgentStore((state) =>
     state.sessions.find((session) => session.id === state.activeSessionId)?.templateReferenceId
@@ -275,7 +287,31 @@ export const LeftTabbedSidebar: React.FC = () => {
     registerLocalBrowserAssetFiles,
     registerGeneratedAsset,
     revealInFileManager,
-  } = useProjectStore();
+  } = useProjectStore(useShallow((s) => ({
+    projectDir: s.projectDir,
+    projectName: s.projectName,
+    workbenchMode: s.workbenchMode,
+    paperFiles: s.paperFiles,
+    activePaperFilePath: s.activePaperFilePath,
+    canvases: s.canvases,
+    activeCanvasFileName: s.activeCanvasFileName,
+    assets: s.assets,
+    assetDataUrls: s.assetDataUrls,
+    isScanningAssets: s.isScanningAssets,
+    setPickerOpen: s.setPickerOpen,
+    setWorkbenchMode: s.setWorkbenchMode,
+    openPaperFile: s.openPaperFile,
+    createNewPaperFile: s.createNewPaperFile,
+    refreshPaperFiles: s.refreshPaperFiles,
+    switchCanvasFile: s.switchCanvasFile,
+    createNewCanvasFile: s.createNewCanvasFile,
+    duplicateCurrentCanvasFile: s.duplicateCurrentCanvasFile,
+    deleteCanvasFile: s.deleteCanvasFile,
+    refreshProjectAssets: s.refreshProjectAssets,
+    registerLocalBrowserAssetFiles: s.registerLocalBrowserAssetFiles,
+    registerGeneratedAsset: s.registerGeneratedAsset,
+    revealInFileManager: s.revealInFileManager,
+  })));
 
   const [selectedCategory, setSelectedCategory] =
     useState<TemplateCategory>('all');

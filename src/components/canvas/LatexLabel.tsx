@@ -192,13 +192,13 @@ export function renderMixedLatexToHtml(raw: string): string {
   });
 }
 
-export const LatexLabel: React.FC<LatexLabelProps> = ({
+export const LatexLabel = React.memo(function LatexLabel({
   text,
   sublabel,
   className = '',
   fontSize = 12.5,
   color = '#0F172A',
-}) => {
+}: LatexLabelProps) {
   const mainHtml = useMemo(() => renderMixedLatexToHtml(text), [text]);
   const subHtml = useMemo(
     () => (sublabel ? renderMixedLatexToHtml(sublabel) : ''),
@@ -225,4 +225,4 @@ export const LatexLabel: React.FC<LatexLabelProps> = ({
       )}
     </div>
   );
-};
+});

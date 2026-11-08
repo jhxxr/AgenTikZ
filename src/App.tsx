@@ -1,3 +1,4 @@
+import { useShallow } from 'zustand/react/shallow';
 import React, { useEffect } from 'react';
 import { TopToolbar } from './components/toolbar/TopToolbar';
 import { LeftTabbedSidebar } from './components/sidebar/LeftTabbedSidebar';
@@ -16,7 +17,11 @@ import { useSettingsStore } from './store/useSettingsStore';
 import { useProjectStore } from './store/useProjectStore';
 
 export const App: React.FC = () => {
-  const { isOpen, openSettings, closeSettings } = useSettingsStore();
+  const { isOpen, openSettings, closeSettings } = useSettingsStore(useShallow((s) => ({
+    isOpen: s.isOpen,
+    openSettings: s.openSettings,
+    closeSettings: s.closeSettings,
+  })));
   const workbenchMode = useProjectStore((s) => s.workbenchMode);
 
   useEffect(() => {
@@ -36,7 +41,7 @@ export const App: React.FC = () => {
         e.preventDefault();
         void useProjectStore.getState().saveActiveCanvasNow();
         if (useProjectStore.getState().workbenchMode !== 'figure') {
-          void useProjectStore.getState().savePaperFileNow();
+          void useProjectStore.getState().saveAllDirtyPaperFiles();
         }
       } else if ((e.ctrlKey || e.metaKey) && (e.key === 'o' || e.key === 'O')) {
         e.preventDefault();

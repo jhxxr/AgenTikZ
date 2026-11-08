@@ -1,3 +1,4 @@
+import { useShallow } from 'zustand/react/shallow';
 import React, { useEffect, useState } from 'react';
 import {
   Bot,
@@ -141,7 +142,45 @@ export const SettingsModal: React.FC = () => {
     customAcpEnvJson,
     updateSettings,
     resetSettings,
-  } = useSettingsStore();
+  } = useSettingsStore(useShallow((s) => ({
+    isOpen: s.isOpen,
+    activeSection: s.activeSection,
+    closeSettings: s.closeSettings,
+    setActiveSection: s.setActiveSection,
+    defaultThemeId: s.defaultThemeId,
+    showGridByDefault: s.showGridByDefault,
+    snapToGridByDefault: s.snapToGridByDefault,
+    nudgeStepCm: s.nudgeStepCm,
+    coordPrecision: s.coordPrecision,
+    enforcePublicationStyleGuide: s.enforcePublicationStyleGuide,
+    requireFigureContract: s.requireFigureContract,
+    codeFontSize: s.codeFontSize,
+    showLineNumbers: s.showLineNumbers,
+    texEngine: s.texEngine,
+    texLiveBinDir: s.texLiveBinDir,
+    paperCompileEngine: s.paperCompileEngine,
+    imageGenProvider: s.imageGenProvider,
+    imageGenBaseUrl: s.imageGenBaseUrl,
+    imageGenApiKey: s.imageGenApiKey,
+    imageGenModel: s.imageGenModel,
+    imageGenAutoRemoveWhiteBg: s.imageGenAutoRemoveWhiteBg,
+    imageGenAutoTrimAlpha: s.imageGenAutoTrimAlpha,
+    defaultAgentId: s.defaultAgentId,
+    responseLanguage: s.responseLanguage,
+    defaultAttachCanvas: s.defaultAttachCanvas,
+    defaultAttachSelection: s.defaultAttachSelection,
+    autoSelectAffectedNodes: s.autoSelectAffectedNodes,
+    proxyEnabled: s.proxyEnabled,
+    proxyUrl: s.proxyUrl,
+    personalPrompt: s.personalPrompt,
+    userAgentPreset: s.userAgentPreset,
+    customUserAgent: s.customUserAgent,
+    customAcpCommand: s.customAcpCommand,
+    customAcpArgs: s.customAcpArgs,
+    customAcpEnvJson: s.customAcpEnvJson,
+    updateSettings: s.updateSettings,
+    resetSettings: s.resetSettings,
+  })));
 
   const {
     providers,
@@ -153,7 +192,17 @@ export const SettingsModal: React.FC = () => {
     setAttachSelectionContext,
     probeLocalAgents,
     testAgentHandshake,
-  } = useAgentStore();
+  } = useAgentStore(useShallow((s) => ({
+    providers: s.providers,
+    activeAgentId: s.activeAgentId,
+    customCommand: s.customCommand,
+    setActiveAgentId: s.setActiveAgentId,
+    setCustomCommand: s.setCustomCommand,
+    setAttachCanvasContext: s.setAttachCanvasContext,
+    setAttachSelectionContext: s.setAttachSelectionContext,
+    probeLocalAgents: s.probeLocalAgents,
+    testAgentHandshake: s.testAgentHandshake,
+  })));
 
   const {
     activeThemeId,
@@ -162,7 +211,14 @@ export const SettingsModal: React.FC = () => {
     setActiveTheme,
     setShowGrid,
     setSnapToGrid,
-  } = useWorkspaceStore();
+  } = useWorkspaceStore(useShallow((s) => ({
+    activeThemeId: s.activeThemeId,
+    showGrid: s.showGrid,
+    snapToGrid: s.snapToGrid,
+    setActiveTheme: s.setActiveTheme,
+    setShowGrid: s.setShowGrid,
+    setSnapToGrid: s.setSnapToGrid,
+  })));
 
   const [isProbingAll, setIsProbingAll] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);

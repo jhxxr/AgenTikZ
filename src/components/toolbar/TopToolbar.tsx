@@ -1,3 +1,4 @@
+import { useShallow } from 'zustand/react/shallow';
 import React, { useState, useEffect, useRef } from 'react';
 import {
   CanvasTool,
@@ -79,8 +80,32 @@ export const TopToolbar: React.FC = () => {
     isAgentPanelCollapsed,
     setActiveTool, setActiveTheme, setPreviewMode, setCompiledSvg,
     setIsCompilingTex, undo, redo, alignSelectedNodes, toggleAgentPanel,
-  } = useWorkspaceStore();
-  const { openSettings, texEngine, texLiveBinDir } = useSettingsStore();
+  } = useWorkspaceStore(useShallow((s) => ({
+    tikzCode: s.tikzCode,
+    parsedDoc: s.parsedDoc,
+    activeTool: s.activeTool,
+    activeThemeId: s.activeThemeId,
+    selectedIds: s.selectedIds,
+    previewMode: s.previewMode,
+    undoStack: s.undoStack,
+    redoStack: s.redoStack,
+    isCompilingTex: s.isCompilingTex,
+    isAgentPanelCollapsed: s.isAgentPanelCollapsed,
+    setActiveTool: s.setActiveTool,
+    setActiveTheme: s.setActiveTheme,
+    setPreviewMode: s.setPreviewMode,
+    setCompiledSvg: s.setCompiledSvg,
+    setIsCompilingTex: s.setIsCompilingTex,
+    undo: s.undo,
+    redo: s.redo,
+    alignSelectedNodes: s.alignSelectedNodes,
+    toggleAgentPanel: s.toggleAgentPanel,
+  })));
+  const { openSettings, texEngine, texLiveBinDir } = useSettingsStore(useShallow((s) => ({
+    openSettings: s.openSettings,
+    texEngine: s.texEngine,
+    texLiveBinDir: s.texLiveBinDir,
+  })));
   const {
     projectDir,
     projectName,
@@ -94,7 +119,20 @@ export const TopToolbar: React.FC = () => {
     quickInsertActiveFigureIntoPaper,
     setPickerOpen,
     exportFileToProject,
-  } = useProjectStore();
+  } = useProjectStore(useShallow((s) => ({
+    projectDir: s.projectDir,
+    projectName: s.projectName,
+    activeCanvasFileName: s.activeCanvasFileName,
+    activePaperFilePath: s.activePaperFilePath,
+    saveStatus: s.saveStatus,
+    lastExportedNotice: s.lastExportedNotice,
+    workbenchMode: s.workbenchMode,
+    setWorkbenchMode: s.setWorkbenchMode,
+    setInsertFigureModalOpen: s.setInsertFigureModalOpen,
+    quickInsertActiveFigureIntoPaper: s.quickInsertActiveFigureIntoPaper,
+    setPickerOpen: s.setPickerOpen,
+    exportFileToProject: s.exportFileToProject,
+  })));
 
   const stem = activeCanvasFileName.replace(/\.canvas\.json$/i, '') || 'figure';
 
@@ -145,36 +183,46 @@ export const TopToolbar: React.FC = () => {
   ];
 
   const handleCompileTex = async () => {
+    if (useWorkspaceStore.getState().isCompilingTex) return;
     if (previewMode !== 'interactive') {
       setPreviewMode('interactive');
       return;
     }
+    const targetProject = useProjectStore.getState().projectDir;
+    const targetCanvas = useProjectStore.getState().activeCanvasFileName;
+    const isCurrentDocument = () => {
+      const workspace = useWorkspaceStore.getState();
+      const project = useProjectStore.getState();
+      return workspace.tikzCode === tikzCode &&
+        workspace.activeThemeId === activeThemeId &&
+        project.projectDir === targetProject &&
+        project.activeCanvasFileName === targetCanvas;
+    };
     setIsCompilingTex(true);
     try {
       const fullTex = buildStandaloneLatexDocument(tikzCode, activeThemeId);
       const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
       if (isTauri) {
         const { invoke } = await import('@tauri-apps/api/core');
-        const currentProjectDir = useProjectStore.getState().projectDir;
         const res = await invoke<{ ok: boolean; svg?: string; message: string }>('tex_compile_preview', {
           texSource: fullTex,
-          latexCode: fullTex,
           texEngine,
-          engine: texEngine,
-          projectDir: currentProjectDir,
+          projectDir: targetProject,
           texLiveBinDir: texLiveBinDir || undefined,
         });
+        if (!isCurrentDocument()) return;
         if (res.ok && res.svg) {
           setCompiledSvg(res.svg, res.message);
           setPreviewMode('tex_split');
-          setIsCompilingTex(false);
           return;
         }
       }
+      if (!isCurrentDocument()) return;
       const svgEl = document.getElementById('agentikz-canvas-svg') as SVGSVGElement | null;
       if (svgEl) setCompiledSvg(exportCleanCanvasSvg(svgEl), '内置高保真矢量引擎渲染 (无背景/纯矢量公式)');
       setPreviewMode('tex_split');
     } catch {
+      if (!isCurrentDocument()) return;
       const svgEl = document.getElementById('agentikz-canvas-svg') as SVGSVGElement | null;
       if (svgEl) setCompiledSvg(exportCleanCanvasSvg(svgEl), '内置高保真矢量引擎渲染 (无背景/纯矢量公式)');
       setPreviewMode('tex_split');

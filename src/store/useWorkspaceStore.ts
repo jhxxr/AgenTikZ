@@ -5,6 +5,7 @@ import {
   ParsedTikzDocument,
   TikzChartElement,
   TikzEdgeElement,
+  TikzNodeElement,
 } from '../types/tikz-ast';
 import { JournalThemeId } from '../types/theme';
 import { parseTikzDocument } from '../core/parser/parser';
@@ -284,10 +285,13 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     set((s) => ({ isInspectorDrawerOpen: !s.isInspectorDrawerOpen })),
   setActiveTool: (activeTool) => set({ activeTool }),
   setActiveTheme: (activeThemeId) => {
-    const { tikzCode } = get();
+    const { tikzCode, activeThemeId: currentThemeId } = get();
+    if (activeThemeId === currentThemeId) return;
     set({
       activeThemeId,
       parsedDoc: parseTikzDocument(tikzCode, activeThemeId),
+      compiledSvg: null,
+      texCompilerStatus: null,
     });
   },
 
@@ -405,6 +409,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     const nextDoc = parseTikzDocument(newCode, activeThemeId);
     set({
       tikzCode: newCode,
+      compiledSvg: null,
+      texCompilerStatus: null,
       activeTemplateId: FULL_FIGURE_TEMPLATES.find((t) => t.tikzCode === newCode)?.id ?? '',
       parsedDoc: nextDoc,
       highlightedLineRange: computeLineRangeForSelection(nextDoc, selectedIds),
@@ -420,6 +426,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     const nextDoc = parseTikzDocument(prevCode, activeThemeId);
     set({
       tikzCode: prevCode,
+      compiledSvg: null,
+      texCompilerStatus: null,
       activeTemplateId: FULL_FIGURE_TEMPLATES.find((t) => t.tikzCode === prevCode)?.id ?? '',
       parsedDoc: nextDoc,
       highlightedLineRange: computeLineRangeForSelection(nextDoc, selectedIds),
@@ -435,6 +443,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     const nextDoc = parseTikzDocument(nextCode, activeThemeId);
     set({
       tikzCode: nextCode,
+      compiledSvg: null,
+      texCompilerStatus: null,
       activeTemplateId: FULL_FIGURE_TEMPLATES.find((t) => t.tikzCode === nextCode)?.id ?? '',
       parsedDoc: nextDoc,
       highlightedLineRange: computeLineRangeForSelection(nextDoc, selectedIds),
@@ -445,40 +455,36 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
   moveElementsByPosition: (positions, recordUndo = false) => {
     const { tikzCode, parsedDoc } = get();
-    if (recordUndo) {
-      get().pushUndoSnapshot();
+    const elementsById = new Map<string, TikzNodeElement | TikzChartElement>();
+    for (const node of parsedDoc.nodes) {
+      if (!elementsById.has(node.id)) elementsById.set(node.id, node);
+    }
+    for (const chart of parsedDoc.charts) {
+      if (!elementsById.has(chart.id)) elementsById.set(chart.id, chart);
     }
     const updates: Array<{
-      element: any;
+      element: TikzNodeElement | TikzChartElement;
       x: number;
       y: number;
       oldCoordStr: string;
     }> = [];
 
     for (const pos of positions) {
-      const node = parsedDoc.nodes.find((n) => n.id === pos.id);
-      if (node) {
+      const element = elementsById.get(pos.id);
+      if (element && Number.isFinite(pos.x) && Number.isFinite(pos.y)) {
         updates.push({
-          element: node,
+          element,
           x: pos.x,
           y: pos.y,
-          oldCoordStr: `${formatCoordNum(node.x)}, ${formatCoordNum(node.y)}`,
-        });
-        continue;
-      }
-      const chart = parsedDoc.charts.find((c) => c.id === pos.id);
-      if (chart) {
-        updates.push({
-          element: chart,
-          x: pos.x,
-          y: pos.y,
-          oldCoordStr: `${formatCoordNum(chart.x)}, ${formatCoordNum(chart.y)}`,
+          oldCoordStr: `${formatCoordNum(element.x)}, ${formatCoordNum(element.y)}`,
         });
       }
     }
 
     if (updates.length === 0) return;
     const patched = patchElementsCoordinates(tikzCode, updates);
+    if (patched === tikzCode) return;
+    if (recordUndo) get().pushUndoSnapshot();
     get().setTikzCode(patched, false);
 
     // Record exact span of changed coordinate in the updated AST
@@ -951,6 +957,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       undoStack: [],
       redoStack: [],
       compiledSvg: null,
+      texCompilerStatus: null,
       previewMode: 'interactive',
     });
   },

@@ -1,3 +1,4 @@
+import { useShallow } from 'zustand/react/shallow';
 import React, { useEffect, useMemo, useState } from 'react';
 import { useProjectStore } from '../../store/useProjectStore';
 import { useWorkspaceStore } from '../../store/useWorkspaceStore';
@@ -22,9 +23,22 @@ export const InsertFigureModal: React.FC = () => {
     ensureAgentikzMacrosSty,
     setWorkbenchMode,
     openPaperFile,
-  } = useProjectStore();
+  } = useProjectStore(useShallow((s) => ({
+    isInsertFigureModalOpen: s.isInsertFigureModalOpen,
+    setInsertFigureModalOpen: s.setInsertFigureModalOpen,
+    canvases: s.canvases,
+    activeCanvasFileName: s.activeCanvasFileName,
+    activeCanvasName: s.activeCanvasName,
+    assets: s.assets,
+    paperFiles: s.paperFiles,
+    activePaperFilePath: s.activePaperFilePath,
+    insertFigureIntoPaper: s.insertFigureIntoPaper,
+    ensureAgentikzMacrosSty: s.ensureAgentikzMacrosSty,
+    setWorkbenchMode: s.setWorkbenchMode,
+    openPaperFile: s.openPaperFile,
+  })));
 
-  const { parsedDoc } = useWorkspaceStore();
+  const { parsedDoc } = useWorkspaceStore(useShallow((s) => ({ parsedDoc: s.parsedDoc })));
 
   const activeCanvas = useMemo(
     () =>

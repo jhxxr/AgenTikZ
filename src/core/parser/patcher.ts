@@ -33,16 +33,19 @@ export function patchElementsCoordinates(
 ): string {
   const validUpdates = updates
     .filter((u) => u.element.coordSpan !== undefined)
-    .sort((a, b) => b.element.coordSpan!.start - a.element.coordSpan!.start);
+    .sort((a, b) => a.element.coordSpan!.start - b.element.coordSpan!.start);
 
-  let nextSource = source;
+  const parts: string[] = [];
+  let cursor = 0;
   for (const { element, x, y } of validUpdates) {
     const span = element.coordSpan!;
+    if (span.start < cursor) continue;
     const coordStr = `${formatCoordNum(x)}, ${formatCoordNum(y)}`;
-    nextSource =
-      nextSource.slice(0, span.start) + coordStr + nextSource.slice(span.end);
+    parts.push(source.slice(cursor, span.start), coordStr);
+    cursor = span.end;
   }
-  return nextSource;
+  parts.push(source.slice(cursor));
+  return parts.join('');
 }
 
 /**

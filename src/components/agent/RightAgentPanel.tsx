@@ -1,3 +1,4 @@
+import { useShallow } from 'zustand/react/shallow';
 import React, { useEffect, useRef, useState } from 'react';
 import { useAgentStore } from '../../store/useAgentStore';
 import { useWorkspaceStore } from '../../store/useWorkspaceStore';
@@ -59,7 +60,30 @@ export const RightAgentPanel: React.FC = () => {
     runLocalAgentSkill,
     applyPatchProposal,
     revertPatchProposal,
-  } = useAgentStore();
+  } = useAgentStore(useShallow((s) => ({
+    providers: s.providers,
+    activeAgentId: s.activeAgentId,
+    customCommand: s.customCommand,
+    setCustomCommand: s.setCustomCommand,
+    attachCanvasContext: s.attachCanvasContext,
+    attachSelectionContext: s.attachSelectionContext,
+    autoLayoutRepairEnabled: s.autoLayoutRepairEnabled,
+    isStreaming: s.isStreaming,
+    sessions: s.sessions,
+    activeSessionId: s.activeSessionId,
+    setActiveAgentId: s.setActiveAgentId,
+    setAttachCanvasContext: s.setAttachCanvasContext,
+    setAttachSelectionContext: s.setAttachSelectionContext,
+    setAutoLayoutRepairEnabled: s.setAutoLayoutRepairEnabled,
+    setTemplateReference: s.setTemplateReference,
+    createNewSession: s.createNewSession,
+    switchSession: s.switchSession,
+    probeLocalAgents: s.probeLocalAgents,
+    sendPromptToAgent: s.sendPromptToAgent,
+    runLocalAgentSkill: s.runLocalAgentSkill,
+    applyPatchProposal: s.applyPatchProposal,
+    revertPatchProposal: s.revertPatchProposal,
+  })));
 
   const {
     selectedIds,
@@ -68,10 +92,17 @@ export const RightAgentPanel: React.FC = () => {
     setLeftTab,
     isAgentPanelCollapsed,
     toggleAgentPanel,
-  } = useWorkspaceStore();
+  } = useWorkspaceStore(useShallow((s) => ({
+    selectedIds: s.selectedIds,
+    parsedDoc: s.parsedDoc,
+    activeThemeId: s.activeThemeId,
+    setLeftTab: s.setLeftTab,
+    isAgentPanelCollapsed: s.isAgentPanelCollapsed,
+    toggleAgentPanel: s.toggleAgentPanel,
+  })));
   const settings = useSettingsStore();
   const { openSettings } = settings;
-  const { projectDir, registerGeneratedAsset } = useProjectStore();
+  const { projectDir, registerGeneratedAsset } = useProjectStore(useShallow((s) => ({ projectDir: s.projectDir, registerGeneratedAsset: s.registerGeneratedAsset })));
 
   const [inputText, setInputText] = useState('');
   const [showHistoryDropdown, setShowHistoryDropdown] = useState(false);

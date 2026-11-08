@@ -40,4 +40,42 @@ describe('blank-first workspace and explicit templates', () => {
     useWorkspaceStore.getState().applyCanvasDocumentState({ tikzCode: EMPTY_TIKZ_CODE });
     expect(useWorkspaceStore.getState().activeTemplateId).toBe('');
   });
+
+  it('invalidates compiled output when source, theme or undo history changes', () => {
+    const store = useWorkspaceStore;
+    const compile = () => store.getState().setCompiledSvg('<svg/>', '本地 TeX Live');
+    const expectInvalidated = () => {
+      expect(store.getState().compiledSvg).toBeNull();
+      expect(store.getState().texCompilerStatus).toBeNull();
+    };
+    compile();
+    store.getState().setTikzCode('\\begin{tikzpicture}\\node (a) at (0,0) {A};\\end{tikzpicture}');
+    expectInvalidated();
+    compile();
+    store.getState().setActiveTheme('nature');
+    expectInvalidated();
+    compile();
+    store.getState().undo();
+    expectInvalidated();
+    compile();
+    store.getState().redo();
+    expectInvalidated();
+    compile();
+    store.getState().applyCanvasDocumentState({ tikzCode: EMPTY_TIKZ_CODE });
+    expectInvalidated();
+  });
+
+  it('does not publish state or record undo for a coordinate no-op', () => {
+    useWorkspaceStore.getState().setTikzCode('\\node (a) at (0.0, 0.0) {A};');
+    const before = useWorkspaceStore.getState();
+    useWorkspaceStore.getState().moveElementsByPosition([{ id: 'a', x: 0, y: 0 }], true);
+    expect(useWorkspaceStore.getState()).toBe(before);
+  });
+
+  it('ignores non-finite coordinates instead of corrupting source', () => {
+    useWorkspaceStore.getState().setTikzCode('\\node (a) at (0.0, 0.0) {A};');
+    const before = useWorkspaceStore.getState();
+    useWorkspaceStore.getState().moveElementsByPosition([{ id: 'a', x: NaN, y: Infinity }], true);
+    expect(useWorkspaceStore.getState()).toBe(before);
+  });
 });

@@ -1,7 +1,27 @@
 use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Output;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 use tokio::process::Command;
+
+static NEXT_BUILD_ID: AtomicU64 = AtomicU64::new(0);
+
+async fn run_bounded_command(cmd: &mut Command, seconds: u64) -> std::io::Result<Output> {
+    // Dropping a timed-out output future must also terminate its child.
+    cmd.kill_on_drop(true);
+    tokio::time::timeout(Duration::from_secs(seconds), cmd.output())
+        .await
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "TeX command timed out"))?
+}
+
+fn paper_compile_succeeded(process_ok: bool, pdf_path: &Path) -> bool {
+    process_ok
+        && fs::metadata(pdf_path)
+            .map(|m| m.is_file() && m.len() > 0)
+            .unwrap_or(false)
+}
 
 #[derive(Debug, Serialize)]
 pub struct TexCompileResult {
@@ -193,7 +213,12 @@ pub async fn tex_compile_preview(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    let temp_dir = std::env::temp_dir().join(format!("agentikz_build_{}", build_id));
+    let temp_dir = std::env::temp_dir().join(format!(
+        "agentikz_build_{}_{}_{}",
+        std::process::id(),
+        build_id,
+        NEXT_BUILD_ID.fetch_add(1, Ordering::Relaxed)
+    ));
 
     if let Err(e) = fs::create_dir_all(&temp_dir) {
         return TexCompileResult {
@@ -234,7 +259,7 @@ pub async fn tex_compile_preview(
         ])
         .current_dir(&temp_dir);
 
-    let latex_out = latex_cmd.output().await;
+    let latex_out = run_bounded_command(&mut latex_cmd, 60).await;
 
     let result = if let Ok(output) = latex_out {
         if output.status.success() && intermediate_path.exists() {
@@ -242,11 +267,10 @@ pub async fn tex_compile_preview(
             if engine == "pdflatex" {
                 dvisvgm_cmd.arg("--pdf");
             }
-            let dvisvgm_out = dvisvgm_cmd
+            dvisvgm_cmd
                 .args(["--no-fonts", "--bbox=min", intermediate_file, "-o", "figure.svg"])
-                .current_dir(&temp_dir)
-                .output()
-                .await;
+                .current_dir(&temp_dir);
+            let dvisvgm_out = run_bounded_command(&mut dvisvgm_cmd, 60).await;
 
             if let Ok(svg_res) = dvisvgm_out {
                 if svg_res.status.success() && svg_path.exists() {
@@ -354,10 +378,9 @@ pub async fn tex_compile_paper(
     let run_pass = || async {
         let mut cmd = build_tex_command(engine, tex_live_bin_dir.as_deref());
         apply_project_texinputs(&mut cmd, Some(project_dir.as_str()));
-        cmd.args(["-interaction=nonstopmode", entry_rel])
-            .current_dir(&root)
-            .output()
-            .await
+        cmd.args(["-interaction=nonstopmode", "-halt-on-error", entry_rel])
+            .current_dir(&root);
+        run_bounded_command(&mut cmd, 120).await
     };
 
     let first_pass = match run_pass().await {
@@ -377,25 +400,46 @@ pub async fn tex_compile_paper(
         }
     };
 
-    // Optional BibTeX pass if references.bib exists and .aux has \citation
+    let mut final_out = first_pass;
+    let mut execution_errors = Vec::new();
+    // Do not repeat a failed first pass or use an old PDF as evidence of success.
+    // Optional BibTeX pass if references.bib exists and .aux has \citation.
     let aux_path = root.join(format!("{}.aux", stem));
-    if aux_path.is_file() {
+    if final_out.status.success() && aux_path.is_file() {
         let aux_content = fs::read_to_string(&aux_path).unwrap_or_default();
         if aux_content.contains("\\citation") && root.join("references.bib").is_file() {
             let mut bib_cmd = build_tex_command("bibtex", tex_live_bin_dir.as_deref());
-            let _ = bib_cmd.arg(stem).current_dir(&root).output().await;
-            let _ = run_pass().await;
+            bib_cmd.arg(stem).current_dir(&root);
+            match run_bounded_command(&mut bib_cmd, 60).await {
+                Ok(out) if out.status.success() => {
+                    match run_pass().await {
+                        Ok(out) => final_out = out,
+                        Err(err) => execution_errors.push(format!("TeX pass failed: {}", err)),
+                    }
+                }
+                Ok(out) => execution_errors.push(format!(
+                    "BibTeX failed: {}",
+                    String::from_utf8_lossy(&out.stdout)
+                )),
+                Err(err) => execution_errors.push(format!("BibTeX failed: {}", err)),
+            }
         }
     }
 
     // Second pass to resolve cross-references (\ref{fig:overview}, \cite{...})
-    let final_out = run_pass().await.unwrap_or(first_pass);
+    if final_out.status.success() && execution_errors.is_empty() {
+        match run_pass().await {
+            Ok(out) => final_out = out,
+            Err(err) => execution_errors.push(format!("TeX pass failed: {}", err)),
+        }
+    }
     let stdout_str = String::from_utf8_lossy(&final_out.stdout).to_string();
 
     let log_path = root.join(format!("{}.log", stem));
     let full_log = fs::read_to_string(&log_path).unwrap_or(stdout_str);
 
-    let mut errors = Vec::new();
+    let process_ok = final_out.status.success() && execution_errors.is_empty();
+    let mut errors = execution_errors;
     for line in full_log.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with("! ") || trimmed.starts_with("l.") {
@@ -408,10 +452,7 @@ pub async fn tex_compile_paper(
     let log_excerpt = log_lines[tail_start..].join("\n");
 
     let pdf_path = root.join(format!("{}.pdf", stem));
-    let pdf_non_empty = fs::metadata(&pdf_path)
-        .map(|m| m.is_file() && m.len() > 0)
-        .unwrap_or(false);
-    if pdf_non_empty {
+    if paper_compile_succeeded(process_ok, &pdf_path) {
         PaperCompileResult {
             ok: true,
             pdf_path: Some(pdf_path.to_string_lossy().to_string()),
@@ -425,9 +466,30 @@ pub async fn tex_compile_paper(
             ok: false,
             pdf_path: None,
             pdf_data_url: None,
-            message: format!("{} 编译未生成 PDF，请查看编译日志定位错误", engine),
+            message: format!("{} 编译失败或未生成有效 PDF，请查看编译日志定位错误", engine),
             log_excerpt,
             errors,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_process_never_accepts_an_existing_pdf() {
+        let path = std::env::temp_dir().join(format!(
+            "agentikz_compile_test_{}_{}.pdf",
+            std::process::id(),
+            NEXT_BUILD_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::write(&path, b"%PDF-old-output").unwrap();
+        assert!(!paper_compile_succeeded(false, &path));
+        assert!(paper_compile_succeeded(true, &path));
+        fs::write(&path, b"").unwrap();
+        assert!(!paper_compile_succeeded(true, &path));
+        fs::remove_file(&path).unwrap();
+        assert!(!paper_compile_succeeded(true, &path));
     }
 }
