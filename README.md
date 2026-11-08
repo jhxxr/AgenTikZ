@@ -106,7 +106,7 @@ flowchart TB
 
 - **Lossless CST/AST Engine**: Located in `src/core/parser/`, the parser resolves `\tikzset` style definitions, `\node` statements, orthogonal/curved/residual `\draw` edges, and `\begin{axis}...\end{axis}` PGFPlots environments using depth-aware bracket `[]` and brace `{}` matching so math expressions like `$p(x;\theta)$` never truncate statement boundaries.
 - **Official ACP v1 Transport**: Located in `src-tauri/src/acp/mod.rs`, the desktop backend launches locally installed ACP adapters over `stdio` with bounded initialization (`20s`), session creation (`20s`), prompt execution (`180s`), and transport shutdown timeouts.
-- **Release Scope**: Current release **v0.1.0** provides full visual editing, 6 publication templates, 4 venue themes, local TeX Live preview, and `stdio`-based ACP v1 prompt/stream integration. Interactive filesystem/command permission approval dialogs for external agents are intentionally denied by default (fail-closed).
+- **Release Scope**: Current release **v0.4.2** provides full visual editing, 6 publication templates, 4 venue themes, local TeX Live preview, and `stdio`-based ACP v1 prompt/stream integration. Interactive filesystem/command permission approval dialogs for external agents are intentionally denied by default (fail-closed).
 
 ## Publication Templates & Themes
 
