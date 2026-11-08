@@ -65,6 +65,9 @@ jobs:
       - name: Run frontend unit tests (Vitest)
         run: npm test
 
+      - name: Stress persistence test isolation
+        run: node scripts/test-persistence-isolation.mjs
+
       - name: Build frontend production bundle (TypeScript + Vite)
         run: npm run build
 

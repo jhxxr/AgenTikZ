@@ -1,12 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockInvoke } = vi.hoisted(() => ({
-  mockInvoke: vi.fn(),
-}));
-
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: mockInvoke,
-}));
+// Mock the native IPC boundary, not the dynamically imported JS module.
+// Vitest 3's manual mock loader shares a mutable import callstack and can
+// bypass a module mock when two store actions import it concurrently.
+const mockInvoke = vi.fn();
 
 import { CanvasFileDocument, useProjectStore } from '../useProjectStore';
 import { useWorkspaceStore } from '../useWorkspaceStore';
@@ -72,16 +69,15 @@ describe('useProjectStore', () => {
   let mockStorage: MockStorage;
 
   beforeEach(() => {
-    // Only freeze the application's debounce clock. Faking setImmediate also
-    // freezes module-loading work on Node/Linux and can deadlock concurrent IPC.
+    // Only freeze the application's debounce clock, not Node's scheduling APIs.
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     mockInvoke.mockReset();
     mockStorage = createMockLocalStorage();
 
-    (globalThis as unknown as { window: Record<string, unknown> }).window = {
+    vi.stubGlobal('window', {
       localStorage: mockStorage,
       prompt: vi.fn(),
-    };
+    });
 
     useWorkspaceStore.getState().applyCanvasDocumentState({
       tikzCode: CODE_A,
@@ -134,13 +130,31 @@ describe('useProjectStore', () => {
   afterEach(() => {
     vi.clearAllTimers();
     vi.useRealTimers();
+    vi.unstubAllGlobals();
   });
 
   function enableTauriRuntime() {
     (
       globalThis as unknown as { window: Record<string, unknown> }
-    ).window.__TAURI_INTERNALS__ = {};
+    ).window.__TAURI_INTERNALS__ = {
+      invoke: (command: string, args: Record<string, unknown>) =>
+        mockInvoke(command, args),
+    };
   }
+
+  it('uses the real JS invoke wrapper across concurrent dynamic imports', async () => {
+    enableTauriRuntime();
+    mockInvoke.mockImplementation((_command: string, args: { index: number }) =>
+      Promise.resolve(args.index)
+    );
+    const results = await Promise.all(Array.from({ length: 32 }, async (_, index) => {
+      const { invoke } = await import('@tauri-apps/api/core');
+      expect(invoke).not.toBe(mockInvoke);
+      return invoke<number>('bridge_probe', { index });
+    }));
+    expect(results).toEqual(Array.from({ length: 32 }, (_, index) => index));
+    expect(mockInvoke).toHaveBeenCalledTimes(32);
+  });
 
   describe('project-scoped paper persistence', () => {
     function setupPaper(content = 'first version') {
@@ -208,15 +222,12 @@ describe('useProjectStore', () => {
         if (mockInvoke.mock.calls.length === 2) writesStarted();
         return pending;
       });
-      const saves = [
-        useProjectStore.getState().savePaperFileNow('main.tex'),
-        useProjectStore.getState().savePaperFileNow('sections/intro.tex'),
-      ];
-      // Observe both requests starting, not an assumed number of event-loop ticks.
+      const first = useProjectStore.getState().savePaperFileNow('main.tex');
+      const second = useProjectStore.getState().savePaperFileNow('sections/intro.tex');
       await started;
       expect(mockInvoke).toHaveBeenCalledTimes(2);
       finish();
-      expect(await Promise.all(saves)).toEqual([true, true]);
+      expect(await Promise.all([first, second])).toEqual([true, true]);
     });
 
     it('invalidates caches and cancels delayed paper saves on a project change', async () => {
@@ -269,23 +280,25 @@ describe('useProjectStore', () => {
       let finishScan!: (files: unknown[]) => void;
       let readStarted!: () => void;
       let scanStarted!: () => void;
-      const reading = new Promise<void>((resolve) => { readStarted = resolve; });
-      const scanning = new Promise<void>((resolve) => { scanStarted = resolve; });
+      const readingStarted = new Promise<void>((resolve) => { readStarted = resolve; });
+      const scanningStarted = new Promise<void>((resolve) => { scanStarted = resolve; });
+      const reading = new Promise<string>((resolve) => { finishRead = resolve; });
+      const scanning = new Promise<unknown[]>((resolve) => { finishScan = resolve; });
       mockInvoke.mockImplementation((cmd: string) => {
         if (cmd === 'project_read_text_file') {
-          return new Promise<string>((resolve) => {
-            finishRead = resolve;
-            readStarted();
-          });
+          readStarted();
+          return reading;
         }
-        return new Promise<unknown[]>((resolve) => {
-          finishScan = resolve;
+        if (cmd === 'project_list_paper_files') {
           scanStarted();
-        });
+          return scanning;
+        }
+        throw new Error(`Unexpected IPC command: ${cmd}`);
       });
       const read = useProjectStore.getState().openPaperFile('main.tex');
       const scan = useProjectStore.getState().refreshPaperFiles();
-      await Promise.all([reading, scanning]);
+      await Promise.all([readingStarted, scanningStarted]);
+      // Both operations are still pending when the workspace changes.
       useProjectStore.setState({ projectDir: 'E:/Papers/PaperB' });
       finishRead('A content');
       finishScan([{ relativePath: 'main.tex', category: 'main' }]);
