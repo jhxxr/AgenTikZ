@@ -72,7 +72,9 @@ describe('useProjectStore', () => {
   let mockStorage: MockStorage;
 
   beforeEach(() => {
-    vi.useFakeTimers();
+    // Only freeze the application's debounce clock. Faking setImmediate also
+    // freezes module-loading work on Node/Linux and can deadlock concurrent IPC.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     mockInvoke.mockReset();
     mockStorage = createMockLocalStorage();
 
@@ -199,13 +201,19 @@ describe('useProjectStore', () => {
       setupPaper();
       useProjectStore.getState().updatePaperFileContent('sections/intro.tex', 'intro');
       let finish!: () => void;
-      mockInvoke.mockReturnValue(new Promise<void>((resolve) => { finish = resolve; }));
+      let writesStarted!: () => void;
+      const started = new Promise<void>((resolve) => { writesStarted = resolve; });
+      const pending = new Promise<void>((resolve) => { finish = resolve; });
+      mockInvoke.mockImplementation(() => {
+        if (mockInvoke.mock.calls.length === 2) writesStarted();
+        return pending;
+      });
       const saves = [
         useProjectStore.getState().savePaperFileNow('main.tex'),
         useProjectStore.getState().savePaperFileNow('sections/intro.tex'),
       ];
-      await vi.dynamicImportSettled();
-      await vi.advanceTimersByTimeAsync(0);
+      // Observe both requests starting, not an assumed number of event-loop ticks.
+      await started;
       expect(mockInvoke).toHaveBeenCalledTimes(2);
       finish();
       expect(await Promise.all(saves)).toEqual([true, true]);
