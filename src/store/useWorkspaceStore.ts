@@ -23,16 +23,12 @@ import {
   patchNodeLabel,
   patchNodeOptions,
 } from '../core/parser/patcher';
-import {
-  FULL_FIGURE_TEMPLATES,
-  PRIMITIVE_LIBRARY,
-} from '../core/templates/dl-templates';
+import { PRIMITIVE_LIBRARY } from '../core/tikz/primitives';
 import { EMPTY_TIKZ_CODE } from '../core/templates/blank-document';
 import { JOURNAL_THEMES } from '../core/themes/journal-presets';
 import { useSettingsStore } from './useSettingsStore';
 
 export type LeftSidebarTab = 'project' | 'library' | 'code';
-export type WorkbenchMode = 'figure_studio' | 'paper_writer' | 'split_link';
 export type ColumnGuideMode = 'none' | 'single' | 'double';
 
 export type CanvasTool =
@@ -65,9 +61,7 @@ interface WorkspaceState {
   sourceRevision: number;
   parsedDoc: ParsedTikzDocument;
   activeThemeId: JournalThemeId;
-  activeTemplateId: string;
   leftTab: LeftSidebarTab;
-  workbenchMode: WorkbenchMode;
   columnGuideMode: ColumnGuideMode;
   isInsertFigureModalOpen: boolean;
   activeTool: CanvasTool;
@@ -92,7 +86,6 @@ interface WorkspaceState {
 
   // Actions
   setLeftTab: (tab: LeftSidebarTab) => void;
-  setWorkbenchMode: (mode: WorkbenchMode) => void;
   setColumnGuideMode: (mode: ColumnGuideMode) => void;
   setInsertFigureModalOpen: (open: boolean) => void;
   setAgentPanelCollapsed: (collapsed: boolean) => void;
@@ -214,7 +207,6 @@ interface WorkspaceState {
       | 'distribute_y'
       | 'distribute_x'
   ) => void;
-  loadTemplate: (templateId: string) => void;
 }
 
 const initialThemeId: JournalThemeId = (
@@ -243,9 +235,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   sourceRevision: 0,
   parsedDoc: initialParsed,
   activeThemeId: initialThemeId,
-  activeTemplateId: '',
   leftTab: 'code',
-  workbenchMode: 'figure_studio',
   columnGuideMode: 'none',
   isInsertFigureModalOpen: false,
   activeTool: 'select',
@@ -269,7 +259,6 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   isInspectorDrawerOpen: false,
 
   setLeftTab: (leftTab) => set({ leftTab, isLeftSidebarCollapsed: false }),
-  setWorkbenchMode: (workbenchMode) => set({ workbenchMode }),
   setColumnGuideMode: (columnGuideMode) => set({ columnGuideMode }),
   setInsertFigureModalOpen: (isInsertFigureModalOpen) =>
     set({ isInsertFigureModalOpen }),
@@ -414,7 +403,6 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       sourceRevision: get().sourceRevision + 1,
       compiledSvg: null,
       texCompilerStatus: null,
-      activeTemplateId: FULL_FIGURE_TEMPLATES.find((t) => t.tikzCode === newCode)?.id ?? '',
       parsedDoc: nextDoc,
       highlightedLineRange: computeLineRangeForSelection(nextDoc, selectedIds),
       undoStack: recordUndo ? [...undoStack.slice(-39), tikzCode] : undoStack,
@@ -432,7 +420,6 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       sourceRevision: get().sourceRevision + 1,
       compiledSvg: null,
       texCompilerStatus: null,
-      activeTemplateId: FULL_FIGURE_TEMPLATES.find((t) => t.tikzCode === prevCode)?.id ?? '',
       parsedDoc: nextDoc,
       highlightedLineRange: computeLineRangeForSelection(nextDoc, selectedIds),
       undoStack: undoStack.slice(0, -1),
@@ -450,7 +437,6 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       sourceRevision: get().sourceRevision + 1,
       compiledSvg: null,
       texCompilerStatus: null,
-      activeTemplateId: FULL_FIGURE_TEMPLATES.find((t) => t.tikzCode === nextCode)?.id ?? '',
       parsedDoc: nextDoc,
       highlightedLineRange: computeLineRangeForSelection(nextDoc, selectedIds),
       undoStack: [...undoStack.slice(-39), tikzCode],
@@ -948,7 +934,6 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     set({
       tikzCode: docState.tikzCode,
       sourceRevision: get().sourceRevision + 1,
-      activeTemplateId: FULL_FIGURE_TEMPLATES.find((t) => t.tikzCode === docState.tikzCode)?.id ?? '',
       parsedDoc: nextDoc,
       activeThemeId: nextThemeId,
       zoom: docState.zoom ?? 1,
@@ -1056,26 +1041,5 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     }
   },
 
-  loadTemplate: (templateId) => {
-    const tpl = FULL_FIGURE_TEMPLATES.find((t) => t.id === templateId);
-    if (!tpl) return;
-    set({
-      activeThemeId: tpl.themeId,
-      activeTemplateId: tpl.id,
-      pan: tpl.recommendedPan || { x: 85, y: 490 },
-      zoom: tpl.recommendedZoom || 1,
-      lastChangeInfo: null,
-    });
-    get().setTikzCode(tpl.tikzCode, true);
-    const nextDoc = get().parsedDoc;
-    const primaryTarget =
-      nextDoc.nodes.find((n) => n.subtype !== 'container') ||
-      nextDoc.charts[0] ||
-      nextDoc.elements[0];
-    if (primaryTarget) {
-      get().setSelectedIds([primaryTarget.id]);
-    } else {
-      get().setSelectedIds([]);
-    }
-  },
+
 }));

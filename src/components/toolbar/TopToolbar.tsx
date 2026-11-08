@@ -75,7 +75,56 @@ function blobToBase64(blob: Blob): Promise<string> {
   });
 }
 
-export const TopToolbar: React.FC = () => {
+const WorkbenchSwitcher: React.FC = () => {
+  const mode = useProjectStore((s) => s.workbenchMode);
+  const setMode = useProjectStore((s) => s.setWorkbenchMode);
+  return (
+    <nav aria-label="工作区" className="flex shrink-0 items-center gap-1 rounded-lg bg-slate-100 p-1 text-xs">
+      {([
+        { id: 'paper', label: '论文', Icon: FileText },
+        { id: 'figure', label: '绘图', Icon: ImageIcon },
+      ] as const).map(({ id, label, Icon }) => (
+        <button key={id} type="button" aria-pressed={mode === id} onClick={() => setMode(id)}
+          className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1.5 cursor-pointer transition-colors ${
+            mode === id ? 'bg-white text-slate-900 shadow-xs font-medium' : 'text-slate-500 hover:text-slate-800'
+          }`}>
+          <Icon className="h-3.5 w-3.5" />{label}
+        </button>
+      ))}
+    </nav>
+  );
+};
+
+const PaperTopToolbar: React.FC = () => {
+  const projectName = useProjectStore((s) => s.projectName);
+  const projectDir = useProjectStore((s) => s.projectDir);
+  const setPickerOpen = useProjectStore((s) => s.setPickerOpen);
+  const openSettings = useSettingsStore((s) => s.openSettings);
+  return (
+    <header className="h-14 bg-white border-b border-slate-200 px-4 flex items-center gap-4 shrink-0 select-none">
+      <div className="flex items-center gap-2 shrink-0">
+        <img src="/icon.svg" alt="" className="w-7 h-7 rounded-lg" />
+        <span className="text-sm font-semibold tracking-tight hidden sm:block">AgenTikZ</span>
+      </div>
+      <span className="h-5 w-px bg-slate-200" />
+      <button type="button" onClick={() => setPickerOpen(true)}
+        className="flex items-center gap-2 text-xs text-slate-600 hover:text-slate-900 min-w-0 max-w-64 cursor-pointer"
+        title={projectDir || '打开论文项目 (Ctrl+O)'}>
+        <FolderOpen className="w-4 h-4 shrink-0 text-slate-400" />
+        <span className="truncate">{projectDir ? projectName : '论文工作区'}</span>
+        <ChevronDown className="h-3 w-3 shrink-0 text-slate-400" />
+      </button>
+      <div className="flex-1" />
+      <WorkbenchSwitcher />
+      <button type="button" onClick={() => openSettings('general')} title="设置 (Ctrl+,)"
+        className="p-2 rounded-md text-slate-500 hover:bg-slate-100 cursor-pointer">
+        <Settings className="w-4 h-4" />
+      </button>
+    </header>
+  );
+};
+
+const FigureTopToolbar: React.FC = () => {
   const {
     tikzCode, parsedDoc, activeTool, activeThemeId, selectedIds,
     previewMode, undoStack, redoStack, isCompilingTex,
@@ -108,11 +157,8 @@ export const TopToolbar: React.FC = () => {
     projectDir,
     projectName,
     activeCanvasFileName,
-    activePaperFilePath,
     saveStatus,
     lastExportedNotice,
-    workbenchMode,
-    setWorkbenchMode,
     setInsertFigureModalOpen,
     quickInsertActiveFigureIntoPaper,
     setPickerOpen,
@@ -121,11 +167,8 @@ export const TopToolbar: React.FC = () => {
     projectDir: s.projectDir,
     projectName: s.projectName,
     activeCanvasFileName: s.activeCanvasFileName,
-    activePaperFilePath: s.activePaperFilePath,
     saveStatus: s.saveStatus,
     lastExportedNotice: s.lastExportedNotice,
-    workbenchMode: s.workbenchMode,
-    setWorkbenchMode: s.setWorkbenchMode,
     setInsertFigureModalOpen: s.setInsertFigureModalOpen,
     quickInsertActiveFigureIntoPaper: s.quickInsertActiveFigureIntoPaper,
     setPickerOpen: s.setPickerOpen,
@@ -261,7 +304,7 @@ export const TopToolbar: React.FC = () => {
       : 'bg-slate-400';
 
   return (
-    <header className="h-12 bg-toolbar-gradient border-b border-slate-200/80 px-3 flex items-center justify-between gap-2 shrink-0 select-none z-30">
+    <header className="min-h-12 bg-toolbar-gradient border-b border-slate-200/80 px-3 py-1.5 flex flex-wrap items-center justify-between gap-2 shrink-0 select-none z-30">
       {/* Left: Brand + Project Pill (with Auto-Sync Dot) + Undo/Redo */}
       <div className="flex items-center gap-2">
         <div className="flex items-center gap-2">
@@ -299,7 +342,6 @@ export const TopToolbar: React.FC = () => {
           />
         </button>
 
-        {workbenchMode !== 'paper' && (
           <>
             <div className="w-px h-5 bg-slate-200/80" />
             <div className="flex items-center gap-0.5">
@@ -313,12 +355,10 @@ export const TopToolbar: React.FC = () => {
               </button>
             </div>
           </>
-        )}
       </div>
 
-      {/* Center: Mode-Aware Toolbar (Drawing Tools in Figure/Split Mode vs Manuscript Status in Paper Mode) */}
-      {workbenchMode !== 'paper' ? (
-        <div className="flex items-center gap-0.5 bg-white/60 border border-slate-200/70 rounded-xl p-0.5 shadow-sm">
+      {/* Drawing tools */}
+        <div className="flex max-w-full overflow-x-auto items-center gap-0.5 bg-white/60 border border-slate-200/70 rounded-xl p-0.5 shadow-sm">
           {toolGroups.map((group, gi) => (
             <React.Fragment key={group.label}>
               {gi > 0 && <div className="w-px h-5 bg-slate-200/60 mx-0.5" />}
@@ -351,21 +391,8 @@ export const TopToolbar: React.FC = () => {
             </>
           )}
         </div>
-      ) : (
-        <div className="hidden md:flex items-center gap-2 bg-white/70 border border-slate-200/80 rounded-xl px-3 py-1 shadow-xs text-xs text-slate-600">
-          <FileCode2 className="w-3.5 h-3.5 text-indigo-600" />
-          <span>
-            当前手稿: <strong className="font-mono text-slate-800">{activePaperFilePath}</strong>
-          </span>
-          <span className="text-slate-300">·</span>
-          <span className="font-mono text-[11px] text-slate-500">
-            活动配图: figures/{stem}.tikz
-          </span>
-        </div>
-      )}
-
       {/* Right: Workbench Switcher + 1-Click Split-Button Insert + Theme + Preview + Export + Agent Toggle */}
-      <div className="flex items-center gap-1.5">
+      <div className="flex max-w-full flex-wrap items-center justify-end gap-1.5">
         {lastExportedNotice && (
           <div className="hidden lg:flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-[11px] font-medium shadow-xs animate-fade-in">
             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
@@ -374,31 +401,7 @@ export const TopToolbar: React.FC = () => {
         )}
 
         {/* One-Stop Workbench Mode Switcher */}
-        <div
-          className="flex items-center bg-slate-200/75 border border-slate-300/70 rounded-lg p-0.5 shadow-2xs"
-          title="切换一站式工作台模式：科研绘图 / 论文与配图同屏联动 / 论文 LaTeX 写作"
-        >
-          {(
-            [
-              { id: 'figure', label: '🎨 绘图' },
-              { id: 'split', label: '⚖️ 同屏' },
-              { id: 'paper', label: '📝 论文' },
-            ] as const
-          ).map((m) => (
-            <button
-              key={m.id}
-              type="button"
-              onClick={() => setWorkbenchMode(m.id)}
-              className={`px-2 py-1 rounded-md text-[11px] font-semibold transition-all cursor-pointer ${
-                workbenchMode === m.id
-                  ? 'bg-indigo-600 text-white shadow-2xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              {m.label}
-            </button>
-          ))}
-        </div>
+        <WorkbenchSwitcher />
 
         {/* 1-Click Split-Button: Direct Insert at Cursor + Advanced Dropdown */}
         <div className="hidden md:flex items-center rounded-lg bg-indigo-50 border border-indigo-200/80 shadow-xs overflow-hidden">
@@ -431,7 +434,6 @@ export const TopToolbar: React.FC = () => {
           </select>
         </div>
 
-        {workbenchMode !== 'paper' && (
           <button onClick={handleCompileTex} disabled={isCompilingTex}
             className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-medium border transition-all cursor-pointer ${
               previewMode !== 'interactive'
@@ -441,7 +443,6 @@ export const TopToolbar: React.FC = () => {
             {previewMode !== 'interactive' ? <Eye className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
             <span>{isCompilingTex ? '编译中…' : requiresExactPreview ? '重新编译 TeX' : previewMode !== 'interactive' ? '退出预览' : 'TeX'}</span>
           </button>
-        )}
 
         <button
           onClick={() => openSettings('agent')}
@@ -551,4 +552,9 @@ export const TopToolbar: React.FC = () => {
       </div>
     </header>
   );
+};
+
+export const TopToolbar: React.FC = () => {
+  const mode = useProjectStore((s) => s.workbenchMode);
+  return mode === 'paper' ? <PaperTopToolbar /> : <FigureTopToolbar />;
 };

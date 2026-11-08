@@ -112,7 +112,6 @@ export interface AgentChatMessage {
   agentId: AcpAgentId;
   contextSelectionIds?: string[];
   includeFullCanvas?: boolean;
-  templateReferenceId?: string;
   patchProposal?: TikzPatchProposal;
   mcpToolCalls?: Array<{
     callId?: string;
@@ -129,6 +128,5 @@ export interface AgentSession {
   title: string;
   agentId: AcpAgentId;
   createdAt: string;
-  templateReferenceId?: string;
   messages: AgentChatMessage[];
 }

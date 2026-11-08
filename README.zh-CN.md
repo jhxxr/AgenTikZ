@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>面向科研论文与深度学习顶会的 AI 原生 TikZ &amp; PGFPlots 可视化工作室。</strong><br>
-  无损 AST 外科手术级代码同步 · 原生 BYOA (ACP v1) 本地智能体协同 · 顶刊级预设模板与配色规范
+  无损 AST 外科手术级代码同步 · 原生 BYOA (ACP v1) 本地智能体协同 · 独立论文写作与科研配色规范
 </p>
 
 <p align="center">
@@ -27,7 +27,7 @@
   <a href="#界面与核心工作流预览">界面预览</a> ·
   <a href="#核心特性">核心特性</a> ·
   <a href="#工作原理与架构">工作原理</a> ·
-  <a href="#顶刊模板与学术主题">顶刊模板与主题</a> ·
+  <a href="#论文模板与学术主题">论文模板与主题</a> ·
   <a href="#快速开始">快速开始</a> ·
   <a href="#byoa-智能体接入与提示词指南">BYOA 与提示词指南</a> ·
   <a href="#项目结构">项目结构</a> ·
@@ -52,20 +52,18 @@
 
 ![可视化工作室全景：无损 AST 源码同步与 BYOA 智能体增量 Diff 审阅](docs/screenshots/studio-overview.png)
 
-### 2. 顶刊构图模板库、实时 SVG 拓扑缩略图与 3D 特征张量检查器
-左侧内置 6 套顶会整图模板（带 AST 实时渲染的 SVG 拓扑缩略图）与 13 种深度学习 / PGFPlots 原语组件；中间画布展示 **CVPR / ICCV** 多尺度 3D 视觉特征金字塔（$\mathbf{C}_2 \rightarrow \mathbf{C}_5$），右侧属性抽屉支持实时微调 3D 通道厚度、张量维度标注、视觉显著性角色与期刊色板。
-
-![顶刊构图模板库与 3D 特征张量检查器](docs/screenshots/templates-and-3d-vision.png)
+### 2. 基础绘图组件与 3D 特征张量检查器
+绘图从空白画布开始，可通过工具栏或基础组件添加节点、3D 特征立方体和 PGFPlots 图表。整图模板库、模板切换与 AI 模板引用已移除；已有绘图文件仍可正常打开和编辑。
 
 ### 3. Nature (NPG) 多面板科研实验图表、项目目录管理与 AI 透明抠图生成器
 左侧统一管理论文手稿（`main.tex`、`sections/*.tex`）、科研配图（`figures/*.tikz`）与 AI 透明抠图科研插图生成器；中间画布呈现符合 **Nature (NPG)** 规范的双联实验图（误差带收敛折线图 + 跨领域消融柱状图），右侧面板支持交互式编辑 `\addplot` 数据序列、误差棒与图例布局。
 
 ![Nature 多面板科研实验图表与交互式数据表编辑](docs/screenshots/nature-pgfplots-dashboard.png)
 
-### 4. 一站式 LaTeX 论文手稿与科研配图同屏联动工作台（`⚖️ 同屏` 模式）
-左屏直接编写论文 LaTeX 手稿并自动识别文中引用的 `\input{figures/*.tikz}` 配图标签，支持「📌 一键插图」将当前活动配图与 `\usepackage{styles/agentikz-macros}` 色彩宏同步插入至论文光标处，实现论文写作与顶会插图设计的零切换协同。
+### 4. 独立论文工作区：文件、大纲、源码与 PDF
+论文与绘图使用独立入口。论文区提供文件树、大纲导航、CodeMirror 源码编辑器与可调整宽度的 PDF 预览；新建论文、切换章节和插入配图均不会自动打开绘图画布。新建论文保留空白、Nature、NeurIPS、CVPR、IEEE 与 arXiv 写作起点。浏览器模式不执行本地 TeX 编译；生成 PDF 需要桌面端与 TeX Live。
 
-![一站式 LaTeX 论文手稿与科研配图同屏联动工作台](docs/screenshots/paper-split-workbench.png)
+分隔线中提供源码 → PDF、PDF → 源码双向定位，也支持 `Ctrl/⌘ + 点击 PDF` 返回对应源码行。桌面端编译启用 `-synctex=1`，需要 TeX 安装目录内的 `synctex` 可执行文件；修改源码后须重新编译以更新映射。
 
 ### 5. Agentero 风格 BYOA (ACP v1) 与顶刊 5 点图件契约设置中心
 支持本机 `PATH` 与内置适配器双层探测（**Claude Code**、**OpenCode**、**Codex CLI**、**Gemini CLI**、**Cursor Agent**、**Kimi Code**），提供一键 `stdio` 握手延时测试，并可开启 **Nature Skills 常驻风格规范**与 **5 点图件契约（`% @figure-contract`）**。
@@ -106,20 +104,13 @@ flowchart TB
 
 - **无损 CST/AST 解析引擎**：位于 `src/core/parser/`，通过深度感知括号 `[]` 与花括号 `{}` 匹配解析 `\tikzset` 样式、`\node` 节点、正交/弧线/残差 `\draw` 连线以及 `\begin{axis}...\end{axis}` 实验图表，确保含分号的数学公式（如 `$p(x;\theta)$`）或含括号文本绝不误截断语句。
 - **官方 ACP v1 通信实现**：位于 `src-tauri/src/acp/mod.rs`，桌面端通过 `stdio` 启动本地已安装的 ACP 适配器，对初始化握手（`20s`）、会话创建（`20s`）、提示词生成（`180s`）及子进程退出均设有严格超时边界。
-- **当前版本边界**：当前版本 **v0.4.3** 完整支持可视化画布交互、6 套顶会整图模板、4 套学术主题、本机 TeX Live 编译预览、基于 `stdio` 的 ACP v1 实时流式对话与代码补丁审阅，以及内置和外部 MCP 服务。原生文件与命令权限默认拒绝；可在 **设置 → Agent → 完整本机访问** 中明确启用跨文件夹读写和原生命令。MCP 工具单独授权，画布修改仍须审核。详见 [MCP 服务指南](docs/mcp-guide.zh-CN.md)。
+- **当前版本边界**：当前版本 **v0.4.4** 完整支持可视化画布交互、独立论文工作区、论文模板与 4 套学术主题、本机 TeX Live 编译预览、基于 `stdio` 的 ACP v1 实时流式对话与代码补丁审阅，以及内置和外部 MCP 服务。原生文件与命令权限默认拒绝；可在 **设置 → Agent → 完整本机访问** 中明确启用跨文件夹读写和原生命令。MCP 工具单独授权，画布修改仍须审核。详见 [MCP 服务指南](docs/mcp-guide.zh-CN.md)。
 
-## 顶刊模板与学术主题
+## 论文模板与学术主题
 
-### 6 套内置顶刊整图模板（带实时 SVG 拓扑缩略图）
+### 论文模板
 
-| 模板名称 | 适用顶会/期刊 | 分类 | 核心包含结构 |
-| --- | --- | --- | --- |
-| **Pre-LN Transformer 架构 + Scaling 实验联合图** | NeurIPS / ICLR | `transformer` | RoPE 嵌入、RMSNorm、Multi-Head Attention、SwiGLU FFN、左右对称正交残差跳线 + 右侧三曲线误差带 PGFPlots 实验图 |
-| **并行三分支 Q-K-V 注意力与门控融合细节图** | ICLR / ICML | `transformer` | 等距并行 $\mathbf{Q}/\mathbf{K}/\mathbf{V}$ 投影分支、居中 $\otimes$ 点积算子、Causal Softmax 路由与公式标注 |
-| **多尺度 3D 视觉特征金字塔 (FPN / U-Net)** | CVPR / ICCV | `vision_multimodal` | 渐进缩放 3D 特征图立方体（$\mathbf{C}_2 \rightarrow \mathbf{C}_5$）、空间下采样、自顶向下 FPN Neck 与横向跳线融合 |
-| **视觉-语言双流多模态对齐 + 相似度热力图** | CVPR / NeurIPS | `vision_multimodal` | 严格对称 ViT 视觉编码流与 Text Transformer 编码流、居中 InfoNCE 损失公式 + 右侧跨模态余弦相似度热力图 |
-| **Latent Diffusion / Flow Matching 去噪管线 (DiT)** | ICML / NeurIPS | `generative` | 噪声潜变量 3D 张量 $\mathbf{z}_t$、时空自注意力、上方 AdaLN-Zero $\gamma,\beta$ 条件调制注入与流匹配目标函数 |
-| **Nature 风格多面板科研实验图表** | Nature / Science | `data_charts` | 严格等宽等高（`5.8cm × 4.4cm`）双联图：(a) 三曲线误差带收敛对比 + (b) 跨领域三组消融分组柱状图 |
+保留空白论文、Nature、NeurIPS、CVPR、IEEE 和 arXiv 写作起点，仅生成文档与章节，不插入示例绘图或虚构实验数据。这些通用 article 起点并非期刊/会议官方投稿样式；投稿前请使用对应官方样式。
 
 ### 4 套学术期刊配色与排版预设
 
@@ -132,8 +123,8 @@ flowchart TB
 
 | 运行模式 | 适用场景 | 环境要求 |
 | --- | --- | --- |
-| **Tauri 桌面应用 (`tauri dev` / build)** | 完整功能体验：可视化画布 + 本地 ACP 智能体直连 + 本机 TeX Live 编译对比 | **Node.js >= 20**、**Rust (stable)**、WebView2 (Windows) / webkit2gtk (Linux) |
-| **Web 浏览器模式 (`npm run dev`)** | 快速体验可视化 TikZ/PGFPlots 画布、双向无损源码同步与多格式插图导出 | **Node.js >= 20** 与 npm |
+| **Tauri 桌面应用 (`tauri dev` / build)** | 完整功能体验：可视化画布 + 本地 ACP 智能体直连 + 本机 TeX Live 编译对比 | **Node.js >= 22.13.0**、**Rust (stable)**、WebView2 (Windows) / webkit2gtk (Linux) |
+| **Web 浏览器模式 (`npm run dev`)** | 快速体验可视化 TikZ/PGFPlots 画布、双向无损源码同步与多格式插图导出 | **Node.js >= 22.13.0** 与 npm |
 
 ### 1. 克隆仓库并安装依赖
 
@@ -149,7 +140,7 @@ npm ci
 npm run dev
 ```
 
-浏览器打开 `http://localhost:1420` 即可使用全部 6 套顶会模板、13 种深度学习与 PGFPlots 组件、实时代码行高亮对比以及 `.tikz` / `.tex` / `.svg` / `.pdf` 导出。
+浏览器打开 `http://localhost:1420` 即可使用独立论文编辑区、基础绘图与 PGFPlots 组件、实时代码行高亮对比以及 `.tikz` / `.tex` / `.svg` / `.pdf` 导出。
 
 > **说明**：纯浏览器环境无法直接调用本机 `stdio` 子进程，且 AgenTikZ 坚持**不生成假冒模拟回复**。如需连接本地 ACP 智能体或调用本机 TeX Live 编译，请使用下方的 Tauri 桌面模式。
 
@@ -248,11 +239,12 @@ src/
     canvas/         # 交互式 SVG + KaTeX 矢量画布、3D 特征图投影与 PGFPlots 图表渲染器
     editor/         # CodeMirror 6 TikZ 代码编辑器、关联行高亮与修改数值区间实时闪烁横幅
     inspector/      # 浮动属性检查器（几何坐标、顶刊色板、残差跳线跨度、PGFPlots 数据表编辑）
-    sidebar/        # 左侧双标签栏：带 SVG 拓扑缩略图的顶刊模板库、深度学习图元库与代码面板
+    sidebar/        # 绘图区：项目素材、基础组件与代码面板
     toolbar/        # 顶部工具栏：分组绘图工具、多选对齐、期刊主题切换、TeX 编译预览与多格式导出
   core/
     parser/         # 无损 CST/AST TikZ & PGFPlots 解析器、外科手术式 Span 补丁引擎及单元测试
-    templates/      # 6 套顶会整图模板与 13 种深度学习/科研图表组件定义
+    tikz/           # 基础绘图与科研图表组件定义
+    paper/          # 论文写作起点与插图 LaTeX 工具
     themes/         # NeurIPS、CVPR、Nature (NPG) 与 IEEE 色彩 Token 及 LaTeX 导言区生成器
   store/            # Zustand 画布状态管理（Undo/Redo、AST 同步）与 ACP 智能体状态管理及测试
   types/            # TikZ AST 源码跨度、主题规范与 ACP 流式事件 TypeScript 类型定义

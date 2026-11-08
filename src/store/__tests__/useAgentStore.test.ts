@@ -280,38 +280,24 @@ describe('real ACP frontend contract', () => {
     expect(bridge.setTikzCode).toHaveBeenLastCalledWith('% original canvas', true);
   });
 
-  it('attaches composition guidance independently of current canvas code', async () => {
+  it('sends only the user request and current canvas, without removed figure-library references', async () => {
     const store = await freshStore();
     store.setState({ attachCanvasContext: true });
-    store.getState().setTemplateReference('tpl_cvpr_3d_pyramid');
-    expect(bridge.setTikzCode).not.toHaveBeenCalled();
-    expect(bridge.invoke).not.toHaveBeenCalled();
     await store.getState().sendPromptToAgent('Draw my four-stage encoder');
     const args = bridge.invoke.mock.calls[0][1];
     expect(args.canvasTikz).toBe('% original canvas');
-    const references = JSON.parse(args.templateReferences);
-    expect(references.selectedTemplateId).toBe('tpl_cvpr_3d_pyramid');
-    expect(references.references).toHaveLength(1);
-    expect(args.templateReferences).not.toContain('tikzpicture');
-    expect(args.templateReferences).not.toContain('128\\\\times');
-    expect(store.getState().sessions[0].messages[0].templateReferenceId).toBe('tpl_cvpr_3d_pyramid');
+    expect(args).not.toHaveProperty('templateReferences');
+    expect(store.getState()).not.toHaveProperty('setTemplateReference');
     expect(bridge.setTikzCode).not.toHaveBeenCalled();
   });
 
-  it('keeps reference choice in its session and allows clearing it', async () => {
+  it('can request a new drawing without attaching any example or canvas source', async () => {
     const store = await freshStore();
-    store.getState().setTemplateReference('tpl_iclr_qkv_attention');
-    store.getState().createNewSession();
-    expect(store.getState().sessions[0].templateReferenceId).toBeUndefined();
-    store.getState().switchSession('test-session');
-    expect(store.getState().sessions.find((s) => s.id === 'test-session')?.templateReferenceId).toBe('tpl_iclr_qkv_attention');
-    store.getState().setTemplateReference();
     store.setState({ attachCanvasContext: false });
     await store.getState().sendPromptToAgent('Draw a new pipeline');
     const args = bridge.invoke.mock.calls[0][1];
     expect(args.canvasTikz).toBe('');
-    expect(JSON.parse(args.templateReferences).selectedTemplateId).toBeNull();
-    expect(JSON.parse(args.templateReferences).references.length).toBeGreaterThan(1);
+    expect(args).not.toHaveProperty('templateReferences');
   });
 
   it('persists customCommand to useSettingsStore and applies defaultAttachCanvas/Selection on createNewSession', async () => {

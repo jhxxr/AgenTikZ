@@ -1,262 +1,7 @@
-import { JournalThemeId } from '../../types/theme';
-import { NodeSubtype, PgfChartType } from '../../types/tikz-ast';
-
-export interface PrimitiveLibraryItem {
-  id: string;
-  name: string;
-  category: 'dl' | 'chart';
-  badge: string;
-  description: string;
-  subtype?: NodeSubtype;
-  chartType?: PgfChartType;
-  generateSnippet: (idSuffix: number, x: number, y: number) => string;
-}
-
-export type TemplateCategory =
-  | 'all'
-  | 'transformer'
-  | 'vision_multimodal'
-  | 'generative'
-  | 'data_charts';
-
-export interface FullFigureTemplate {
-  id: string;
-  title: string;
-  venue: string;
-  category: Exclude<TemplateCategory, 'all'>;
-  themeId: JournalThemeId;
-  description: string;
-  tags: string[];
-  /** Composition guidance for AI; kept separate from ready-made figure code. */
-  designGuide: {
-    intent: string;
-    layout: string[];
-    adapt: string[];
-  };
-  recommendedPan?: { x: number; y: number };
-  recommendedZoom?: number;
-  tikzCode: string;
-}
-
-export const PRIMITIVE_LIBRARY: PrimitiveLibraryItem[] = [
-  {
-    id: 'prim_mha',
-    name: 'Multi-Head Attention',
-    category: 'dl',
-    badge: 'Attention',
-    description: '带顶刊暖杏配色的多头注意力核心块',
-    subtype: 'mha',
-    generateSnippet: (idx, x, y) =>
-      `  \\node[mha_block, fill=nips_amber!16, draw=nips_amber!85!black, minimum width=3.2cm, minimum height=0.95cm] (mha_${idx}) at (${x.toFixed(1)}, ${y.toFixed(1)}) {Multi-Head Attention \\\\ {\\scriptsize $h=8,\\ d_k=64$}};`,
-  },
-  {
-    id: 'prim_addnorm',
-    name: 'Add & LayerNorm',
-    category: 'dl',
-    badge: 'Norm',
-    description: '紧凑型残差归一化层（鼠尾草绿）',
-    subtype: 'addnorm',
-    generateSnippet: (idx, x, y) =>
-      `  \\node[addnorm_block, fill=nips_sage!15, draw=nips_sage!85!black, minimum width=3.2cm, minimum height=0.65cm] (ln_${idx}) at (${x.toFixed(1)}, ${y.toFixed(1)}) {Add \\& LayerNorm};`,
-  },
-  {
-    id: 'prim_ffn',
-    name: 'Feed-Forward / SwiGLU',
-    category: 'dl',
-    badge: 'Layer',
-    description: '标准前馈网络或线性投影模块（牛津科研蓝）',
-    subtype: 'block',
-    generateSnippet: (idx, x, y) =>
-      `  \\node[dl_block, fill=nips_blue!14, draw=nips_blue!85!black, minimum width=3.2cm, minimum height=0.85cm] (ffn_${idx}) at (${x.toFixed(1)}, ${y.toFixed(1)}) {SwiGLU Feed-Forward \\\\ {\\scriptsize $\\text{SiLU}(xW_1) \\odot xW_3$}};`,
-  },
-  {
-    id: 'prim_cuboid',
-    name: '3D 特征图张量块',
-    category: 'dl',
-    badge: '3D Tensor',
-    description: '可调通道厚度与高宽的 3D 卷积/视觉特征图块 (C×H×W)',
-    subtype: 'cuboid',
-    generateSnippet: (idx, x, y) =>
-      `  \\node[feature_cube, subtype=cuboid, fill=cvpr_navy!14, draw=cvpr_navy!85!black, minimum width=1.25cm, minimum height=2.2cm, depth=0.6cm, channels={64\\times 64\\times 256}] (feat_${idx}) at (${x.toFixed(1)}, ${y.toFixed(1)}) {$\\mathbf{F}_{${idx}}$};`,
-  },
-  {
-    id: 'prim_conv',
-    name: 'Conv / Cross-Block',
-    category: 'dl',
-    badge: 'Vision',
-    description: '卷积特征提取或跨模态交互模块（青绿）',
-    subtype: 'conv',
-    generateSnippet: (idx, x, y) =>
-      `  \\node[conv_block, fill=cvpr_teal!14, draw=cvpr_teal!85!black, minimum width=2.8cm, minimum height=0.85cm] (conv_${idx}) at (${x.toFixed(1)}, ${y.toFixed(1)}) {Conv $3\\times 3$ + SiLU};`,
-  },
-  {
-    id: 'prim_op_add',
-    name: '算子圆节点 (⊕ / ⊗)',
-    category: 'dl',
-    badge: 'Operator',
-    description: '逐元素相加 \\oplus、相乘 \\otimes 或拼接算子圆节点',
-    subtype: 'op_circle',
-    generateSnippet: (idx, x, y) =>
-      `  \\node[op_circle, circle, fill=white, draw=nips_slate!85!black, minimum size=0.65cm] (op_${idx}) at (${x.toFixed(1)}, ${y.toFixed(1)}) {$\\oplus$};`,
-  },
-  {
-    id: 'prim_container',
-    name: '虚线模块分组框',
-    category: 'dl',
-    badge: 'Group',
-    description: '用于包裹 Encoder Stage 或子模块的浅底虚线容器框',
-    subtype: 'container',
-    generateSnippet: (idx, x, y) =>
-      `  \\node[stage_box, subtype=container, dashed, fill=nips_slate!6, draw=nips_slate!60, minimum width=5.2cm, minimum height=4.6cm, rounded corners=4pt] (stage_${idx}) at (${x.toFixed(1)}, ${y.toFixed(1)}) {$\\times N$ Transformer Stage};`,
-  },
-  {
-    id: 'prim_math',
-    name: 'LaTeX 公式标注',
-    category: 'dl',
-    badge: 'Math',
-    description: '无边框纯数学公式或张量维度符号标注',
-    subtype: 'math',
-    generateSnippet: (idx, x, y) =>
-      `  \\node[subtype=math, draw=none, fill=none] (math_${idx}) at (${x.toFixed(1)}, ${y.toFixed(1)}) {$\\mathcal{L}_{\\text{total}} = \\mathcal{L}_{\\text{ce}} + \\lambda \\|\\theta\\|_2^2$};`,
-  },
-  {
-    id: 'prim_caption',
-    name: '子图图注 (a) / (b)',
-    category: 'dl',
-    badge: 'Caption',
-    description: '顶刊子图图注与模块说明文字，支持自由拖拽与双击修改',
-    subtype: 'caption',
-    generateSnippet: (idx, x, y) =>
-      `  \\node[subcaption, subtype=caption, draw=none, fill=none, minimum width=4.8cm, minimum height=0.55cm] (cap_${idx}) at (${x.toFixed(1)}, ${y.toFixed(1)}) {\\textbf{(a)} Proposed Architecture Sub-module};`,
-  },
-  // PGFPlots Data Chart Primitives
-  {
-    id: 'chart_line',
-    name: '训练/Scaling 曲线 (含误差带)',
-    category: 'chart',
-    badge: 'PGFPlots',
-    description: '带标准差误差棒/阴影带的顶刊折线对比图',
-    chartType: 'line',
-    generateSnippet: (idx, x, y) =>
-      [
-        `  \\begin{scope}[shift={(${x.toFixed(1)}, ${y.toFixed(1)})}]`,
-        `    \\begin{axis}[`,
-        `      id=line_chart_${idx},`,
-        `      chart_type=line, width=5.6cm, height=4.0cm,`,
-        `      title={Scaling Law \\& Convergence},`,
-        `      xlabel={Compute Scale ($\\times 10^{20}$ FLOPs)},`,
-        `      ylabel={Validation Accuracy (\\%)},`,
-        `      grid=major, grid style={dashed, gray!25},`,
-        `      legend style={at={(0.04, 0.94)}, anchor=north west, font=\\scriptsize, draw=gray!40, fill=white, fill opacity=0.9}`,
-        `    ]`,
-        `      \\addplot[color=#2B5B84, line width=0.85pt, mark=*] coordinates { (1, 73.2) +- (0, 1.1) (2, 78.9) +- (0, 0.9) (3, 83.4) +- (0, 0.7) (4, 86.8) +- (0, 0.6) };`,
-        `      \\addlegendentry{Ours (AgenTikZ)}`,
-        `      \\addplot[color=#D97706, line width=0.85pt, mark=square*, dashed] coordinates { (1, 69.5) +- (0, 1.4) (2, 74.1) +- (0, 1.2) (3, 77.6) +- (0, 1.0) (4, 79.8) +- (0, 0.9) };`,
-        `      \\addlegendentry{Baseline}`,
-        `    \\end{axis}`,
-        `  \\end{scope}`,
-      ].join('\n'),
-  },
-  {
-    id: 'chart_bar',
-    name: '消融实验分组柱状图',
-    category: 'chart',
-    badge: 'PGFPlots',
-    description: '用于多数据集或多指标消融对比的分组柱状图',
-    chartType: 'bar',
-    generateSnippet: (idx, x, y) =>
-      [
-        `  \\begin{scope}[shift={(${x.toFixed(1)}, ${y.toFixed(1)})}]`,
-        `    \\begin{axis}[`,
-        `      id=bar_chart_${idx},`,
-        `      ybar, bar width=7pt, width=5.6cm, height=4.0cm,`,
-        `      title={Ablation Study on Benchmarks},`,
-        `      xlabel={Dataset Benchmark},`,
-        `      ylabel={Top-1 Score (\\%)},`,
-        `      grid=major, grid style={dashed, gray!25},`,
-        `      legend style={at={(0.04, 0.94)}, anchor=north west, font=\\scriptsize, draw=gray!40, fill=white, fill opacity=0.9}`,
-        `    ]`,
-        `      \\addplot[color=#2B5B84, line width=0.75pt] coordinates { (ImageNet, 84.6) (COCO, 54.2) (ADE20K, 51.8) };`,
-        `      \\addlegendentry{Ours}`,
-        `      \\addplot[color=#B4690E, line width=0.75pt] coordinates { (ImageNet, 81.2) (COCO, 50.4) (ADE20K, 47.9) };`,
-        `      \\addlegendentry{w/o Cross-Attn}`,
-        `    \\end{axis}`,
-        `  \\end{scope}`,
-      ].join('\n'),
-  },
-  {
-    id: 'chart_heatmap',
-    name: '注意力/混淆矩阵热力图',
-    category: 'chart',
-    badge: 'PGFPlots',
-    description: '展示 Token 注意力矩阵或类别混淆矩阵的科研热力图',
-    chartType: 'heatmap',
-    generateSnippet: (idx, x, y) =>
-      [
-        `  \\begin{scope}[shift={(${x.toFixed(1)}, ${y.toFixed(1)})}]`,
-        `    \\begin{axis}[`,
-        `      id=heatmap_${idx},`,
-        `      chart_type=heatmap, colormap/viridis, width=4.8cm, height=4.0cm,`,
-        `      title={Cross-Attention Matrix $\\mathbf{A}$},`,
-        `      xlabel={Key Tokens ($K$)},`,
-        `      ylabel={Query Tokens ($Q$)},`,
-        `      grid=none`,
-        `    ]`,
-        `      \\addplot[color=#2B5B84] coordinates { (1, 1) (2, 2) (3, 3) (4, 4) };`,
-        `      \\addlegendentry{Attention Weight}`,
-        `      % heatmap_matrix: [[0.84,0.08,0.05,0.03],[0.07,0.78,0.10,0.05],[0.04,0.11,0.76,0.09],[0.02,0.05,0.09,0.84]]`,
-        `    \\end{axis}`,
-        `  \\end{scope}`,
-      ].join('\n'),
-  },
-  {
-    id: 'chart_boxplot',
-    name: '误差分布箱线图 (Boxplot)',
-    category: 'chart',
-    badge: 'PGFPlots',
-    description: '展示多次随机种子实验的中位数、四分位距与离群分布',
-    chartType: 'boxplot',
-    generateSnippet: (idx, x, y) =>
-      [
-        `  \\begin{scope}[shift={(${x.toFixed(1)}, ${y.toFixed(1)})}]`,
-        `    \\begin{axis}[`,
-        `      id=boxplot_${idx},`,
-        `      chart_type=boxplot, boxplot/draw direction=y, width=5.2cm, height=4.0cm,`,
-        `      title={Multi-Seed Stability ($n=10$)},`,
-        `      xlabel={Architecture Variant},`,
-        `      ylabel={F1 Score (\\%)},`,
-        `      grid=major`,
-        `    ]`,
-        `      \\addplot+[boxplot prepared={label=Vanilla, median=74.2, upper quartile=76.5, lower quartile=71.8, upper whisker=79.0, lower whisker=68.5}] coordinates {};`,
-        `      \\addplot+[boxplot prepared={label=+Pre-LN, median=79.8, upper quartile=81.9, lower quartile=77.6, upper whisker=84.1, lower whisker=75.0}] coordinates {};`,
-        `      \\addplot+[boxplot prepared={label=Ours, median=85.1, upper quartile=86.6, lower quartile=83.7, upper whisker=88.4, lower whisker=81.5}] coordinates {};`,
-        `    \\end{axis}`,
-        `  \\end{scope}`,
-      ].join('\n'),
-  },
-];
-
-export const FULL_FIGURE_TEMPLATES: FullFigureTemplate[] = [
-  // ==========================================================================
-  // TEMPLATE 1: NeurIPS / ICLR Joint Pre-LN Transformer + Scaling Plot
-  // ==========================================================================
-  {
-    id: 'tpl_neurips_transformer_joint',
-    title: 'Pre-LN Transformer 架构 + Scaling 实验联合图',
-    venue: 'NeurIPS / ICLR',
-    category: 'transformer',
-    themeId: 'neurips',
-    description:
-      '顶刊经典左架构右实验联合布局：(a) Pre-LN SwiGLU 完整模块含对称残差跳线与 ⊕ 算子，(b) PGFPlots 误差带收敛曲线，统一 1.2cm 垂直步进网格',
-    tags: ['Transformer', 'Residual Skip', 'PGFPlots', 'Figure 1'],
-    designGuide: {
-      intent: '在同一张图中解释模块机制，并用用户提供的实验支撑结论。',
-      layout: ['架构与实验分区，统一子图标题和对齐基线。', '主路径保持单一阅读方向，残差连接绕到模块外侧。'],
-      adapt: ['按实际计算顺序、层数和残差位置重建模块，不固定为 Transformer。', '只有用户提供实验数据时才添加实验面板；不照搬示例数值或性能结论。'],
-    },
-    recommendedPan: { x: 75, y: 520 },
-    recommendedZoom: 1,
-    tikzCode: `% ============================================================================
+// Complex source fixtures used only by parser/export regression tests.
+// No library metadata or AI composition references are shipped with the app.
+export const FIGURE_PARSER_FIXTURES: Array<{ tikzCode: string }> = [
+  { tikzCode: `% ============================================================================
 % AgenTikZ — NeurIPS / ICLR Joint Architecture & Scaling (Publication-Grade)
 % Uniform 1.2cm vertical grid · Symmetric residual bypasses · Clean axis labels
 % ============================================================================
@@ -333,29 +78,8 @@ export const FULL_FIGURE_TEMPLATES: FullFigureTemplate[] = [
   \\node[subcaption, subtype=caption, draw=none, fill=none, minimum width=6.0cm, minimum height=0.55cm] (cap_b) at (11.0, -0.35) {\\textbf{(b)} Depth Scaling \\& Stability};
 \\end{tikzpicture}
 % \\caption{Overview of the proposed Pre-LN SwiGLU Transformer architecture (a) and its scaling performance across model depths (b).}
-% \\label{fig:transformer_scaling}`,
-  },
-
-  // ==========================================================================
-  // TEMPLATE 2: Parallel Multi-Branch Q-K-V Attention & Gated Fusion (ICLR/ICML)
-  // ==========================================================================
-  {
-    id: 'tpl_iclr_qkv_attention',
-    title: '并行三分支 Q-K-V 注意力与门控融合机制细节图',
-    venue: 'ICLR / ICML',
-    category: 'transformer',
-    themeId: 'neurips',
-    description:
-      '精细微观结构图：Query / Key / Value 三路等距并行投影、缩放点积、Causal Softmax 路由与门控残差输出，算子节点严格居中',
-    tags: ['Q-K-V Branches', 'Parallel Layout', 'Dot-Product', 'Micro-Block'],
-    designGuide: {
-      intent: '解释分支并行计算及其汇合关系。',
-      layout: ['并行分支等距排列，共享输入清楚分叉。', '汇合算子位于相关分支之间，给公式标注留出独立空间。'],
-      adapt: ['分支数量、运算、掩码和门控由用户的算法决定，不固定为 Q/K/V 三路。', '重新计算节点间距和连线路由，避免交叉与文字遮挡。'],
-    },
-    recommendedPan: { x: 90, y: 510 },
-    recommendedZoom: 1,
-    tikzCode: `% ============================================================================
+% \\label{fig:transformer_scaling}` },
+  { tikzCode: `% ============================================================================
 % AgenTikZ — Parallel Q-K-V Scaled Dot-Product Attention (Publication-Grade)
 % Three-way equidistant layout · Operators centered · Clean flow
 % ============================================================================
@@ -406,29 +130,8 @@ export const FULL_FIGURE_TEMPLATES: FullFigureTemplate[] = [
   \\draw[-Stealth, line width=0.7pt, draw=nips_slate!85!black] (av_matmul) -- (out_proj);
 \\end{tikzpicture}
 % \\caption{Detailed computation graph of the parallel Q-K-V scaled dot-product attention module with causal masking.}
-% \\label{fig:qkv_micro_architecture}`,
-  },
-
-  // ==========================================================================
-  // TEMPLATE 3: CVPR / ICCV Multi-Scale 3D Feature Pyramid (FPN / U-Net)
-  // ==========================================================================
-  {
-    id: 'tpl_cvpr_3d_pyramid',
-    title: '多尺度 3D 视觉特征金字塔与自顶向下融合 (FPN / U-Net)',
-    venue: 'CVPR / ICCV',
-    category: 'vision_multimodal',
-    themeId: 'cvpr',
-    description:
-      '多阶段 3D 特征图立方体 (C×H×W) 空间降采样、通道递增与自顶向下 FPN 跨尺度融合，backbone 与 neck 严格 x 对齐',
-    tags: ['3D Feature Cube', 'Backbone', 'FPN Fusion', 'Vision'],
-    designGuide: {
-      intent: '表达层级特征及跨尺度信息融合。',
-      layout: ['主干各阶段沿一个方向排列，融合层与对应阶段对齐。', '用张量块表达尺度变化，以连线标签区分上下采样和横向连接。'],
-      adapt: ['依据真实输入尺寸、阶段数量和融合方式重构，不预设 FPN 或 U-Net。', '维度未知时使用符号或询问用户，不复制示例通道数。'],
-    },
-    recommendedPan: { x: 80, y: 480 },
-    recommendedZoom: 1,
-    tikzCode: `% ============================================================================
+% \\label{fig:qkv_micro_architecture}` },
+  { tikzCode: `% ============================================================================
 % AgenTikZ — CVPR / ICCV Multi-Scale 3D Feature Pyramid (Publication-Grade)
 % Backbone & FPN blocks share x-coordinates · Clear volume shrinkage
 % ============================================================================
@@ -466,29 +169,8 @@ export const FULL_FIGURE_TEMPLATES: FullFigureTemplate[] = [
   \\draw[-Stealth, line width=0.75pt, draw=cvpr_navy!85!black, densely dashed] (c2) -- (p2);
 \\end{tikzpicture}
 % \\caption{Multi-scale 3D feature pyramid network with bottom-up spatial downsampling and top-down lateral fusion.}
-% \\label{fig:cvpr_3d_fpn}`,
-  },
-
-  // ==========================================================================
-  // TEMPLATE 4: Vision-Language Multimodal Alignment (CLIP / VLM Style)
-  // ==========================================================================
-  {
-    id: 'tpl_vlm_multimodal_alignment',
-    title: '视觉-语言双流多模态对齐架构 + 相似度热力图 (VLM / CLIP)',
-    venue: 'CVPR / NeurIPS',
-    category: 'vision_multimodal',
-    themeId: 'cvpr',
-    description:
-      '严格对称双塔架构：视觉 ViT Patch 编码流与文本 Causal Attention 编码流，⊗ 对比算子精确居中，右侧跨模态余弦相似度热力图',
-    tags: ['Multimodal VLM', 'Dual Encoder', 'Contrastive Heatmap', '3D Tokens'],
-    designGuide: {
-      intent: '对照多个输入流，并说明其交互或对齐机制。',
-      layout: ['各输入流分栏，语义对应的阶段对齐。', '交互模块置于分支之间；如需实验矩阵则单独分区。'],
-      adapt: ['流数量、编码器和融合位置服从实际任务，不默认双塔或对比损失。', '没有真实相似度数据时不生成看似实测的热力图。'],
-    },
-    recommendedPan: { x: 75, y: 500 },
-    recommendedZoom: 1,
-    tikzCode: `% ============================================================================
+% \\label{fig:cvpr_3d_fpn}` },
+  { tikzCode: `% ============================================================================
 % AgenTikZ — Vision-Language Contrastive Alignment (Publication-Grade)
 % Strictly symmetric dual towers · Centered ⊗ operator · Clear separation
 % ============================================================================
@@ -539,29 +221,8 @@ export const FULL_FIGURE_TEMPLATES: FullFigureTemplate[] = [
   \\node[subcaption, subtype=caption, draw=none, fill=none, minimum width=5.2cm, minimum height=0.55cm] (cap_vlm_b) at (10.8, -0.2) {\\textbf{(b)} Contrastive Alignment Matrix};
 \\end{tikzpicture}
 % \\caption{Dual-stream vision-language contrastive learning framework (a) and learned token-level similarity matrix (b).}
-% \\label{fig:vlm_alignment}`,
-  },
-
-  // ==========================================================================
-  // TEMPLATE 5: Diffusion / Flow Matching Denoising Pipeline (ICML / NeurIPS)
-  // ==========================================================================
-  {
-    id: 'tpl_diffusion_denoising_pipeline',
-    title: 'Latent Diffusion / Flow Matching 条件去噪生成管线 (DiT)',
-    venue: 'ICML / NeurIPS',
-    category: 'generative',
-    themeId: 'neurips',
-    description:
-      '等距横向流水线：高斯噪声潜变量 → Spatial Self-Attention → AdaLN-Zero 条件调制 → 去噪输出，条件路径从上方清晰注入',
-    tags: ['Diffusion / DiT', 'Flow Matching', 'AdaLN Conditioning', 'Generative'],
-    designGuide: {
-      intent: '解释带外部条件的处理或生成流程。',
-      layout: ['主流程横向推进，条件输入从另一方向注入。', '重复阶段用容器表达，目标函数与主连线分开。'],
-      adapt: ['按实际过程区分训练、推理和迭代，不混用不同生成方法的公式。', '根据用户说明选择输入、条件、步骤和输出，不固定为 DiT 或 AdaLN。'],
-    },
-    recommendedPan: { x: 75, y: 485 },
-    recommendedZoom: 1,
-    tikzCode: `% ============================================================================
+% \\label{fig:vlm_alignment}` },
+  { tikzCode: `% ============================================================================
 % AgenTikZ — Conditional Latent Diffusion Transformer (Publication-Grade)
 % Equidistant horizontal pipeline · Clear top-down conditioning injection
 % ============================================================================
@@ -597,29 +258,8 @@ export const FULL_FIGURE_TEMPLATES: FullFigureTemplate[] = [
   \\draw[-Stealth, line width=0.7pt, draw=nips_slate!85!black] (dit_mlp) -- (x0);
 \\end{tikzpicture}
 % \\caption{Conditional Flow Matching / Diffusion Transformer (DiT) pipeline with adaptive layer norm (AdaLN-Zero) modulation.}
-% \\label{fig:diffusion_dit_pipeline}`,
-  },
-
-  // ==========================================================================
-  // TEMPLATE 6: Nature (NPG) Multi-Panel Experimental Data Dashboard
-  // ==========================================================================
-  {
-    id: 'tpl_nature_dashboard',
-    title: 'Nature 风格：多面板科研实验图表 (Line + Bar + Boxplot)',
-    venue: 'Nature / Science',
-    category: 'data_charts',
-    themeId: 'nature',
-    description:
-      'NPG 配色规范双联实验图：(a) 三曲线误差带收敛对比 (b) 三组消融柱状图，严格等宽等高 5.8cm × 4.4cm，子图注精确居中',
-    tags: ['PGFPlots', 'Grouped Bar', 'Error Band', 'Nature NPG'],
-    designGuide: {
-      intent: '用多个实验面板回答彼此相关但不同的研究问题。',
-      layout: ['连续变化用折线、类别比较用柱形、分布用箱线；不强制使用示例组合。', '统一面板尺寸、字体与系列标识，保留单位、图例和误差定义。'],
-      adapt: ['先检查用户数据、指标和比较对象，再选择图表与坐标范围。', '不得将模板示例数据当作真实结果；缺少数据时询问或仅在明确要求时绘制标注为示意的占位图。'],
-    },
-    recommendedPan: { x: 75, y: 475 },
-    recommendedZoom: 1,
-    tikzCode: `% ============================================================================
+% \\label{fig:diffusion_dit_pipeline}` },
+  { tikzCode: `% ============================================================================
 % AgenTikZ — Nature (NPG) Multi-Panel Experimental Figure (Publication-Grade)
 % Strictly equal panel sizes · NPG canonical palette · 0.55pt fine axis
 % ============================================================================
@@ -677,6 +317,5 @@ export const FULL_FIGURE_TEMPLATES: FullFigureTemplate[] = [
   \\node[subcaption, subtype=caption, draw=none, fill=none, minimum width=5.8cm, minimum height=0.55cm] (npg_cap_b) at (10.2, -0.2) {\\textbf{(b)} Multi-Task Ablation};
 \\end{tikzpicture}
 % \\caption{Experimental evaluation following Nature Publishing Group (NPG) figure guidelines: (a) scaling efficiency across training tokens and (b) multi-domain accuracy.}
-% \\label{fig:nature_evaluation}`,
-  },
+% \\label{fig:nature_evaluation}` }
 ];

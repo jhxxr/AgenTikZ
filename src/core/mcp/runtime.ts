@@ -4,7 +4,7 @@ import { useWorkspaceStore } from '../../store/useWorkspaceStore';
 import { parseTikzDocument } from '../parser/parser';
 import { analyzeTikzLayout, autoRepairTikzLayout } from '../agent/layout-diagnostics';
 import { computeTikzDiff } from '../agent/tikz-diff';
-import { PRIMITIVE_LIBRARY } from '../templates/dl-templates';
+import { PRIMITIVE_LIBRARY } from '../tikz/primitives';
 import { JOURNAL_THEMES } from '../themes/journal-presets';
 import { getMcpRequest, sameCanvas, sourceHash } from './context';
 import type { McpToolRequest } from '../../types/mcp';

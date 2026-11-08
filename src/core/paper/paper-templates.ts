@@ -9,6 +9,7 @@ import { JournalThemeId } from '../../types/theme';
 import { JOURNAL_THEMES } from '../themes/journal-presets';
 
 export type PaperVenueTemplateId =
+  | 'blank'
   | 'nature'
   | 'neurips'
   | 'cvpr'
@@ -89,87 +90,43 @@ export function generateAgentikzMacrosSty(_activeThemeId?: JournalThemeId): stri
   ].join('\n');
 }
 
-const DEFAULT_BIB_CONTENT = `% references.bib — Managed in AgenTikZ Paper Workspace
-@article{vaswani2017attention,
-  title={Attention is all you need},
-  author={Vaswani, Ashish and Shazeer, Noam and Parmar, Niki and Uszkoreit, Jakob and Jones, Llion and Gomez, Aidan N and Kaiser, {\\L}ukasz and Polosukhin, Illia},
-  journal={Advances in Neural Information Processing Systems (NeurIPS)},
-  volume={30},
-  year={2017}
+function buildStarterSections() {
+  return Object.fromEntries([
+    ['introduction', 'Introduction'], ['method', 'Method'], ['experiments', 'Experiments'],
+  ].map(([file, title]) => [
+    `sections/${file}.tex`,
+    `\\section{${title}}\n\\label{sec:${file}}\n\n% Write your ${title.toLowerCase()} here.\n`,
+  ]));
 }
 
-@inproceedings{he2016deep,
-  title={Deep residual learning for image recognition},
-  author={He, Kaiming and Zhang, Xiangyu and Ren, Shaoqing and Sun, Jian},
-  booktitle={Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
-  pages={770--778},
-  year={2016}
-}
-`;
-
-function buildStarterSections(figureStem: string = 'fig1-architecture') {
-  return {
-    'sections/introduction.tex': [
-      '% sections/introduction.tex',
-      '\\section{Introduction}',
-      '\\label{sec:intro}',
-      '',
-      'Understanding complex scientific systems requires both principled modeling and clear visual evidence.',
-      'As illustrated in Figure~\\ref{fig:overview}, our framework integrates structured representation learning with quantitative empirical validation \\cite{vaswani2017attention,he2016deep}.',
-      '',
-    ].join('\n'),
-    'sections/method.tex': [
-      '% sections/method.tex',
-      '\\section{Methodology}',
-      '\\label{sec:method}',
-      '',
-      'We formulate the core pipeline in Figure~\\ref{fig:overview}. Each figure is maintained as a modular TikZ code package under \\texttt{figures/} and synchronized live with the AgenTikZ figure canvas.',
-      '',
-      '\\begin{figure}[t]',
-      '  \\centering',
-      `  \\resizebox{\\columnwidth}{!}{\\input{figures/${figureStem}.tikz}}`,
-      '  \\caption{\\textbf{Overview of the proposed architecture.} \\textbf{a}, Primary representation pathway and core innovation module. \\textbf{b}, Quantitative ablation and convergence comparison.}',
-      '  \\label{fig:overview}',
-      '\\end{figure}',
-      '',
-    ].join('\n'),
-    'sections/experiments.tex': [
-      '% sections/experiments.tex',
-      '\\section{Experiments and Results}',
-      '\\label{sec:experiments}',
-      '',
-      'We evaluate our method across standard benchmarks. Table~\\ref{tab:main_results} summarizes the quantitative improvements.',
-      '',
-      '\\begin{table}[t]',
-      '  \\centering',
-      '  \\caption{Quantitative comparison on benchmark datasets (mean $\\pm$ SD across $n=5$ independent runs).}',
-      '  \\label{tab:main_results}',
-      '  \\begin{tabular}{lccc}',
-      '    \\toprule',
-      '    Method & Params (M) & Accuracy (\\%) & Latency (ms) \\\\',
-      '    \\midrule',
-      '    Baseline \\cite{he2016deep} & 25.6 & $78.4 \\pm 0.3$ & 14.2 \\\\',
-      '    Transformer \\cite{vaswani2017attention} & 44.1 & $81.9 \\pm 0.2$ & 19.5 \\\\',
-      '    \\textbf{Ours (Proposed)} & \\textbf{28.2} & $\\mathbf{85.6 \\pm 0.2}$ & \\textbf{12.8} \\\\',
-      '    \\bottomrule',
-      '  \\end{tabular}',
-      '\\end{table}',
-      '',
-    ].join('\n'),
-  };
+function escapeTitle(title: string): string {
+  const escapes: Record<string, string> = { '\\': '\\textbackslash{}', '&': '\\&', '%': '\\%', '$': '\\$', '#': '\\#', '_': '\\_', '{': '\\{', '}': '\\}', '~': '\\textasciitilde{}', '^': '\\textasciicircum{}' };
+  return title.replace(/[\\&%$#_{}~^]/g, (char) => escapes[char]);
 }
 
 export function buildPaperTemplateFiles(
   templateId: PaperVenueTemplateId,
   paperTitle: string = 'Title of Your Scientific Paper'
 ): Record<string, string> {
-  const sections = buildStarterSections('fig1-architecture');
+  if (templateId === 'blank') {
+    return {
+      'main.tex': [
+        '\\documentclass[11pt]{article}', '\\usepackage[margin=2.4cm]{geometry}',
+        '\\usepackage{graphicx}', '\\usepackage{amsmath}',
+        `\\title{${escapeTitle(paperTitle)}}`, '\\author{}', '\\date{}', '',
+        '\\begin{document}', '\\maketitle', '', '% Start writing here.', '', '\\end{document}', '',
+      ].join('\n'),
+      'references.bib': '% Add your BibTeX references here.\n',
+    };
+  }
+  const sections = buildStarterSections();
   const macrosSty = generateAgentikzMacrosSty();
 
   const isTwoColumn = templateId === 'cvpr' || templateId === 'ieee';
   const docClassOptions = isTwoColumn ? '[10pt,twocolumn]' : '[11pt]';
 
   const venueHeaderComment: Record<PaperVenueTemplateId, string> = {
+    blank: '% Blank manuscript',
     nature: '% Nature / Science Portfolio Manuscript Template (AgenTikZ One-Stop Workspace)',
     neurips: '% NeurIPS / ICLR / ICML Manuscript Template (AgenTikZ One-Stop Workspace)',
     cvpr: '% CVPR / ICCV / ECCV Two-Column Manuscript Template (AgenTikZ One-Stop Workspace)',
@@ -188,16 +145,15 @@ export function buildPaperTemplateFiles(
     '\\usepackage{hyperref}',
     '\\usepackage{styles/agentikz-macros}',
     '',
-    `\\title{\\textbf{${paperTitle}}}`,
-    '\\author{Author One$^{1}$ \\and Author Two$^{1,2}$ \\\\[4pt]',
-    '  \\small $^1$Department of Computer Science \\quad $^2$Research Institute}',
+    `\\title{${escapeTitle(paperTitle)}}`,
+    '\\author{Your Name}',
     '\\date{\\today}',
     '',
     '\\begin{document}',
     '\\maketitle',
     '',
     '\\begin{abstract}',
-    'We present a unified method and experimental study. Edit this manuscript directly in AgenTikZ Studio while designing publication-grade figures in the synchronized \\texttt{figures/} workspace.',
+    '% Write your abstract here.',
     '\\end{abstract}',
     '',
     '\\input{sections/introduction.tex}',
@@ -214,54 +170,59 @@ export function buildPaperTemplateFiles(
   return {
     'main.tex': mainTex,
     ...sections,
-    'references.bib': DEFAULT_BIB_CONTENT,
+    'references.bib': '% Add your BibTeX references here.\n',
     'styles/agentikz-macros.sty': macrosSty,
   };
 }
 
 export const PAPER_VENUE_TEMPLATES: PaperVenueTemplate[] = [
   {
+    id: 'blank', name: '空白论文', badge: '空白论文', defaultThemeId: 'neurips',
+    description: '仅保留可编译的基础文档，自由组织你的论文内容。',
+    columnLayout: 'single', files: buildPaperTemplateFiles('blank'),
+  },
+  {
     id: 'nature',
     name: 'Nature / Science 顶刊标准手稿',
-    badge: 'NPG Minimal · 89mm / 183mm',
+    badge: 'Nature',
     defaultThemeId: 'nature',
-    description: '单栏手稿排版 + NPG 低饱和度色板宏包，默认遵循 Nature 5点图件契约与无网格开脊图表。',
+    description: '单栏写作起点，包含章节与参考文献；不是期刊官方投稿样式。',
     columnLayout: 'single',
     files: buildPaperTemplateFiles('nature'),
   },
   {
     id: 'neurips',
     name: 'NeurIPS / ICLR / ICML 机器学习手稿',
-    badge: 'ML Flagship · 单栏宽幅',
+    badge: 'NeurIPS',
     defaultThemeId: 'neurips',
-    description: 'AI 顶会标准单栏结构，内置 Introduction / Method / Experiments 分章节管理与 TikZ 代码包引用。',
+    description: '机器学习论文的章节结构，单栏写作起点；投稿前请替换为会议官方样式。',
     columnLayout: 'single',
     files: buildPaperTemplateFiles('neurips'),
   },
   {
     id: 'cvpr',
     name: 'CVPR / ICCV / ECCV 视觉双栏手稿',
-    badge: 'CVPR 双栏 · twocolumn',
+    badge: 'CVPR',
     defaultThemeId: 'cvpr',
-    description: '计算机视觉顶会双栏排版 (twocolumn)，完美支持单栏 \\columnwidth 与跨双栏 figure* \\textwidth 插图。',
+    description: '双栏写作起点，支持单栏和跨栏配图；不是会议官方投稿样式。',
     columnLayout: 'double',
     files: buildPaperTemplateFiles('cvpr'),
   },
   {
     id: 'ieee',
     name: 'IEEE Transactions 期刊双栏手稿',
-    badge: 'IEEE TPAMI / TIP · 双栏',
+    badge: 'IEEE',
     defaultThemeId: 'ieee',
-    description: 'IEEE 期刊紧凑双栏学术版式，配合高对比黑白打印友好色板与正交方角框体。',
+    description: '双栏写作起点，包含章节与参考文献；投稿前请替换为期刊官方样式。',
     columnLayout: 'double',
     files: buildPaperTemplateFiles('ieee'),
   },
   {
     id: 'arxiv',
     name: 'arXiv 预印本清爽通用模板',
-    badge: 'arXiv Preprint · 通用',
+    badge: 'arXiv',
     defaultThemeId: 'neurips',
-    description: '零外部复杂 cls 依赖，任何 TeX Live 环境一键编译出 PDF，适合快速撰写预印本与技术报告。',
+    description: '通用 article 单栏文档，适合预印本和技术报告。',
     columnLayout: 'single',
     files: buildPaperTemplateFiles('arxiv'),
   },

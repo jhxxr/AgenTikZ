@@ -12,7 +12,7 @@ import {
   patchNodeLabel,
   patchNodeOptions,
 } from '../patcher';
-import { FULL_FIGURE_TEMPLATES } from '../../templates/dl-templates';
+import { FIGURE_PARSER_FIXTURES } from '../../parser/__tests__/fixtures/figure-examples';
 import { useSettingsStore } from '../../../store/useSettingsStore';
 
 const SAMPLE_TIKZ = `% Header comment that must NEVER be lost
@@ -200,7 +200,7 @@ describe('Lossless TikZ CST/AST Parser & Surgical Patcher', () => {
   });
 
   it('never accumulates inline or leading spaces across 50 consecutive drag frames on nodes, charts, titles, legends, or edges', () => {
-    let source = FULL_FIGURE_TEMPLATES[0].tikzCode;
+    let source = FIGURE_PARSER_FIXTURES[0].tikzCode;
 
     for (let frame = 1; frame <= 50; frame++) {
       // 1. Drag node position
@@ -259,9 +259,9 @@ describe('Lossless TikZ CST/AST Parser & Surgical Patcher', () => {
     }
   });
 
-  it('parses all 6 publication full-figure templates cleanly with valid nodes, edges, or charts', () => {
-    expect(FULL_FIGURE_TEMPLATES.length).toBeGreaterThanOrEqual(6);
-    for (const tpl of FULL_FIGURE_TEMPLATES) {
+  it('parses complex regression drawings cleanly with valid nodes, edges, or charts', () => {
+    expect(FIGURE_PARSER_FIXTURES.length).toBeGreaterThanOrEqual(6);
+    for (const tpl of FIGURE_PARSER_FIXTURES) {
       const doc = parseTikzDocument(tpl.tikzCode);
       expect(doc.elements.length).toBeGreaterThan(0);
       expect(doc.diagnostics.length).toBe(0);

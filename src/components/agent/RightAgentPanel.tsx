@@ -4,7 +4,6 @@ import { useAgentStore } from '../../store/useAgentStore';
 import { useWorkspaceStore } from '../../store/useWorkspaceStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import { useProjectStore } from '../../store/useProjectStore';
-import { FULL_FIGURE_TEMPLATES } from '../../core/templates/dl-templates';
 import { JOURNAL_THEMES } from '../../core/themes/journal-presets';
 import { PUBLICATION_WORKFLOW_TEMPLATES } from '../../core/agent/figure-contract';
 import { parseTikzDocument } from '../../core/parser/parser';
@@ -57,7 +56,6 @@ export const RightAgentPanel: React.FC = () => {
     setAttachCanvasContext,
     setAttachSelectionContext,
     setAutoLayoutRepairEnabled,
-    setTemplateReference,
     createNewSession,
     switchSession,
     probeLocalAgents,
@@ -82,7 +80,6 @@ export const RightAgentPanel: React.FC = () => {
     setAttachCanvasContext: s.setAttachCanvasContext,
     setAttachSelectionContext: s.setAttachSelectionContext,
     setAutoLayoutRepairEnabled: s.setAutoLayoutRepairEnabled,
-    setTemplateReference: s.setTemplateReference,
     createNewSession: s.createNewSession,
     switchSession: s.switchSession,
     probeLocalAgents: s.probeLocalAgents,
@@ -153,7 +150,6 @@ export const RightAgentPanel: React.FC = () => {
 
   const activeSession =
     sessions.find((s) => s.id === activeSessionId) || sessions[0];
-  const referenceTemplate = FULL_FIGURE_TEMPLATES.find((template) => template.id === activeSession?.templateReferenceId);
   const activeProvider =
     providers.find((p) => p.id === activeAgentId) || providers[0];
   const activeTheme = JOURNAL_THEMES[activeThemeId] || JOURNAL_THEMES.neurips;
@@ -919,7 +915,7 @@ export const RightAgentPanel: React.FC = () => {
                 : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'
             }`}
           >
-            <span>更多模板</span>
+            <span>更多技能</span>
             <ChevronDown className="w-3 h-3" />
           </button>
         </div>
@@ -932,7 +928,7 @@ export const RightAgentPanel: React.FC = () => {
           >
             <div className="flex items-center justify-between border-b border-slate-100 pb-1.5">
               <span className="text-[10.5px] font-semibold text-slate-700">
-                ✦ 顶刊契约模板与单项规范体检
+                ✦ 绘图规范与单项体检
               </span>
               <button
                 type="button"
@@ -945,7 +941,7 @@ export const RightAgentPanel: React.FC = () => {
 
             <div className="space-y-1">
               <div className="text-[10px] font-medium text-slate-400">
-                Nature Skills 5点契约工作流模板
+                Nature Skills 5点契约工作流
               </div>
               <div className="grid grid-cols-2 gap-1.5">
                 {PUBLICATION_WORKFLOW_TEMPLATES.map((tpl) => (
@@ -1060,19 +1056,7 @@ export const RightAgentPanel: React.FC = () => {
             </span>
           </div>
 
-          {referenceTemplate && (
-            <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-50 border border-blue-200 text-[10px] text-blue-800 max-w-[140px]">
-              <span className="truncate" title={referenceTemplate.title}>
-                参考:{referenceTemplate.title}
-              </span>
-              <button
-                onClick={() => setTemplateReference()}
-                className="text-slate-400 hover:text-blue-700 shrink-0 cursor-pointer"
-              >
-                ×
-              </button>
-            </div>
-          )}
+
         </div>
 
         {/* Multi-line Prompt Input Box */}

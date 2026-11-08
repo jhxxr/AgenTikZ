@@ -161,7 +161,7 @@ export const InsertFigureModal: React.FC = () => {
     setIsSubmitting(true);
     setStatusMsg(null);
     try {
-      await insertFigureIntoPaper({
+      const result = await insertFigureIntoPaper({
         targetTexFile: targetTexRelPath,
         mode,
         span: columnSpan,
@@ -170,18 +170,21 @@ export const InsertFigureModal: React.FC = () => {
         caption,
         label,
       });
+      if (!result.ok) throw new Error('配图写入失败');
       setStatusMsg(`✓ 已将配图插入到 ${targetTexRelPath} 并自动同步 styles/agentikz-macros.sty`);
+      return true;
     } catch (e) {
       setStatusMsg(`插入失败: ${String(e)}`);
+      return false;
     } finally {
       setIsSubmitting(false);
     }
   };
 
   const handleInsertAndJumpToPaper = async () => {
-    await handleInsertIntoPaper();
+    if (!await handleInsertIntoPaper()) return;
     await openPaperFile(targetTexRelPath);
-    setWorkbenchMode('split');
+    setWorkbenchMode('paper');
     setInsertFigureModalOpen(false);
   };
 
@@ -375,7 +378,7 @@ export const InsertFigureModal: React.FC = () => {
             onClick={handleInsertAndJumpToPaper}
             disabled={isSubmitting}
           >
-            ⚖️ 写入并开启「论文 + 配图同屏联动」
+            写入并返回论文
           </button>
         </div>
       </div>

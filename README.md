@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Visual TikZ &amp; PGFPlots studio for scientific figures, powered by your own local AI agents.</strong><br>
-  Lossless AST surgical patching · BYOA via ACP v1 · Venue-ready deep learning &amp; chart templates
+  Lossless AST surgical patching · BYOA via ACP v1 · Dedicated paper writing &amp; scientific drawing
 </p>
 
 <p align="center">
@@ -27,7 +27,7 @@
   <a href="#interface--workflow-tour">Screenshots</a> ·
   <a href="#key-features">Key Features</a> ·
   <a href="#architecture">Architecture</a> ·
-  <a href="#publication-templates--themes">Templates &amp; Themes</a> ·
+  <a href="#paper-templates--themes">Paper Templates &amp; Themes</a> ·
   <a href="#quick-start">Quick Start</a> ·
   <a href="#byoa-acp-setup--prompting-guide">BYOA &amp; Prompt Guide</a> ·
   <a href="#project-structure">Project Structure</a> ·
@@ -52,20 +52,18 @@ Real-time bidirectional synchronization between the CodeMirror 6 TikZ editor (le
 
 ![Visual Studio, Lossless AST Code Sync & BYOA Agent Diff Review](docs/screenshots/studio-overview.png)
 
-### 2. Publication Template Gallery, SVG Topology Minimaps & 3D Feature Volume Inspector
-Browse 6 built-in venue templates with live AST-rendered SVG topology minimaps and 13 deep learning / PGFPlots primitives on the left, while inspecting 3D feature pyramid cuboids ($\mathbf{C}_2 \rightarrow \mathbf{C}_5$), channel dimensions ($C\times H\times W$), saliency roles, and journal color tokens on the right.
-
-![Publication Template Gallery & 3D Feature Volume Inspector](docs/screenshots/templates-and-3d-vision.png)
+### 2. Drawing Primitives & 3D Feature Inspector
+Start from a blank canvas and add nodes, 3D feature volumes, and PGFPlots charts using the toolbar or primitives. The full-figure template gallery, template loader, and AI template-reference injection have been removed. Existing drawings remain editable.
 
 ### 3. Nature (NPG) Multi-Panel Scientific Charts, Project Assets & AI Cutout Generator
 Manage manuscript files (`main.tex`, `sections/*.tex`), multi-canvas figures (`figures/*.tikz`), and transparent AI scientific illustrations on the left, while editing multi-panel PGFPlots error-band curves, ablation bar charts, and data series tables on the right.
 
 ![Nature Multi-Panel PGFPlots Dashboard & Interactive Data Series Inspector](docs/screenshots/nature-pgfplots-dashboard.png)
 
-### 4. One-Stop LaTeX Manuscript + Figure Split-Screen IDE (`⚖️ 同屏` Mode)
-Write your paper manuscript side-by-side with the interactive figure canvas. Insert figures directly at the LaTeX cursor with `\input{figures/...tikz}`, jump to detected figure references, and keep `\usepackage{styles/agentikz-macros}` automatically synchronized across themes.
+### 4. Dedicated Paper Workspace: Files, Outline, Source & PDF
+Writing and drawing have separate workspaces. The paper workspace includes a file tree, section outline, CodeMirror editor, and resizable PDF preview. Creating papers, opening chapters, or inserting figures never opens the drawing canvas automatically. Paper starters remain available (blank, Nature, NeurIPS, CVPR, IEEE, arXiv). PDF compilation requires the desktop app and local TeX Live; browser mode does not simulate compilation.
 
-![One-Stop LaTeX Manuscript + Figure Split-Screen IDE](docs/screenshots/paper-split-workbench.png)
+The divider includes source → PDF and PDF → source SyncTeX controls; `Ctrl/⌘ + click` on the PDF also returns to the corresponding source line. Desktop builds enable `-synctex=1` and require the `synctex` binary from your TeX installation. Recompile after source edits to refresh the map.
 
 ### 5. Agentero-Style BYOA (ACP v1) & 5-Point Figure Contract Settings Center
 Configure local ACP agents (**Claude Code**, **OpenCode**, **Codex CLI**, **Gemini CLI**, **Cursor Agent**, **Kimi Code**) with dual-tier PATH + bundled adapter detection, one-click `stdio` handshake verification, and Nature Skills 5-Point Figure Contract enforcement.
@@ -110,20 +108,13 @@ flowchart TB
 
 - **Lossless CST/AST Engine**: Located in `src/core/parser/`, the parser resolves `\tikzset` style definitions, `\node` statements, orthogonal/curved/residual `\draw` edges, and `\begin{axis}...\end{axis}` PGFPlots environments using depth-aware bracket `[]` and brace `{}` matching so math expressions like `$p(x;\theta)$` never truncate statement boundaries.
 - **Official ACP v1 Transport**: Located in `src-tauri/src/acp/mod.rs`, the desktop backend launches locally installed ACP adapters over `stdio` with bounded initialization (`20s`), session creation (`20s`), prompt execution (`180s`), and transport shutdown timeouts.
-- **Release Scope**: Current release **v0.4.3** provides full visual editing, 6 publication templates, 4 venue themes, local TeX Live preview, `stdio`-based ACP v1 prompt/stream integration, and built-in/external MCP services. Local tool permissions are denied by default; **Settings → Agent → 完整本机访问 (Full local access)** enables cross-folder file access and native agent commands.
+- **Release Scope**: Current release **v0.4.4** provides full visual editing, a dedicated paper workspace, paper starters, 4 venue themes, local TeX Live preview, `stdio`-based ACP v1 prompt/stream integration, and built-in/external MCP services. Local tool permissions are denied by default; **Settings → Agent → 完整本机访问 (Full local access)** enables cross-folder file access and native agent commands.
 
-## Publication Templates & Themes
+## Paper Templates & Themes
 
-### 6 Built-In Full-Figure Templates
+### Paper Starters
 
-| Template | Target Venue | Category | Included Components |
-| --- | --- | --- | --- |
-| **Pre-LN Transformer + Scaling Plot** | NeurIPS / ICLR | `transformer` | RoPE Embedding, RMSNorm, Multi-Head Self-Attention, SwiGLU FFN, symmetric orthogonal residual skips, and 3-curve error-band PGFPlots chart |
-| **Parallel Q-K-V & Gated Attention** | ICLR / ICML | `transformer` | Equidistant 3-branch $\mathbf{Q}/\mathbf{K}/\mathbf{V}$ projections, $\otimes$ dot-product operators, causal softmax, and formula callouts |
-| **Multi-Scale 3D Feature Pyramid (FPN)** | CVPR / ICCV | `vision_multimodal` | Hierarchical 3D feature volumes ($\mathbf{C}_2 \rightarrow \mathbf{C}_5$), spatial downsampling, top-down FPN neck, and lateral skip connections |
-| **Vision-Language Contrastive Alignment** | CVPR / NeurIPS | `vision_multimodal` | Symmetric ViT + Text Transformer dual towers, centered InfoNCE loss, and cross-modal cosine similarity heatmap |
-| **Latent Diffusion / Flow Matching (DiT)** | ICML / NeurIPS | `generative` | Noisy latent cuboid $\mathbf{z}_t$, spatial-temporal self-attention, top-down AdaLN-Zero $\gamma,\beta$ modulation, and Flow Matching objective |
-| **Multi-Panel Experimental Dashboard** | Nature / Science | `data_charts` | NPG 0.55pt fine-axis dual panel: (a) 3-curve sample efficiency with error bands and (b) 3-group cross-domain ablation bar chart |
+Blank, Nature, NeurIPS, CVPR, IEEE, and arXiv writing starters are retained. They generate manuscript sources and chapters without example figures or fabricated experiment data. These generic article-based starters are not official submission styles; use the venue's official style before submission.
 
 ### 4 Journal Color & Typography Presets
 
@@ -136,8 +127,8 @@ flowchart TB
 
 | Mode | Best For | Requirements |
 | --- | --- | --- |
-| **Desktop App (`tauri dev` / build)** | Full experience: Visual Canvas + Local ACP Agents + Local TeX Live compilation | **Node.js >= 20**, **Rust (stable)**, WebView2 (Windows) / webkit2gtk (Linux) |
-| **Web Studio (`npm run dev`)** | Instant browser trial of the visual TikZ/PGFPlots canvas, lossless code sync, and exports | **Node.js >= 20** and npm |
+| **Desktop App (`tauri dev` / build)** | Full experience: Visual Canvas + Local ACP Agents + Local TeX Live compilation | **Node.js >= 22.13.0**, **Rust (stable)**, WebView2 (Windows) / webkit2gtk (Linux) |
+| **Web Studio (`npm run dev`)** | Instant browser trial of the visual TikZ/PGFPlots canvas, lossless code sync, and exports | **Node.js >= 22.13.0** and npm |
 
 ### 1. Clone & Install Dependencies
 
@@ -153,7 +144,7 @@ npm ci
 npm run dev
 ```
 
-Open `http://localhost:1420` in your browser. You can load any of the 6 venue templates, drag nodes and 3D cuboids, edit PGFPlots data series, switch journal themes, and export `.tikz` / `.tex` / `.svg` / `.pdf`.
+Open `http://localhost:1420` in your browser. You can edit paper sources, start a blank drawing, drag nodes and 3D cuboids, edit PGFPlots data series, switch journal themes, and export `.tikz` / `.tex` / `.svg` / `.pdf`.
 
 > **Note**: Browser mode intentionally does not connect to local `stdio` processes or generate simulated AI responses. Use the Tauri desktop app below to connect real local ACP agents.
 
@@ -251,11 +242,12 @@ src/
     canvas/         # Interactive SVG + KaTeX canvas, 3D cuboid projection, and PGFPlots renderer
     editor/         # CodeMirror 6 TikZ editor with real-time line & value-span diff banners
     inspector/      # Floating property inspector for geometry, styles, routing, and chart series
-    sidebar/        # Left tabbed sidebar: topology minimap template gallery, primitives, and code
+    sidebar/        # Drawing sidebar: project assets, primitives, and code
     toolbar/        # Top toolbar: tool groups, alignment helpers, theme switcher, TeX preview, exports
   core/
     parser/         # Lossless CST/AST TikZ & PGFPlots parser, surgical span patcher, and unit tests
-    templates/      # 6 publication-grade full-figure templates and 13 modular primitives
+    tikz/           # Modular drawing and chart primitives
+    paper/          # Paper starters and figure-insertion LaTeX utilities
     themes/         # NeurIPS, CVPR, Nature (NPG), and IEEE color tokens and preamble generators
   store/            # Zustand workspace store (undo/redo, AST sync) and ACP agent store + tests
   types/            # TypeScript contracts for TikZ AST spans, themes, and ACP streaming events

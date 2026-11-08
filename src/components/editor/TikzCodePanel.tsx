@@ -9,15 +9,8 @@ import {
 import { StateEffect, StateField, Range } from '@codemirror/state';
 import { useWorkspaceStore } from '../../store/useWorkspaceStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
-import { FULL_FIGURE_TEMPLATES } from '../../core/templates/dl-templates';
 import {
-  Activity,
-  ArrowRight,
-  BookOpen,
-  Check,
-  Copy,
-  FileCode,
-  ShieldCheck,
+  Activity, ArrowRight, BookOpen, Check, Copy, FileCode, ShieldCheck,
 } from 'lucide-react';
 
 import { buildStandaloneLatexDocument } from '../../core/tex/document';
@@ -223,24 +216,20 @@ export const TikzCodePanel: React.FC = () => {
     tikzCode,
     parsedDoc,
     activeThemeId,
-    activeTemplateId,
     selectedIds,
     highlightedLineRange,
     lastChangeInfo,
     setTikzCode,
     setSelectedIds,
-    loadTemplate,
   } = useWorkspaceStore(useShallow((s) => ({
     tikzCode: s.tikzCode,
     parsedDoc: s.parsedDoc,
     activeThemeId: s.activeThemeId,
-    activeTemplateId: s.activeTemplateId,
     selectedIds: s.selectedIds,
     highlightedLineRange: s.highlightedLineRange,
     lastChangeInfo: s.lastChangeInfo,
     setTikzCode: s.setTikzCode,
     setSelectedIds: s.setSelectedIds,
-    loadTemplate: s.loadTemplate,
   })));
   const { codeFontSize, showLineNumbers } = useSettingsStore(useShallow((s) => ({ codeFontSize: s.codeFontSize, showLineNumbers: s.showLineNumbers })));
 
@@ -289,28 +278,12 @@ export const TikzCodePanel: React.FC = () => {
 
   return (
     <div className="flex flex-col h-full bg-white">
-      {/* Code Panel Header Bar + Quick Template Switcher */}
+      {/* Code Panel Header */}
       <div className="px-2.5 py-1.5 border-b border-slate-200 bg-slate-50/70 flex items-center justify-between gap-1.5">
         <div className="flex items-center gap-1.5 min-w-0 flex-1">
           <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
           <BookOpen className="w-3 h-3 text-slate-400 shrink-0" />
-          <select
-            value={activeTemplateId}
-            onChange={(e) => {
-              if (window.confirm('将用内置模板替换当前画布，可撤销。继续吗？')) {
-                loadTemplate(e.target.value);
-              }
-            }}
-            className="text-[11px] bg-white border border-slate-200 rounded px-1.5 py-0.5 text-slate-700 font-medium truncate max-w-[205px] focus:outline-none focus:border-blue-500 cursor-pointer"
-            title="主动载入内置模板（替换当前画布）"
-          >
-            <option value="" disabled>自主绘图 · 可选择快速模板</option>
-            {FULL_FIGURE_TEMPLATES.map((tpl) => (
-              <option key={tpl.id} value={tpl.id}>
-                [{tpl.venue}] {tpl.title}
-              </option>
-            ))}
-          </select>
+          <span className="text-[11px] text-slate-600">TikZ 源码</span>
         </div>
 
         <div className="flex items-center gap-1 shrink-0">

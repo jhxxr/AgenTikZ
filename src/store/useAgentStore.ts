@@ -12,8 +12,6 @@ import { useWorkspaceStore } from './useWorkspaceStore';
 import { useProjectStore } from './useProjectStore';
 import { useMcpStore } from './useMcpStore';
 import { currentCanvasTarget, endMcpRequest, proposalConflict, registerMcpRequest } from '../core/mcp/context';
-import { FULL_FIGURE_TEMPLATES } from '../core/templates/dl-templates';
-import { buildTemplateReferenceContext } from '../core/templates/template-reference';
 import { buildAgentSkillAndLibraryContext } from '../core/agent/agent-knowledge';
 import { compileUserPromptWithStyleGuide } from '../core/agent/prompt-compiler';
 import {
@@ -79,7 +77,6 @@ interface AgentStoreState {
   setAttachCanvasContext: (attach: boolean) => void;
   setAttachSelectionContext: (attach: boolean) => void;
   setAutoLayoutRepairEnabled: (enabled: boolean) => void;
-  setTemplateReference: (templateId?: string) => void;
   createNewSession: () => void;
   switchSession: (sessionId: string) => void;
   probeLocalAgents: () => Promise<void>;
@@ -126,14 +123,6 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
   setAttachCanvasContext: (attachCanvasContext) => set({ attachCanvasContext }),
   setAttachSelectionContext: (attachSelectionContext) => set({ attachSelectionContext }),
   setAutoLayoutRepairEnabled: (autoLayoutRepairEnabled) => set({ autoLayoutRepairEnabled }),
-  setTemplateReference: (templateId) => {
-    const templateReferenceId = FULL_FIGURE_TEMPLATES.find((t) => t.id === templateId)?.id;
-    set((state) => ({
-      sessions: state.sessions.map((session) => session.id === state.activeSessionId
-        ? { ...session, templateReferenceId }
-        : session),
-    }));
-  },
   createNewSession: () => {
     const { activeAgentId, sessions } = get();
     const prefs = useSettingsStore.getState();
@@ -267,21 +256,14 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
     const workspace = useWorkspaceStore.getState();
     const activeThemeId = workspace.activeThemeId || 'neurips';
     const activeSession = sessions.find((session) => session.id === activeSessionId);
-    const templateReferenceId = activeSession?.templateReferenceId;
     const history = (activeSession?.messages || [])
       .filter((message) => message.role !== 'system')
-      .map(({ role, content, templateReferenceId: referenceId }) => ({
-        role,
-        content: referenceId
-          ? `${content}\n[Composition reference only: ${referenceId}]`
-          : content,
-      }));
+      .map(({ role, content }) => ({ role, content }));
     const userMessage: AgentChatMessage = {
       id: `user_${crypto.randomUUID()}`, role: 'user', agentId: activeAgentId,
       timestamp: new Date().toTimeString().slice(0, 5), content: promptText.trim(),
       contextSelectionIds: attachSelectionContext ? [...workspace.selectedIds] : [],
       includeFullCanvas: attachCanvasContext,
-      templateReferenceId,
     };
     set((state) => ({
       isStreaming: true,
@@ -323,7 +305,6 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
         activeSessionId,
         customCommand,
         history,
-        buildTemplateReferenceContext(templateReferenceId),
         agentContext,
         activeThemeId,
       );
@@ -353,7 +334,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
         role: 'system',
         agentId: activeAgentId,
         timestamp,
-        content: '当前画布为空。请先从左侧模板库加载图形，或通过下方输入框让 Agent 绘制架构图。',
+        content: '当前画布为空。请先添加基础组件，或通过下方输入框让 Agent 根据你的需求绘图。',
       };
       set({
         sessions: sessions.map((s) =>
@@ -577,7 +558,6 @@ async function sendViaRealAcp(
   activeSessionId: string,
   customCommand: string,
   history: Array<{ role: string; content: string }>,
-  templateReferences: string,
   agentContext: string,
   activeThemeId: JournalThemeId,
 ): Promise<void> {
@@ -656,7 +636,6 @@ async function sendViaRealAcp(
       agentId,
       prompt,
       canvasTikz,
-      templateReferences,
       agentContext,
       selectedIds,
       customCommand,

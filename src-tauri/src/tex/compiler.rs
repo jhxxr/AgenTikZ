@@ -8,7 +8,7 @@ use tokio::process::Command;
 
 static NEXT_BUILD_ID: AtomicU64 = AtomicU64::new(0);
 
-async fn run_bounded_command(cmd: &mut Command, seconds: u64) -> std::io::Result<Output> {
+pub(super) async fn run_bounded_command(cmd: &mut Command, seconds: u64) -> std::io::Result<Output> {
     // Dropping a timed-out output future must also terminate its child.
     cmd.kill_on_drop(true);
     tokio::time::timeout(Duration::from_secs(seconds), cmd.output())
@@ -103,7 +103,7 @@ fn binary_exists_in_dir(dir: &Path, name: &str) -> Option<PathBuf> {
     None
 }
 
-fn build_tex_command(bin_name: &str, tex_live_bin_dir: Option<&str>) -> Command {
+pub(super) fn build_tex_command(bin_name: &str, tex_live_bin_dir: Option<&str>) -> Command {
     let custom_dir = tex_live_bin_dir
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
@@ -450,7 +450,12 @@ pub async fn tex_compile_paper(
     let run_pass = || async {
         let mut cmd = build_tex_command(engine, tex_live_bin_dir.as_deref());
         apply_project_texinputs(&mut cmd, Some(project_dir.as_str()));
-        cmd.args(["-interaction=nonstopmode", "-halt-on-error", entry_rel])
+        cmd.args([
+            "-interaction=nonstopmode",
+            "-halt-on-error",
+            "-synctex=1",
+            entry_rel,
+        ])
             .current_dir(&root);
         run_bounded_command(&mut cmd, 120).await
     };

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { renderMixedLatexToHtml } from '../../../components/canvas/LatexLabel';
 import { buildStandaloneLatexDocument } from '../../../components/editor/TikzCodePanel';
-import { FULL_FIGURE_TEMPLATES } from '../../templates/dl-templates';
+import { FIGURE_PARSER_FIXTURES } from '../../parser/__tests__/fixtures/figure-examples';
 import { computeSceneTightBounds } from '../svg-exporter';
 
 describe('LatexLabel & KaTeX Formula Rendering (renderMixedLatexToHtml)', () => {
@@ -46,7 +46,7 @@ describe('LatexLabel & KaTeX Formula Rendering (renderMixedLatexToHtml)', () => 
   });
 
   it('generates valid standalone LaTeX documents with hex color hoisting, PGFPlots key declarations, and CJK support', () => {
-    const sampleTikz = `${FULL_FIGURE_TEMPLATES[0].tikzCode}\n% 中文节点测试: 线性输出头 $\\hat{Y}$`;
+    const sampleTikz = `${FIGURE_PARSER_FIXTURES[0].tikzCode}\n% 中文节点测试: 线性输出头 $\\hat{Y}$`;
     const standalone = buildStandaloneLatexDocument(sampleTikz, 'neurips');
 
     expect(standalone).toContain('\\IfFileExists{ctex.sty}{\\usepackage[UTF8]{ctex}}{}');

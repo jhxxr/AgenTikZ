@@ -8,7 +8,6 @@ const mockInvoke = vi.fn();
 import { CanvasFileDocument, useProjectStore } from '../useProjectStore';
 import { useWorkspaceStore } from '../useWorkspaceStore';
 import { EMPTY_TIKZ_CODE } from '../../core/templates/blank-document';
-import { FULL_FIGURE_TEMPLATES } from '../../core/templates/dl-templates';
 
 interface MockStorage {
   store: Record<string, string>;
@@ -92,6 +91,11 @@ describe('useProjectStore', () => {
 
     useProjectStore.setState({
       initialized: true,
+      workbenchMode: 'figure',
+      pickerTab: 'open',
+      isInsertFigureModalOpen: false,
+      lastPaperCursorOffset: null,
+      paperEditRevision: 0,
       projectDir: null,
       projectName: '未关联文件夹 (临时画布)',
       storageDir: null,
@@ -394,22 +398,74 @@ describe('useProjectStore', () => {
       const fileName = await useProjectStore.getState().createNewCanvasFile('Independent drawing');
       expect(fileName).toBeTruthy();
       expect(useWorkspaceStore.getState().tikzCode).toBe(EMPTY_TIKZ_CODE);
-      expect(useWorkspaceStore.getState().activeTemplateId).toBe('');
       await useProjectStore.getState().switchCanvasFile('fig1-architecture.canvas.json');
       expect(useWorkspaceStore.getState().tikzCode).toBe(CODE_A);
     });
 
-    it('uses ready-made code only for an explicitly chosen template', async () => {
-      const template = FULL_FIGURE_TEMPLATES[2];
-      await useProjectStore.getState().createNewCanvasFile('Quick start', template.id);
-      expect(useWorkspaceStore.getState().tikzCode).toBe(template.tikzCode);
-      expect(useWorkspaceStore.getState().activeThemeId).toBe(template.themeId);
-      expect(useWorkspaceStore.getState().activeTemplateId).toBe(template.id);
+    it('preserves the drawing theme but never injects ready-made figure data', async () => {
+      useWorkspaceStore.getState().setActiveTheme('nature');
+      await useProjectStore.getState().createNewCanvasFile('New drawing');
+      expect(useWorkspaceStore.getState().activeThemeId).toBe('nature');
+      expect(useWorkspaceStore.getState().parsedDoc.elements).toEqual([]);
+    });
+  });
+
+  describe('separate paper and drawing workspaces', () => {
+    it('invalidates a SyncTeX build revision only for real source edits, not reads or saves', async () => {
+      useProjectStore.setState({ paperFileContents: { 'main.tex': 'original' } });
+      const revision = useProjectStore.getState().paperEditRevision;
+      useProjectStore.getState().updatePaperFileContent('main.tex', 'original');
+      expect(useProjectStore.getState().paperEditRevision).toBe(revision);
+      useProjectStore.getState().updatePaperFileContent('main.tex', 'edited');
+      expect(useProjectStore.getState().paperEditRevision).toBe(revision + 1);
+      await useProjectStore.getState().openPaperFile('main.tex');
+      await useProjectStore.getState().saveAllDirtyPaperFiles();
+      expect(useProjectStore.getState().paperEditRevision).toBe(revision + 1);
     });
 
-    it('does not silently fall back to the first template for an invalid ID', async () => {
-      await useProjectStore.getState().createNewCanvasFile('Unknown template', 'missing');
+    it('creates a paper from a paper template and opens only the paper workspace', async () => {
+      expect(await useProjectStore.getState().initPaperWorkspace('E:/Papers/NewPaper', 'cvpr', 'My Research')).toBe(true);
+      expect(useProjectStore.getState().workbenchMode).toBe('paper');
+      expect(useProjectStore.getState().activePaperFilePath).toBe('main.tex');
+      expect(useProjectStore.getState().paperFileContents['main.tex']).toContain('twocolumn');
+      expect(useProjectStore.getState().paperFileContents['main.tex']).toContain('My Research');
       expect(useWorkspaceStore.getState().tikzCode).toBe(EMPTY_TIKZ_CODE);
+    });
+
+    it('detects an existing paper on reopen instead of opening its drawing canvas', async () => {
+      await useProjectStore.getState().initPaperWorkspace('E:/Papers/ExistingPaper', 'blank', 'Paper');
+      useProjectStore.getState().setWorkbenchMode('figure');
+      expect(await useProjectStore.getState().openProjectDirectory('E:/Papers/ExistingPaper')).toBe(true);
+      expect(useProjectStore.getState().workbenchMode).toBe('paper');
+    });
+
+    it('does not create a manuscript just because a drawing project was opened', async () => {
+      expect(await useProjectStore.getState().openProjectDirectory('E:/Figures/OnlyDrawings')).toBe(true);
+      expect(useProjectStore.getState().workbenchMode).toBe('figure');
+      expect(useProjectStore.getState().paperFiles).toEqual([]);
+    });
+
+    it('keeps paper navigation and insertion independent of canvas visibility', async () => {
+      await useProjectStore.getState().initPaperWorkspace('E:/Papers/FocusedPaper', 'arxiv');
+      await useProjectStore.getState().openPaperFile('sections/method.tex');
+      expect(useProjectStore.getState().workbenchMode).toBe('paper');
+      expect((await useProjectStore.getState().quickInsertActiveFigureIntoPaper()).ok).toBe(true);
+      expect(useProjectStore.getState().workbenchMode).toBe('paper');
+      expect(useProjectStore.getState().paperFileContents['sections/method.tex']).toMatch(/\\begin\{figure\*?\}/);
+    });
+
+    it('has an explicit new-paper entry point separate from opening an existing project', () => {
+      useProjectStore.getState().setPickerOpen(true, 'create_template');
+      expect(useProjectStore.getState().pickerTab).toBe('create_template');
+      useProjectStore.getState().setPickerOpen(true);
+      expect(useProjectStore.getState().pickerTab).toBe('open');
+    });
+
+    it('preserves an existing manuscript when initialized again', async () => {
+      await useProjectStore.getState().initPaperWorkspace('E:/Papers/KeepPaper', 'blank', 'First');
+      await useProjectStore.getState().initPaperWorkspace('E:/Papers/KeepPaper', 'blank', 'Second');
+      expect(useProjectStore.getState().paperFileContents['main.tex']).toContain('First');
+      expect(useProjectStore.getState().paperFileContents['main.tex']).not.toContain('Second');
     });
   });
 
@@ -744,6 +800,7 @@ describe('useProjectStore', () => {
               )
             );
           }
+          if (cmd === 'project_list_paper_files') return Promise.resolve([]);
           return Promise.resolve(null);
         }
       );

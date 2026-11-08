@@ -212,6 +212,7 @@ describe('2-Stage AI Cutout Post-Processing & Paper Studio Pipeline (Stage 3 & 4
     expect(snippet).toContain('\\label{fig:overview}');
 
     expect(PAPER_VENUE_TEMPLATES.map((t) => t.id)).toEqual([
+      'blank',
       'nature',
       'neurips',
       'cvpr',

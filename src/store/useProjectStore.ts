@@ -1,6 +1,5 @@
 import { create } from 'zustand';
 import { JournalThemeId } from '../types/theme';
-import { FULL_FIGURE_TEMPLATES } from '../core/templates/dl-templates';
 import { EMPTY_TIKZ_CODE } from '../core/templates/blank-document';
 import {
   buildFigureLaTeXSnippet,
@@ -14,7 +13,8 @@ import { useWorkspaceStore } from './useWorkspaceStore';
 
 export const AGENTIKZ_FOLDER_NAME = 'agentikzfile';
 
-export type WorkbenchMode = 'figure' | 'paper' | 'split';
+export type WorkbenchMode = 'figure' | 'paper';
+export type ProjectPickerTab = 'open' | 'create_template';
 
 export interface PaperFileItem {
   relativePath: string;
@@ -242,6 +242,7 @@ interface ProjectState {
   storageDir: string | null;
   exportDir: string | null;
   isPickerOpen: boolean;
+  pickerTab: ProjectPickerTab;
   autoOpenLastProject: boolean;
   autoSyncTikz: boolean;
   lastProjectDir: string | null;
@@ -253,6 +254,7 @@ interface ProjectState {
   activePaperFilePath: string;
   paperFileContents: Record<string, string>;
   paperDirtyFiles: Record<string, boolean>;
+  paperEditRevision: number;
   lastPaperCursorOffset: number | null;
   isInsertFigureModalOpen: boolean;
 
@@ -271,7 +273,7 @@ interface ProjectState {
 
   // Actions
   initOnStartup: () => Promise<void>;
-  setPickerOpen: (open: boolean) => void;
+  setPickerOpen: (open: boolean, tab?: ProjectPickerTab) => void;
   setWorkbenchMode: (mode: WorkbenchMode) => void;
   setInsertFigureModalOpen: (open: boolean) => void;
   setLastPaperCursorOffset: (offset: number | null) => void;
@@ -310,7 +312,6 @@ interface ProjectState {
   switchCanvasFile: (fileName: string) => Promise<void>;
   createNewCanvasFile: (
     name: string,
-    templateId?: string
   ) => Promise<string | null>;
   duplicateCurrentCanvasFile: () => Promise<string | null>;
   renameCanvasFile: (
@@ -438,6 +439,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     storageDir: null,
     exportDir: null,
     isPickerOpen: false,
+    pickerTab: 'open',
     autoOpenLastProject: initialPrefs.autoOpenLastProject,
     autoSyncTikz: initialPrefs.autoSyncTikz,
     lastProjectDir: initialPrefs.lastProjectDir,
@@ -448,6 +450,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     activePaperFilePath: 'main.tex',
     paperFileContents: {},
     paperDirtyFiles: {},
+    paperEditRevision: 0,
     lastPaperCursorOffset: null,
     isInsertFigureModalOpen: false,
 
@@ -484,15 +487,11 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       set({ isPickerOpen: true });
     },
 
-    setPickerOpen: (isPickerOpen) => set({ isPickerOpen, errorMessage: null }),
+    setPickerOpen: (isPickerOpen, pickerTab = 'open') =>
+      set({ isPickerOpen, pickerTab, errorMessage: null }),
 
     setWorkbenchMode: (workbenchMode) => {
       set({ workbenchMode });
-      if (workbenchMode === 'split') {
-        useWorkspaceStore.getState().setLeftSidebarCollapsed(true);
-      } else if (workbenchMode === 'figure') {
-        useWorkspaceStore.getState().setLeftSidebarCollapsed(false);
-      }
       if (workbenchMode !== 'figure' && get().paperFiles.length === 0) {
         void get().refreshPaperFiles();
       }
@@ -599,7 +598,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
           if (!targetFile) {
             const firstFileName = 'fig1-architecture.canvas.json';
             const firstName = 'Fig 1 - Architecture';
-            const firstDoc = buildCurrentCanvasDoc(firstFileName, firstName);
+            const firstDoc = { ...buildCurrentCanvasDoc(firstFileName, firstName), tikzCode: EMPTY_TIKZ_CODE };
             const saveRes = await invoke<{
               fileName: string;
               updatedAt: number;
@@ -610,6 +609,12 @@ export const useProjectStore = create<ProjectState>((set, get) => {
               syncTikz: get().autoSyncTikz ? firstDoc.tikzCode : null,
             });
             targetFile = saveRes.fileName;
+            isApplyingCanvasSwitch = true;
+            try {
+              useWorkspaceStore.getState().applyCanvasDocumentState(firstDoc);
+            } finally {
+              isApplyingCanvasSwitch = false;
+            }
             canvases = [
               {
                 fileName: saveRes.fileName,
@@ -682,7 +687,6 @@ export const useProjectStore = create<ProjectState>((set, get) => {
             lastSavedAt: Date.now(),
             lastProjectDir: info.projectDir,
             recentProjects: nextRecents,
-            isPickerOpen: false,
             errorMessage: null,
           });
 
@@ -701,7 +705,12 @@ export const useProjectStore = create<ProjectState>((set, get) => {
             }
           }
 
-          void get().refreshPaperFiles();
+          await get().refreshPaperFiles();
+          get().setWorkbenchMode(
+            get().paperFiles.some((f) => f.category === 'main' || f.category === 'section')
+              ? 'paper' : 'figure'
+          );
+          set({ isPickerOpen: false });
           return true;
         } catch (err) {
           set({ errorMessage: String(err) });
@@ -721,6 +730,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
           firstFile,
           'Fig 1 - Architecture'
         );
+        firstDoc.tikzCode = EMPTY_TIKZ_CODE;
         vfs.canvases[firstFile] = firstDoc;
         vfs.lastActiveCanvas = firstFile;
         const writeRes = writeVirtualProject(cleanDir, vfs);
@@ -802,7 +812,6 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         lastSavedAt: Date.now(),
         lastProjectDir: cleanDir,
         recentProjects: nextRecents,
-        isPickerOpen: false,
         errorMessage: null,
       });
 
@@ -811,7 +820,12 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         recentProjects: nextRecents,
       });
 
-      void get().refreshPaperFiles();
+      await get().refreshPaperFiles();
+      get().setWorkbenchMode(
+        get().paperFiles.some((f) => f.category === 'main' || f.category === 'section')
+          ? 'paper' : 'figure'
+      );
+      set({ isPickerOpen: false });
       return true;
     },
 
@@ -825,9 +839,6 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         tpl.id,
         paperTitle?.trim() || 'Title of Your Scientific Paper'
       );
-
-      // Apply the venue's default theme on the active canvas
-      useWorkspaceStore.getState().setActiveTheme(tpl.defaultThemeId);
 
       if (isTauriRuntime()) {
         try {
@@ -843,14 +854,20 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       } else {
         const cleanDir = trimmed.replace(/\\/g, '/').replace(/\/+$/, '');
         const vfs = readVirtualProject(cleanDir);
-        vfs.paperFiles = { ...(vfs.paperFiles || {}), ...filesMap };
-        writeVirtualProject(cleanDir, vfs);
+        // Match native initialization: never overwrite an existing manuscript.
+        vfs.paperFiles = { ...filesMap, ...(vfs.paperFiles || {}) };
+        const result = writeVirtualProject(cleanDir, vfs);
+        if (!result.ok) {
+          set({ errorMessage: `论文创建失败: ${result.error}` });
+          return false;
+        }
       }
 
       const opened = await get().openProjectDirectory(trimmed);
       if (opened) {
         await get().refreshPaperFiles();
         await get().openPaperFile('main.tex');
+        get().setWorkbenchMode('paper');
       }
       return opened;
     },
@@ -859,25 +876,6 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       const { projectDir } = get();
       const workspaceVersion = paperWorkspaceVersion;
       if (!projectDir) {
-        // Provide default in-memory paper files when no project folder is bound yet
-        const currentContents = get().paperFileContents;
-        if (Object.keys(currentContents).length === 0) {
-          const defaultMap = buildPaperTemplateFiles('neurips');
-          const items: PaperFileItem[] = Object.entries(defaultMap).map(
-            ([relPath, content]) => ({
-              relativePath: relPath,
-              fileName: relPath.split('/').pop() || relPath,
-              category: classifyPaperFileCategory(relPath),
-              sizeBytes: content.length,
-              modifiedAt: Date.now(),
-            })
-          );
-          set({
-            paperFiles: items,
-            paperFileContents: defaultMap,
-            activePaperFilePath: 'main.tex',
-          });
-        }
         return;
       }
 
@@ -909,12 +907,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       }
 
       const vfs = readVirtualProject(projectDir);
-      let paperMap = vfs.paperFiles || {};
-      if (Object.keys(paperMap).length === 0) {
-        paperMap = buildPaperTemplateFiles('neurips');
-        vfs.paperFiles = paperMap;
-        writeVirtualProject(projectDir, vfs);
-      }
+      const paperMap = vfs.paperFiles || {};
       const items: PaperFileItem[] = Object.entries(paperMap).map(
         ([relPath, content]) => ({
           relativePath: relPath,
@@ -980,6 +973,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       set((s) => ({
         paperFileContents: { ...s.paperFileContents, [cleanRel]: content },
         paperDirtyFiles: { ...s.paperDirtyFiles, [cleanRel]: true },
+        paperEditRevision: s.paperEditRevision + 1,
       }));
       if (paperAutoSaveTimers[cleanRel]) {
         clearTimeout(paperAutoSaveTimers[cleanRel]);
@@ -1216,8 +1210,8 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         insertAtCursor: true,
       });
 
-      if (get().workbenchMode === 'figure') {
-        get().setWorkbenchMode('split');
+      if (res.ok) {
+        get().setWorkbenchMode('paper');
       }
       return res;
     },
@@ -1378,7 +1372,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       });
     },
 
-    createNewCanvasFile: async (name, templateId) => {
+    createNewCanvasFile: async (name) => {
       const { projectDir, saveStatus } = get();
       if (
         projectDir &&
@@ -1407,17 +1401,13 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         counter++;
       }
 
-      const tpl = templateId
-        ? FULL_FIGURE_TEMPLATES.find((t) => t.id === templateId)
-        : undefined;
-
       isApplyingCanvasSwitch = true;
       try {
         useWorkspaceStore.getState().applyCanvasDocumentState({
-          tikzCode: tpl?.tikzCode ?? EMPTY_TIKZ_CODE,
-          activeThemeId: tpl?.themeId ?? prevDoc.activeThemeId,
-          zoom: tpl?.recommendedZoom ?? 1,
-          pan: tpl?.recommendedPan ?? { x: 80, y: 495 },
+          tikzCode: EMPTY_TIKZ_CODE,
+          activeThemeId: prevDoc.activeThemeId,
+          zoom: 1,
+          pan: { x: 80, y: 495 },
         });
       } finally {
         isApplyingCanvasSwitch = false;

@@ -6,7 +6,7 @@
  */
 
 import { JournalThemeId } from '../../types/theme';
-import { PRIMITIVE_LIBRARY } from '../templates/dl-templates';
+import { PRIMITIVE_LIBRARY } from '../tikz/primitives';
 import { JOURNAL_THEMES } from '../themes/journal-presets';
 import { parseTikzDocument } from '../parser/parser';
 import { analyzeTikzLayout, getThemeSemanticPalette } from './layout-diagnostics';

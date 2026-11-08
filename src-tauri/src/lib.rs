@@ -4,6 +4,7 @@ pub mod mcp;
 pub mod project;
 pub mod tex {
     pub mod compiler;
+    pub mod synctex;
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -30,6 +31,9 @@ pub fn run() {
             tex::compiler::tex_compile_preview,
             tex::compiler::tex_scan_installations,
             tex::compiler::tex_compile_paper,
+            tex::synctex::tex_read_paper_pdf,
+            tex::synctex::tex_synctex_forward,
+            tex::synctex::tex_synctex_backward,
             project::project_pick_directory,
             project::project_open_workspace,
             project::project_load_canvas,

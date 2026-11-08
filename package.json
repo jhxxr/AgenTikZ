@@ -1,7 +1,7 @@
 {
   "name": "agentikz",
   "private": true,
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "AI-era Visual TikZ & PGFPlots Editor for Scientific Research with BYOA (ACP/MCP)",
   "license": "MIT",
   "repository": {
@@ -13,6 +13,9 @@
     "url": "https://github.com/jhxxr/AgenTikZ/issues"
   },
   "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "scripts": {
     "adapters:stage": "node scripts/prepare-adapters.mjs",
     "adapters:verify": "node scripts/verify-adapters.mjs",
@@ -34,6 +37,7 @@
     "@uiw/react-codemirror": "^4.23.10",
     "katex": "^0.16.21",
     "lucide-react": "^0.475.0",
+    "pdfjs-dist": "6.5.438",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "zustand": "^5.0.3"

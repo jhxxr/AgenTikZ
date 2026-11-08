@@ -1538,10 +1538,10 @@ export const InteractiveCanvas: React.FC = () => {
           <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none p-4">
             <div className="max-w-sm rounded-2xl border border-slate-200 bg-white/95 p-6 text-center shadow-sm pointer-events-auto">
               <h2 className="text-base font-semibold text-slate-800">从你的想法开始绘图</h2>
-              <p className="mt-2 text-xs leading-relaxed text-slate-500">向 AI 描述模块、关系与数据，按需求生成新图。模板只是构图参考，也可主动选择以快速出图。</p>
+              <p className="mt-2 text-xs leading-relaxed text-slate-500">向 AI 描述模块、关系与数据，或使用工具栏从空白开始绘制。</p>
               <div className="mt-4 flex flex-wrap justify-center gap-2">
                 <button onClick={() => setAgentPanelCollapsed(false)} className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-medium text-white hover:bg-blue-700 cursor-pointer">向 AI 描述需求</button>
-                <button onClick={() => setLeftTab('library')} className="rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-600 hover:bg-slate-50 cursor-pointer">浏览内置模板</button>
+                <button onClick={() => setLeftTab('library')} className="rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-600 hover:bg-slate-50 cursor-pointer">添加基础组件</button>
               </div>
             </div>
           </div>

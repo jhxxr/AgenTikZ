@@ -1,775 +1,449 @@
+import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import CodeMirror from '@uiw/react-codemirror';
+import { EditorView } from '@codemirror/view';
 import {
-  BookOpen,
-  CheckCircle2,
-  ChevronDown,
-  ExternalLink,
-  FileCode2,
-  FilePlus2,
-  FileText,
-  ListTree,
-  Loader2,
-  Play,
-  Settings,
-  Sparkles,
-  SplitSquareVertical,
+  ArrowLeft, ArrowRight, BookOpen, Check, ChevronDown, ChevronRight, FileCode2, FilePlus2, FileText, Folder, FolderOpen, ImagePlus, ListTree, Loader2, PanelLeftClose, PanelLeftOpen, Play, Plus, RefreshCw, Settings, X,
 } from 'lucide-react';
-import { useProjectStore } from '../../store/useProjectStore';
-import { useWorkspaceStore } from '../../store/useWorkspaceStore';
+import { useProjectStore, type PaperFileItem } from '../../store/useProjectStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
-import {
-  PAPER_VENUE_TEMPLATES,
-  type PaperVenueTemplateId,
-} from '../../core/paper/paper-templates';
+import { syncTexBackward, syncTexForward, type PdfPoint, type SourceLocation } from '../../core/paper/synctex';
+import type { PaperPdfPreviewHandle } from './PaperPdfPreview';
+import './PaperWorkspaceView.css';
 
-interface DetectedFigureRef {
-  rawMatch: string;
-  relPath: string;
-  kind: 'tikz' | 'graphic';
-  line: number;
-}
+const PaperPdfPreview = lazy(() => import('./PaperPdfPreview').then((module) => ({ default: module.PaperPdfPreview })));
 
-interface DetectedSectionHeading {
-  title: string;
-  level: 'section' | 'subsection';
-  line: number;
-  charOffset: number;
-}
+type ViewMode = 'both' | 'source' | 'preview';
+interface Heading { title: string; level: string; offset: number; line: number }
 
-function extractFigureReferences(texContent: string): DetectedFigureRef[] {
-  const refs: DetectedFigureRef[] = [];
-  const lines = texContent.split('\n');
-  lines.forEach((lineText, idx) => {
-    const trimmed = lineText.trim();
-    if (trimmed.startsWith('%')) return;
-    const inputRegex = /\\input\{([^}]+)\}/g;
-    let match: RegExpExecArray | null;
-    while ((match = inputRegex.exec(lineText)) !== null) {
-      const target = match[1].trim();
-      if (
-        target.endsWith('.tikz') ||
-        target.startsWith('figures/') ||
-        target.includes('agentikzfile')
-      ) {
-        refs.push({
-          rawMatch: match[0],
-          relPath: target,
-          kind: 'tikz',
-          line: idx + 1,
-        });
-      }
-    }
-    const graphicRegex = /\\includegraphics(?:\[[^\]]*\])?\{([^}]+)\}/g;
-    while ((match = graphicRegex.exec(lineText)) !== null) {
-      refs.push({
-        rawMatch: match[0],
-        relPath: match[1].trim(),
-        kind: 'graphic',
-        line: idx + 1,
-      });
-    }
-  });
-  return refs;
-}
-
-function extractSectionHeadings(texContent: string): DetectedSectionHeading[] {
-  const headings: DetectedSectionHeading[] = [];
-  const lines = texContent.split('\n');
-  let runningOffset = 0;
-  lines.forEach((lineText, idx) => {
-    const trimmed = lineText.trim();
-    if (!trimmed.startsWith('%')) {
-      const m = /\\(section|subsection)\*?\{([^}]+)\}/.exec(lineText);
-      if (m) {
-        headings.push({
-          level: m[1] === 'subsection' ? 'subsection' : 'section',
-          title: m[2].trim(),
-          line: idx + 1,
-          charOffset: runningOffset,
-        });
-      }
-    }
-    runningOffset += lineText.length + 1;
+function findHeadings(source: string): Heading[] {
+  let offset = 0;
+  const headings: Heading[] = [];
+  source.split('\n').forEach((line, index) => {
+    const uncommented = line.replace(/(?<!\\)%.*/, '');
+    const match = /\\(section|subsection|subsubsection)\*?\{([^}]+)\}/.exec(uncommented);
+    if (match) headings.push({ title: match[2], level: match[1], offset, line: index + 1 });
+    offset += line.length + 1;
   });
   return headings;
 }
 
+interface FileNode { name: string; path: string; file?: PaperFileItem; children: FileNode[] }
+function fileTree(files: PaperFileItem[]): FileNode[] {
+  const root: FileNode = { name: '', path: '', children: [] };
+  for (const file of files) {
+    const parts = file.relativePath.split('/');
+    let parent = root;
+    parts.forEach((name, i) => {
+      const path = parts.slice(0, i + 1).join('/');
+      let node = parent.children.find((child) => child.path === path);
+      if (!node) { node = { name, path, children: [] }; parent.children.push(node); }
+      if (i === parts.length - 1) node.file = file;
+      parent = node;
+    });
+  }
+  const sort = (nodes: FileNode[]): FileNode[] => nodes.sort((a, b) => {
+    if (a.path === 'main.tex') return -1;
+    if (b.path === 'main.tex') return 1;
+    if (!!a.file !== !!b.file) return a.file ? 1 : -1;
+    return a.name.localeCompare(b.name);
+  }).map((node) => ({ ...node, children: sort(node.children) }));
+  return sort(root.children);
+}
+
+const FileBranch: React.FC<{
+  node: FileNode; active: string; dirty: Record<string, boolean>;
+  onOpen: (path: string) => void; depth?: number;
+}> = ({ node, active, dirty, onOpen, depth = 0 }) => {
+  const [expanded, setExpanded] = useState(true);
+  const isFile = Boolean(node.file);
+  const Icon = isFile ? (node.file?.category === 'bib' ? BookOpen : FileCode2) : expanded ? FolderOpen : Folder;
+  return (
+    <li>
+      <button type="button" className={`paper-file-row ${active === node.path ? 'is-active' : ''}`}
+        style={{ paddingLeft: 12 + depth * 14 }} title={node.path}
+        aria-current={active === node.path ? 'page' : undefined}
+        aria-expanded={isFile ? undefined : expanded}
+        onClick={() => isFile ? onOpen(node.path) : setExpanded(!expanded)}>
+        {!isFile ? (expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />) : <span className="paper-tree-spacer" />}
+        <Icon size={14} className={isFile ? '' : 'paper-folder-icon'} />
+        <span className="paper-truncate">{node.name}</span>
+        {node.path === 'main.tex' && <span className="paper-main-label">主文件</span>}
+        {dirty[node.path] && <span className="paper-dirty-dot" aria-label="未保存" />}
+      </button>
+      {!isFile && expanded && <ul>{node.children.map((child) => (
+        <FileBranch key={child.path} node={child} active={active} dirty={dirty} onOpen={onOpen} depth={depth + 1} />
+      ))}</ul>}
+    </li>
+  );
+};
+
+const editorExtensions = [EditorView.lineWrapping, EditorView.theme({
+  '&': { height: '100%', fontSize: '13px', backgroundColor: '#ffffff' },
+  '.cm-scroller': { overflow: 'auto', fontFamily: 'Consolas, "SFMono-Regular", monospace', lineHeight: '1.85' },
+  '.cm-content': { padding: '20px 0' },
+  '.cm-line': { padding: '0 20px 0 12px' },
+  '.cm-gutters': { backgroundColor: '#fff', color: '#a1a8b5', border: 'none', minWidth: '44px' },
+  '.cm-activeLine, .cm-activeLineGutter': { backgroundColor: '#f6f8fc' },
+  '&.cm-focused': { outline: 'none' },
+})];
+
 export const PaperWorkspaceView: React.FC = () => {
   const {
-    projectDir,
-    projectName,
-    paperFiles,
-    activePaperFilePath,
-    paperFileContents,
-    paperDirtyFiles,
-    canvases,
-    activeCanvasFileName,
-    workbenchMode,
-    setWorkbenchMode,
-    setPickerOpen,
-    setInsertFigureModalOpen,
-    setLastPaperCursorOffset,
-    quickInsertActiveFigureIntoPaper,
-    initPaperWorkspace,
-    refreshPaperFiles,
-    openPaperFile,
-    updatePaperFileContent,
-    createNewPaperFile,
-    ensureAgentikzMacrosSty,
-    switchCanvasFile,
-    createNewCanvasFile,
+    projectDir, paperFiles, activePaperFilePath, paperFileContents, paperDirtyFiles, paperEditRevision,
+    errorMessage, setPickerOpen, setInsertFigureModalOpen, setLastPaperCursorOffset,
+    refreshPaperFiles, openPaperFile, updatePaperFileContent, createNewPaperFile,
   } = useProjectStore(useShallow((s) => ({
-    projectDir: s.projectDir,
-    projectName: s.projectName,
-    paperFiles: s.paperFiles,
-    activePaperFilePath: s.activePaperFilePath,
-    paperFileContents: s.paperFileContents,
-    paperDirtyFiles: s.paperDirtyFiles,
-    canvases: s.canvases,
-    activeCanvasFileName: s.activeCanvasFileName,
-    workbenchMode: s.workbenchMode,
-    setWorkbenchMode: s.setWorkbenchMode,
-    setPickerOpen: s.setPickerOpen,
-    setInsertFigureModalOpen: s.setInsertFigureModalOpen,
-    setLastPaperCursorOffset: s.setLastPaperCursorOffset,
-    quickInsertActiveFigureIntoPaper: s.quickInsertActiveFigureIntoPaper,
-    initPaperWorkspace: s.initPaperWorkspace,
-    refreshPaperFiles: s.refreshPaperFiles,
-    openPaperFile: s.openPaperFile,
-    updatePaperFileContent: s.updatePaperFileContent,
+    projectDir: s.projectDir, paperFiles: s.paperFiles, activePaperFilePath: s.activePaperFilePath,
+    paperFileContents: s.paperFileContents, paperDirtyFiles: s.paperDirtyFiles, paperEditRevision: s.paperEditRevision, errorMessage: s.errorMessage,
+    setPickerOpen: s.setPickerOpen, setInsertFigureModalOpen: s.setInsertFigureModalOpen,
+    setLastPaperCursorOffset: s.setLastPaperCursorOffset, refreshPaperFiles: s.refreshPaperFiles,
+    openPaperFile: s.openPaperFile, updatePaperFileContent: s.updatePaperFileContent,
     createNewPaperFile: s.createNewPaperFile,
-    ensureAgentikzMacrosSty: s.ensureAgentikzMacrosSty,
-    switchCanvasFile: s.switchCanvasFile,
-    createNewCanvasFile: s.createNewCanvasFile,
   })));
-
-  const { setTikzCode } = useWorkspaceStore(useShallow((s) => ({ setTikzCode: s.setTikzCode })));
   const { texEngine, texLiveBinDir, openSettings } = useSettingsStore(useShallow((s) => ({
-    texEngine: s.texEngine,
-    texLiveBinDir: s.texLiveBinDir,
-    openSettings: s.openSettings,
+    texEngine: s.texEngine, texLiveBinDir: s.texLiveBinDir, openSettings: s.openSettings,
   })));
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const editorRef = useRef<EditorView | null>(null);
+  const splitRef = useRef<HTMLDivElement | null>(null);
   const compilationId = useRef(0);
-
-  const [selectedTemplateId, setSelectedTemplateId] =
-    useState<PaperVenueTemplateId>('nature');
-  const [newPaperTitle, setNewPaperTitle] = useState<string>(
-    projectName || 'Method Overview and Experimental Analysis'
-  );
-  const [newFileRelPath, setNewFileRelPath] = useState<string>('');
-  const [showNewFileInput, setShowNewFileInput] = useState<boolean>(false);
-  const [isCompilingPaper, setIsCompilingPaper] = useState<boolean>(false);
+  const navigationId = useRef(0);
+  const pdfRef = useRef<PaperPdfPreviewHandle | null>(null);
+  const editorPath = useRef('');
+  const [pdfReady, setPdfReady] = useState(false);
+  const [compiledRevision, setCompiledRevision] = useState(-1);
+  const [syncBusy, setSyncBusy] = useState(false);
+  const [syncNotice, setSyncNotice] = useState<{ error: boolean; message: string } | null>(null);
+  const [sourceTarget, setSourceTarget] = useState<SourceLocation | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarTab, setSidebarTab] = useState<'files' | 'outline'>('files');
+  const [viewMode, setViewMode] = useState<ViewMode>('both');
+  const [sourceWidth, setSourceWidth] = useState(58);
+  const [resizing, setResizing] = useState(false);
+  const [openTabs, setOpenTabs] = useState<string[]>([activePaperFilePath]);
+  const [newFilePath, setNewFilePath] = useState('');
+  const [showNewFile, setShowNewFile] = useState(false);
+  const [fileError, setFileError] = useState('');
+  const [isCompiling, setIsCompiling] = useState(false);
+  const [showLogs, setShowLogs] = useState(false);
+  const [cursor, setCursor] = useState({ line: 1, column: 1 });
   const [compileResult, setCompileResult] = useState<{
-    ok: boolean;
-    pdfPath?: string;
-    pdfDataUrl?: string;
-    message: string;
-    logExcerpt?: string;
+    ok: boolean; pdfPath?: string; buildId?: number; message: string; logExcerpt?: string;
   } | null>(null);
-  const [showCompilerDrawer, setShowCompilerDrawer] = useState<boolean>(false);
-  const [statusNotice, setStatusNotice] = useState<string | null>(null);
+
+  const source = paperFileContents[activePaperFilePath] ?? '';
+  const files = useMemo(() => paperFiles.filter((file) =>
+    !file.relativePath.startsWith('agentikzfile/') && /\.(tex|bib|sty|cls|tikz)$/i.test(file.relativePath)
+  ), [paperFiles]);
+  const tree = useMemo(() => fileTree(files), [files]);
+  const headings = useMemo(() => findHeadings(source), [source]);
+  const tabs = openTabs.filter((path) => files.some((file) => file.relativePath === path));
+  const hasPaper = files.some((file) => /\.tex$/i.test(file.relativePath));
+  const dirty = Object.values(paperDirtyFiles).some(Boolean);
 
   useEffect(() => {
     compilationId.current += 1;
     setCompileResult(null);
-    setIsCompilingPaper(false);
-    return () => { compilationId.current += 1; };
+    setIsCompiling(false);
+    setShowLogs(false);
+    setOpenTabs([]);
+    setFileError('');
+    setShowNewFile(false);
+    setPdfReady(false); setSyncNotice(null); setSourceTarget(null);
+    navigationId.current += 1; setSyncBusy(false);
+    return () => { compilationId.current += 1; navigationId.current += 1; };
   }, [projectDir]);
 
   useEffect(() => {
-    if (projectDir && paperFiles.length === 0) {
-      void refreshPaperFiles();
+    setOpenTabs((paths) => paths.includes(activePaperFilePath) ? paths : [...paths, activePaperFilePath]);
+    setLastPaperCursorOffset(null);
+    setCursor({ line: 1, column: 1 });
+  }, [activePaperFilePath, projectDir, setLastPaperCursorOffset]);
+
+  useEffect(() => {
+    if (!sourceTarget || activePaperFilePath !== sourceTarget.relativePath) return;
+    const frame = requestAnimationFrame(() => {
+      const view = editorRef.current;
+      if (!view || editorPath.current !== sourceTarget.relativePath || view.state.doc.toString() !== source) return;
+      const line = view.state.doc.line(Math.min(sourceTarget.line, view.state.doc.lines));
+      const offset = Math.min(line.to, line.from + sourceTarget.column - 1);
+      view.dispatch({ selection: { anchor: offset }, effects: EditorView.scrollIntoView(offset, { y: 'center' }) });
+      view.focus();
+      setSourceTarget(null);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [sourceTarget, activePaperFilePath, source]);
+
+  useEffect(() => {
+    if (!syncNotice) return;
+    const timer = setTimeout(() => setSyncNotice(null), 6000);
+    return () => clearTimeout(timer);
+  }, [syncNotice]);
+
+  const pdfStale = compiledRevision !== paperEditRevision;
+  const canSync = Boolean(projectDir && compileResult?.ok && compileResult.pdfPath && pdfReady && !isCompiling && !pdfStale);
+  const syncUnavailable = isCompiling ? '正在编译，请稍候'
+    : !compileResult?.pdfPath ? '请先编译论文，生成 PDF 与 SyncTeX 映射'
+    : pdfStale ? '源码已更新，请重新编译后定位'
+    : !pdfReady ? 'PDF 尚未就绪' : '';
+
+  const locatePdf = async () => {
+    const view = editorRef.current;
+    if (!canSync || !projectDir || !compileResult?.pdfPath || !view || syncBusy) return;
+    if (!/\.tex$/i.test(activePaperFilePath)) {
+      setSyncNotice({ error: true, message: '请先选择需要定位的 .tex 论文源码' }); return;
     }
-  }, [projectDir, paperFiles.length, refreshPaperFiles]);
-
-  const currentContent = paperFileContents[activePaperFilePath] ?? '';
-  const isCurrentDirty = Boolean(paperDirtyFiles[activePaperFilePath]);
-
-  const detectedRefs = useMemo(
-    () => extractFigureReferences(currentContent),
-    [currentContent]
-  );
-
-  const sectionHeadings = useMemo(
-    () => extractSectionHeadings(currentContent),
-    [currentContent]
-  );
-
-  const visiblePaperFiles = useMemo(
-    () =>
-      paperFiles.filter(
-        (f) =>
-          !f.relativePath.startsWith('agentikzfile/') &&
-          (f.category === 'main' ||
-            f.category === 'section' ||
-            f.category === 'bib' ||
-            f.category === 'style')
-      ),
-    [paperFiles]
-  );
-
-  const handleJumpToSection = (heading: DetectedSectionHeading) => {
-    const el = textareaRef.current;
-    if (!el) return;
-    el.focus();
-    el.setSelectionRange(heading.charOffset, heading.charOffset);
-    setLastPaperCursorOffset(heading.charOffset);
-    const totalLines = Math.max(1, currentContent.split('\n').length);
-    const ratio = Math.max(0, (heading.line - 3) / totalLines);
-    el.scrollTop = Math.round(el.scrollHeight * ratio);
+    const request = ++navigationId.current;
+    const file = activePaperFilePath;
+    const revision = paperEditRevision;
+    const offset = view.state.selection.main.head;
+    const line = view.state.doc.lineAt(offset);
+    setSyncBusy(true);
+    try {
+      const target = await syncTexForward({
+        projectDir, pdfPath: compileResult.pdfPath, sourceFile: file,
+        line: line.number, column: offset - line.from + 1, texLiveBinDir: texLiveBinDir || undefined,
+      });
+      const current = useProjectStore.getState();
+      if (request !== navigationId.current || current.activePaperFilePath !== file || current.paperEditRevision !== revision) return;
+      pdfRef.current?.navigate(target);
+      setSyncNotice({ error: false, message: `已在 PDF 第 ${target.page} 页定位当前源码` });
+    } catch (error) {
+      if (request === navigationId.current) setSyncNotice({ error: true, message: String(error) });
+    } finally {
+      if (request === navigationId.current) setSyncBusy(false);
+    }
   };
 
-  const handleCreateFile = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const rel = newFileRelPath.trim();
-    if (!rel) return;
-    const normalized = rel.includes('.') ? rel : `sections/${rel}.tex`;
-    await createNewPaperFile(
-      normalized,
-      `% ${normalized}\n\\section{${rel.replace(/\.tex$/i, '')}}\n\nWrite content here.\n`
-    );
-    setNewFileRelPath('');
-    setShowNewFileInput(false);
+  const locateSource = async (point?: PdfPoint) => {
+    if (!canSync || !projectDir || !compileResult?.pdfPath || syncBusy) return;
+    const position = point || pdfRef.current?.currentPoint();
+    if (!position) { setSyncNotice({ error: true, message: '请先在 PDF 正文中点击一个位置' }); return; }
+    const request = ++navigationId.current;
+    const revision = paperEditRevision;
+    const file = activePaperFilePath;
+    setSyncBusy(true);
+    try {
+      const target = await syncTexBackward({
+        projectDir, pdfPath: compileResult.pdfPath, page: position.page, x: position.x, y: position.y,
+        texLiveBinDir: texLiveBinDir || undefined,
+      });
+      const current = useProjectStore.getState();
+      if (request !== navigationId.current || current.paperEditRevision !== revision || current.activePaperFilePath !== file) return;
+      const content = await openPaperFile(target.relativePath);
+      if (request !== navigationId.current || useProjectStore.getState().paperEditRevision !== revision) return;
+      if (!content && useProjectStore.getState().paperFileContents[target.relativePath] === undefined) throw new Error('无法读取定位到的源码文件');
+      setViewMode('both');
+      setSourceTarget(target);
+      setSyncNotice({ error: false, message: `已定位到 ${target.relativePath} 第 ${target.line} 行` });
+    } catch (error) {
+      if (request === navigationId.current) setSyncNotice({ error: true, message: String(error) });
+    } finally {
+      if (request === navigationId.current) setSyncBusy(false);
+    }
   };
 
-  const handleInitCurrentFolderWithTemplate = async () => {
-    if (!projectDir) {
-      setPickerOpen(true);
-      return;
-    }
-    await initPaperWorkspace(projectDir, selectedTemplateId, newPaperTitle);
-    const tpl = PAPER_VENUE_TEMPLATES.find((t) => t.id === selectedTemplateId);
-    setStatusNotice(
-      `✓ 已使用 ${tpl?.badge || selectedTemplateId} 模板初始化论文目录结构`
-    );
+  const jumpToHeading = (heading: Heading) => {
+    if (viewMode === 'preview') setViewMode('both');
+    requestAnimationFrame(() => {
+      const view = editorRef.current;
+      if (!view) return;
+      const position = Math.min(heading.offset, view.state.doc.length);
+      view.dispatch({ selection: { anchor: position }, effects: EditorView.scrollIntoView(position, { y: 'center' }) });
+      view.focus();
+    });
   };
 
-  const handleOpenFigureRefInStudio = async (ref: DetectedFigureRef) => {
-    const baseName =
-      ref.relPath
-        .split('/')
-        .pop()
-        ?.replace(/\.(tikz|pdf|png|svg|jpg)$/i, '') || 'figure';
-
-    const matchedCanvas = canvases.find(
-      (c) =>
-        c.name.toLowerCase() === baseName.toLowerCase() ||
-        c.fileName.replace(/\.canvas\.json$/i, '').toLowerCase() ===
-          baseName.toLowerCase()
-    );
-
-    if (matchedCanvas) {
-      if (matchedCanvas.fileName !== activeCanvasFileName) {
-        await switchCanvasFile(matchedCanvas.fileName);
-      }
-      if (workbenchMode === 'paper') {
-        setWorkbenchMode('split');
-      }
-      setStatusNotice(`✓ 已在右侧画布定位配图「${matchedCanvas.name}」`);
-      return;
+  const createFile = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const input = newFilePath.trim().replace(/\\/g, '/');
+    if (!input) return;
+    const path = input.includes('.') ? input : `sections/${input}.tex`;
+    if (path.startsWith('/') || path.includes(':') || path.split('/').some((part) => !part || part === '..' || part === '.')) {
+      setFileError('请输入项目内的相对路径'); return;
     }
+    if (paperFiles.some((file) => file.relativePath.toLowerCase() === path.toLowerCase())) {
+      setFileError('文件已存在，请换一个名称'); return;
+    }
+    if (await createNewPaperFile(path, '')) {
+      setShowNewFile(false); setNewFilePath(''); setFileError('');
+    } else setFileError(useProjectStore.getState().errorMessage || '文件创建失败');
+  };
 
-    // If referencing a .tikz file on disk that isn't a canvas yet, load its TikZ source
-    if (ref.kind === 'tikz') {
-      const afterLoad = await openPaperFile(ref.relPath);
-      if (afterLoad && afterLoad.includes('\\begin{tikzpicture}')) {
-        await createNewCanvasFile(baseName);
-        setTikzCode(afterLoad, true);
-        if (workbenchMode === 'paper') {
-          setWorkbenchMode('split');
-        }
-        setStatusNotice(`✓ 已从 ${ref.relPath} 载入画布`);
+  const compilePaper = async () => {
+    if (isCompiling) return;
+    const request = ++compilationId.current;
+    navigationId.current += 1; setSyncBusy(false); setSyncNotice(null);
+    setIsCompiling(true);
+    if (viewMode === 'source') setViewMode('both');
+    try {
+      // A paper build must not compile or reopen the drawing canvas.
+      if (!await useProjectStore.getState().saveAllDirtyPaperFiles()) throw new Error('文件保存失败，已停止编译');
+      if (request !== compilationId.current) return;
+      if (!projectDir || !('__TAURI_INTERNALS__' in window)) {
+        setCompileResult({ ok: false, message: '当前为浏览器预览，未执行 TeX 编译。请在桌面端打开此项目并配置 TeX Live。' });
         return;
       }
-    }
-
-    if (workbenchMode === 'paper') {
-      setWorkbenchMode('split');
-    }
-  };
-
-  const handleCompileFullPaper = async () => {
-    if (isCompilingPaper) return;
-    const requestId = ++compilationId.current;
-    setIsCompilingPaper(true);
-    setShowCompilerDrawer(true);
-    try {
-      const project = useProjectStore.getState();
-      const saved = await Promise.all([
-        project.saveActiveCanvasNow(),
-        project.saveAllDirtyPaperFiles(),
-      ]);
-      if (requestId !== compilationId.current) return;
-      if (saved.some((ok) => !ok)) throw new Error('文件保存失败，已停止编译以避免使用旧内容');
-      await ensureAgentikzMacrosSty();
-      if (requestId !== compilationId.current) return;
-      if (useProjectStore.getState().paperDirtyFiles['styles/agentikz-macros.sty']) {
-        throw new Error('绘图宏文件保存失败，已停止编译');
-      }
-      const isTauri =
-        typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
-      if (isTauri && projectDir) {
-        const { invoke, convertFileSrc } = await import('@tauri-apps/api/core');
-        const mainTex = visiblePaperFiles.some(
-          (f) => f.relativePath === 'main.tex'
-        )
-          ? 'main.tex'
-          : activePaperFilePath.endsWith('.tex')
-          ? activePaperFilePath
-          : 'main.tex';
-
-        const res = await invoke<{
-          ok: boolean;
-          pdfPath?: string;
-          message: string;
-          logExcerpt?: string;
-        }>('tex_compile_paper', {
-          projectDir,
-          mainTexFile: mainTex,
-          texEngine,
-          texLiveBinDir: texLiveBinDir || undefined,
-        });
-        if (requestId !== compilationId.current) return;
-
-        let pdfDataUrl: string | undefined;
-        if (res.ok && res.pdfPath) {
-          try {
-            pdfDataUrl = convertFileSrc(res.pdfPath);
-          } catch {
-            pdfDataUrl = undefined;
-          }
-        }
-        setCompileResult({
-          ...res,
-          pdfDataUrl,
-        });
-      } else {
-        setCompileResult({
-          ok: true,
-          message:
-            '浏览器预览模式：已校验 LaTeX 结构与 styles/agentikz-macros.sty 引用完整性。在桌面端可调用本地 TeX Live 直接生成 main.pdf。',
-          logExcerpt: [
-            `[AgenTikZ Paper Compiler] Engine=${texEngine}`,
-            `[AgenTikZ Paper Compiler] TeXLiveBinDir=${texLiveBinDir || '(System PATH)'}`,
-            `[AgenTikZ Paper Compiler] Synced styles/agentikz-macros.sty & figures/*.tikz`,
-            `[AgenTikZ Paper Compiler] Detected ${detectedRefs.length} figure references in ${activePaperFilePath}.`,
-          ].join('\n'),
-        });
-      }
-    } catch (e) {
-      if (requestId !== compilationId.current) return;
-      setCompileResult({
-        ok: false,
-        message: `编译异常: ${String(e)}`,
+      const mainTexFile = files.find((file) => file.relativePath === 'main.tex')?.relativePath
+        || files.find((file) => file.category === 'main')?.relativePath
+        || (activePaperFilePath.endsWith('.tex') ? activePaperFilePath : files.find((file) => file.relativePath.endsWith('.tex'))?.relativePath);
+      if (!mainTexFile) throw new Error('未找到可编译的 .tex 主文件');
+      const revision = useProjectStore.getState().paperEditRevision;
+      const { invoke } = await import('@tauri-apps/api/core');
+      const result = await invoke<{ ok: boolean; pdfPath?: string; message: string; logExcerpt?: string }>('tex_compile_paper', {
+        projectDir, mainTexFile, texEngine, texLiveBinDir: texLiveBinDir || undefined,
       });
+      if (request !== compilationId.current) return;
+      setPdfReady(false);
+      setCompiledRevision(revision);
+      setCompileResult({ ...result, buildId: request });
+      setShowLogs(!result.ok);
+    } catch (error) {
+      if (request !== compilationId.current) return;
+      setCompileResult({ ok: false, message: String(error) });
+      setShowLogs(true);
     } finally {
-      if (requestId === compilationId.current) setIsCompilingPaper(false);
+      if (request === compilationId.current) setIsCompiling(false);
     }
   };
 
   return (
-    <div className="flex flex-col h-full w-full bg-white border-r border-slate-200/90 overflow-hidden select-none">
-      {/* Top Paper Workbench Header */}
-      <div className="px-3 py-2 bg-slate-900 text-white flex items-center justify-between gap-2 shrink-0">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="px-2 py-0.5 rounded bg-indigo-500/25 border border-indigo-400/40 text-indigo-200 text-[10px] font-bold tracking-wider uppercase shrink-0">
-            LaTeX IDE
-          </span>
-          <span className="text-xs font-semibold truncate text-slate-100">
-            {projectName || '当前论文工作区'}
-          </span>
-          <span className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-800 border border-slate-700 text-[10px] text-slate-300 shrink-0">
-            {isCurrentDirty ? (
+    <section className="paper-workspace" aria-label="论文编辑工作区">
+      {sidebarOpen && (
+        <aside className="paper-navigation" aria-label="论文导航">
+          <div className="paper-nav-heading">
+            <span><FileText size={15} />我的论文</span>
+            <button type="button" className="paper-icon-button" title="收起论文导航" onClick={() => setSidebarOpen(false)}><PanelLeftClose size={15} /></button>
+          </div>
+          <div className="paper-project-actions">
+            <button type="button" className="paper-new-project" onClick={() => setPickerOpen(true, 'create_template')}><Plus size={14} />新建论文</button>
+            <button type="button" className="paper-icon-button" title="打开已有论文" onClick={() => setPickerOpen(true)}><FolderOpen size={15} /></button>
+          </div>
+          <div className="paper-navigation-tabs" role="tablist" aria-label="论文导航内容">
+            <button type="button" role="tab" aria-selected={sidebarTab === 'files'} onClick={() => setSidebarTab('files')}><Folder size={13} />文件</button>
+            <button type="button" role="tab" aria-selected={sidebarTab === 'outline'} onClick={() => setSidebarTab('outline')}><ListTree size={13} />大纲</button>
+          </div>
+          <div className="paper-nav-content">
+            {sidebarTab === 'files' ? (
               <>
-                <Loader2 className="w-2.5 h-2.5 text-indigo-400 animate-spin" />
-                <span>自动同步中...</span>
+                <div className="paper-section-heading"><span>项目文件</span><div>
+                  <button type="button" className="paper-icon-button" title="新建文件" onClick={() => setShowNewFile(!showNewFile)} disabled={!hasPaper}><FilePlus2 size={14} /></button>
+                  <button type="button" className="paper-icon-button" title="刷新文件" onClick={() => void refreshPaperFiles()}><RefreshCw size={13} /></button>
+                </div></div>
+                {showNewFile && <form className="paper-new-file" onSubmit={createFile}>
+                  <label htmlFor="paper-new-file">文件路径</label>
+                  <input id="paper-new-file" autoFocus value={newFilePath} onChange={(e) => setNewFilePath(e.target.value)} placeholder="sections/method.tex" />
+                  {fileError && <p role="alert">{fileError}</p>}
+                  <div><button type="submit">创建</button><button type="button" onClick={() => setShowNewFile(false)}>取消</button></div>
+                </form>}
+                <ul className="paper-tree">{tree.map((node) => <FileBranch key={node.path} node={node} active={activePaperFilePath} dirty={paperDirtyFiles} onOpen={(path) => void openPaperFile(path)} />)}</ul>
+                {files.length === 0 && <p className="paper-nav-empty">打开或新建论文后，文件将显示在这里。</p>}
               </>
             ) : (
-              <>
-                <CheckCircle2 className="w-2.5 h-2.5 text-emerald-400" />
-                <span>已自动保存 · 宏包同步</span>
+              <><div className="paper-section-heading"><span>当前文件大纲</span><span>{headings.length}</span></div>
+                {headings.length === 0 ? <p className="paper-nav-empty">当前文件中还没有章节标题。</p> : <ul className="paper-outline">{headings.map((heading) => (
+                  <li key={heading.offset}><button type="button" onClick={() => jumpToHeading(heading)} title={`第 ${heading.line} 行`}
+                    style={{ paddingLeft: heading.level === 'section' ? 16 : heading.level === 'subsection' ? 28 : 40 }}>
+                    <span className="paper-truncate">{heading.title}</span><span>{heading.line}</span>
+                  </button></li>
+                ))}</ul>}
               </>
             )}
-          </span>
-        </div>
-
-        <div className="flex items-center gap-1.5 shrink-0">
-          {/* 1-Click Split-Button: Insert Figure at Cursor + Dropdown */}
-          <div className="flex items-center rounded-md bg-indigo-600 overflow-hidden shadow-xs">
-            <button
-              type="button"
-              onClick={async () => {
-                const res = await quickInsertActiveFigureIntoPaper();
-                if (res.ok) {
-                  setStatusNotice(`✓ 已将当前配图一键插入 ${res.targetFile}`);
-                }
-              }}
-              className="px-2.5 py-1 hover:bg-indigo-500 text-white text-[11px] font-semibold flex items-center gap-1 cursor-pointer transition-colors"
-              title="直接将当前配图 (\input{figures/xxx.tikz}) 插入到编辑器光标所在位置"
-            >
-              <Sparkles className="w-3 h-3" />
-              <span>插入配图到光标处</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setInsertFigureModalOpen(true)}
-              className="px-1.5 py-1 border-l border-indigo-400/50 hover:bg-indigo-500 text-indigo-100 cursor-pointer transition-colors"
-              title="高级插图配置（切换单双栏、\includegraphics 静态图模式、自定义 Caption）"
-            >
-              <ChevronDown className="w-3 h-3" />
-            </button>
           </div>
-
-          <button
-            type="button"
-            onClick={() => void handleCompileFullPaper()}
-            disabled={isCompilingPaper}
-            className="px-2.5 py-1 rounded-md bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-[11px] font-semibold flex items-center gap-1 shadow-xs cursor-pointer"
-            title="使用配置的 TeX Live 编译整篇论文 PDF"
-          >
-            <Play className="w-3 h-3" />
-            <span>{isCompilingPaper ? '编译中...' : '编译 PDF'}</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => openSettings('general')}
-            className="p-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 cursor-pointer"
-            title={`配置 TeX Live 安装路径 (当前: ${texLiveBinDir || '系统默认 PATH'})`}
-          >
-            <Settings className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      </div>
-
-      {/* File Tabs Row */}
-      <div className="px-2.5 py-1.5 bg-slate-100 border-b border-slate-200 flex items-center justify-between gap-2 overflow-x-auto shrink-0">
-        <div className="flex items-center gap-1 min-w-0 overflow-x-auto">
-          {visiblePaperFiles.map((file) => {
-            const active = file.relativePath === activePaperFilePath;
-            const dirty = Boolean(paperDirtyFiles[file.relativePath]);
-            return (
-              <button
-                key={file.relativePath}
-                type="button"
-                onClick={() => void openPaperFile(file.relativePath)}
-                className={`px-2.5 py-1 rounded-md text-[11px] font-mono flex items-center gap-1.5 shrink-0 transition-all cursor-pointer ${
-                  active
-                    ? 'bg-white text-indigo-700 font-bold shadow-xs border border-indigo-200'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-white/60 border border-transparent'
-                }`}
-              >
-                <FileCode2 className="w-3 h-3 text-indigo-500 shrink-0" />
-                <span>{file.relativePath}</span>
-                {dirty && (
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-                )}
-              </button>
-            );
-          })}
-
-          {showNewFileInput ? (
-            <form onSubmit={handleCreateFile} className="flex items-center gap-1">
-              <input
-                type="text"
-                value={newFileRelPath}
-                onChange={(e) => setNewFileRelPath(e.target.value)}
-                placeholder="sections/experiments.tex"
-                className="px-2 py-0.5 text-[11px] font-mono bg-white border border-indigo-300 rounded w-44 focus:outline-none"
-                autoFocus
-              />
-              <button
-                type="submit"
-                className="px-2 py-0.5 text-[10px] font-semibold bg-indigo-600 text-white rounded"
-              >
-                创建
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowNewFileInput(false)}
-                className="px-1.5 py-0.5 text-[10px] text-slate-500"
-              >
-                取消
-              </button>
-            </form>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setShowNewFileInput(true)}
-              className="px-2 py-1 rounded-md text-[11px] text-slate-500 hover:text-indigo-700 hover:bg-white/70 flex items-center gap-1 shrink-0 cursor-pointer"
-              title="新建章节 .tex 或 .bib 文件"
-            >
-              <FilePlus2 className="w-3 h-3" />
-              <span>新建章节</span>
-            </button>
-          )}
-        </div>
-
-        {/* Quick Template Bootstrap Pill when no main.tex exists */}
-        {!visiblePaperFiles.some((f) => f.relativePath === 'main.tex') && (
-          <div className="flex items-center gap-1.5 shrink-0">
-            <select
-              value={selectedTemplateId}
-              onChange={(e) =>
-                setSelectedTemplateId(e.target.value as PaperVenueTemplateId)
-              }
-              className="text-[11px] bg-white border border-slate-300 rounded px-2 py-0.5 text-slate-700"
-            >
-              {PAPER_VENUE_TEMPLATES.map((tpl) => (
-                <option key={tpl.id} value={tpl.id}>
-                  {tpl.badge}
-                </option>
-              ))}
-            </select>
-            <input
-              type="text"
-              value={newPaperTitle}
-              onChange={(e) => setNewPaperTitle(e.target.value)}
-              placeholder="输入论文标题..."
-              className="text-[11px] bg-white border border-slate-300 rounded px-2 py-0.5 w-36 text-slate-800"
-            />
-            <button
-              type="button"
-              onClick={() => void handleInitCurrentFolderWithTemplate()}
-              className="px-2.5 py-0.5 rounded bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-semibold cursor-pointer"
-            >
-              ✨ 生成论文骨架
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* Interactive Figure CodeLens + Section Outline Bar */}
-      <div className="px-3 py-1.5 bg-indigo-50/70 border-b border-indigo-100 flex flex-col gap-1 text-[11px] shrink-0">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1.5 flex-wrap min-w-0">
-            <span className="font-semibold text-indigo-900 flex items-center gap-1 shrink-0">
-              <BookOpen className="w-3.5 h-3.5 text-indigo-600" />
-              本文配图 ({detectedRefs.length})：
-            </span>
-            {detectedRefs.length === 0 ? (
-              <span className="text-slate-500">
-                点击右上角「插入配图到光标处」可一键将当前画布嵌入到当前光标行
-              </span>
-            ) : (
-              detectedRefs.map((ref, idx) => (
-                <button
-                  key={`${ref.relPath}-${idx}`}
-                  type="button"
-                  onClick={() => void handleOpenFigureRefInStudio(ref)}
-                  className="px-2 py-0.5 rounded-full bg-white hover:bg-indigo-600 text-indigo-700 hover:text-white border border-indigo-200 font-mono text-[10.5px] flex items-center gap-1 shadow-2xs transition-colors cursor-pointer"
-                  title={`第 ${ref.line} 行: ${ref.rawMatch} — 点击在右侧画布中联动编辑`}
-                >
-                  <span>{ref.kind === 'tikz' ? '📦' : '🖼️'}</span>
-                  <span>{ref.relPath}</span>
-                  <span className="opacity-60">L{ref.line}</span>
-                  <ExternalLink className="w-2.5 h-2.5 opacity-75" />
-                </button>
-              ))
-            )}
-          </div>
-
-          {statusNotice && (
-            <span className="text-[11px] text-emerald-700 font-medium flex items-center gap-1 shrink-0">
-              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-              {statusNotice}
-            </span>
-          )}
-        </div>
-
-        {sectionHeadings.length > 0 && (
-          <div className="flex items-center gap-1 overflow-x-auto no-scrollbar pt-0.5">
-            <span className="text-[10px] font-semibold text-slate-500 flex items-center gap-1 shrink-0">
-              <ListTree className="w-3 h-3 text-slate-400" />
-              大纲跳转:
-            </span>
-            {sectionHeadings.map((h, i) => (
-              <button
-                key={`${h.title}-${i}`}
-                type="button"
-                onClick={() => handleJumpToSection(h)}
-                className={`px-2 py-0.2 rounded text-[10px] border transition-colors shrink-0 cursor-pointer ${
-                  h.level === 'section'
-                    ? 'bg-white text-slate-700 border-slate-200 font-semibold hover:border-indigo-300 hover:text-indigo-700'
-                    : 'bg-slate-50/80 text-slate-500 border-slate-200/70 hover:text-indigo-600'
-                }`}
-                title={`跳转到第 ${h.line} 行: \\${h.level}{${h.title}}`}
-              >
-                {h.level === 'subsection' ? `↳ ${h.title}` : `§ ${h.title}`}
-              </button>
+          <div className="paper-nav-footer"><span className="paper-connection-dot" /><span className="paper-truncate" title={projectDir || ''}>{projectDir ? '本地项目' : '未关联文件夹'}</span></div>
+        </aside>
+      )}
+      <div className="paper-main">
+        <div className="paper-command-bar">
+          {!sidebarOpen && <button type="button" className="paper-icon-button" title="展开论文导航" onClick={() => setSidebarOpen(true)}><PanelLeftOpen size={16} /></button>}
+          <span className="paper-breadcrumb"><FileCode2 size={14} /><span className="paper-truncate">{hasPaper ? activePaperFilePath : '论文编辑'}</span></span>
+          <span className="paper-save-state">{dirty ? <><span className="paper-dirty-dot" />保存中</> : <><Check size={12} />{projectDir ? '已保存' : '本地暂存'}</>}</span>
+          <div className="paper-command-spacer" />
+          <div className="paper-view-switch" role="group" aria-label="论文视图">
+            {([{ id: 'source', label: '源码' }, { id: 'both', label: '源码与 PDF' }, { id: 'preview', label: 'PDF' }] as const).map((view) => (
+              <button key={view.id} type="button" aria-pressed={viewMode === view.id} onClick={() => setViewMode(view.id)}>{view.label}</button>
             ))}
           </div>
-        )}
-      </div>
-
-      {/* Main Editor + Optional Compiler Output Drawer */}
-      <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden">
-        {/* Left: LaTeX / BibTeX Source Editor */}
-        <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-          {/* Quick LaTeX Snippet Bar */}
-          <div className="px-3 py-1 bg-slate-50 border-b border-slate-200/80 flex items-center justify-between gap-2 text-[11px] text-slate-600 shrink-0">
-            <div className="flex items-center gap-1 flex-wrap">
-              <span className="text-[10px] font-semibold text-slate-400 uppercase mr-1">
-                快捷插入:
-              </span>
-              {[
-                {
-                  label: '\\section{...}',
-                  snippet: '\n\\section{New Section}\n',
-                },
-                {
-                  label: '\\subsection{...}',
-                  snippet: '\n\\subsection{Subsection}\n',
-                },
-                {
-                  label: '\\ref{fig:...}',
-                  snippet: 'Figure~\\ref{fig:overview}',
-                },
-                {
-                  label: '\\cite{...}',
-                  snippet: '~\\cite{vaswani2017attention}',
-                },
-              ].map((item) => (
-                <button
-                  key={item.label}
-                  type="button"
-                  onClick={() =>
-                    updatePaperFileContent(
-                      activePaperFilePath,
-                      currentContent + item.snippet
-                    )
-                  }
-                  className="px-2 py-0.5 rounded bg-white hover:bg-slate-100 border border-slate-200/90 font-mono text-[10.5px] text-slate-700 cursor-pointer"
-                >
-                  {item.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="flex items-center gap-2 shrink-0">
-              {workbenchMode === 'paper' && (
-                <button
-                  type="button"
-                  onClick={() => setWorkbenchMode('split')}
-                  className="px-2 py-0.5 rounded bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-semibold flex items-center gap-1 cursor-pointer"
-                >
-                  <SplitSquareVertical className="w-3 h-3" />
-                  <span>开启论文+画布同屏</span>
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={() => setShowCompilerDrawer((v) => !v)}
-                className="px-2 py-0.5 rounded bg-slate-200/70 hover:bg-slate-200 text-slate-700 font-medium cursor-pointer"
-              >
-                {showCompilerDrawer ? '隐藏编译面板' : '查看编译/PDF面板'}
-              </button>
-            </div>
-          </div>
-
-          <textarea
-            ref={textareaRef}
-            value={currentContent}
-            onChange={(e) => {
-              setLastPaperCursorOffset(e.currentTarget.selectionStart);
-              updatePaperFileContent(activePaperFilePath, e.target.value);
-            }}
-            onClick={(e) =>
-              setLastPaperCursorOffset(e.currentTarget.selectionStart)
-            }
-            onKeyUp={(e) =>
-              setLastPaperCursorOffset(e.currentTarget.selectionStart)
-            }
-            spellCheck={false}
-            placeholder="在此编写论文 LaTeX 源码（支持 main.tex, sections/*.tex, references.bib）..."
-            className="flex-1 w-full p-4 font-mono text-[12.5px] leading-relaxed text-slate-800 bg-white focus:outline-none resize-none overflow-y-auto select-text"
-          />
-
-          <div className="px-3 py-1 bg-slate-50 border-t border-slate-200 text-[11px] text-slate-500 flex items-center justify-between shrink-0">
-            <div className="flex items-center gap-3">
-              <span>
-                当前文件: <strong className="font-mono text-slate-700">{activePaperFilePath}</strong>
-              </span>
-              <span>行数: {currentContent.split('\n').length}</span>
-              <span>
-                TeX 引擎: <strong className="font-mono text-slate-700">{texEngine}</strong>
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span>
-                目录规范: <code className="font-mono">main.tex</code> +{' '}
-                <code className="font-mono">sections/</code> +{' '}
-                <code className="font-mono">figures/*.tikz</code> +{' '}
-                <code className="font-mono">styles/agentikz-macros.sty</code>
-              </span>
-            </div>
-          </div>
+          <button type="button" className="paper-secondary-button paper-insert-button" disabled={!hasPaper} onClick={() => setInsertFigureModalOpen(true)} title="选择配图并插入论文，不打开绘图画布"><ImagePlus size={14} />插入配图</button>
+          <button type="button" className="paper-compile-button" disabled={isCompiling || !hasPaper} onClick={() => void compilePaper()}>
+            {isCompiling ? <Loader2 size={13} className="animate-spin" /> : <Play size={12} fill="currentColor" />}{isCompiling ? '编译中' : '编译 PDF'}
+          </button>
         </div>
-
-        {/* Right: PDF / Compiler Log Drawer */}
-        {showCompilerDrawer && (
-          <div className="w-full lg:w-[44%] border-t lg:border-t-0 lg:border-l border-slate-200 bg-slate-50 flex flex-col min-h-[220px]">
-            <div className="px-3 py-2 bg-slate-100 border-b border-slate-200 flex items-center justify-between text-xs font-semibold text-slate-700">
-              <span className="flex items-center gap-1.5">
-                <FileText className="w-3.5 h-3.5 text-indigo-600" />
-                论文编译输出与 PDF 预览
-              </span>
-              {compileResult?.pdfPath && (
-                <span className="font-mono text-[10px] text-emerald-700 truncate max-w-[200px]">
-                  {compileResult.pdfPath}
-                </span>
-              )}
+        {errorMessage && <div className="paper-error" role="alert">{errorMessage}</div>}
+        {syncNotice && <div className={`paper-sync-notice ${syncNotice.error ? 'is-error' : ''}`} role={syncNotice.error ? 'alert' : 'status'}>{syncNotice.message}</div>}
+        {!hasPaper ? (
+          <div className="paper-empty-workspace">
+            <div className="paper-empty-icon"><FileText size={27} strokeWidth={1.4} /></div>
+            <h1>专注写好你的论文</h1>
+            <p>从论文模板开始，或打开已有 LaTeX 项目。<br />源码与 PDF 在这里并排呈现。</p>
+            <div><button type="button" className="paper-compile-button" onClick={() => setPickerOpen(true, 'create_template')}><Plus size={14} />新建论文</button>
+              <button type="button" className="paper-secondary-button" onClick={() => setPickerOpen(true)}><FolderOpen size={14} />打开项目</button></div>
+          </div>
+        ) : (
+          <div className={`paper-desk ${resizing ? 'is-resizing' : ''}`} ref={splitRef}>
+            <div className="paper-source" style={{ display: viewMode === 'preview' ? 'none' : undefined, flexBasis: viewMode === 'both' ? `${sourceWidth}%` : '100%' }}>
+              <div className="paper-file-tabs" role="tablist" aria-label="已打开文件">
+                {tabs.map((path) => <div key={path} className={`paper-tab ${path === activePaperFilePath ? 'is-active' : ''}`}>
+                  <button type="button" role="tab" aria-selected={path === activePaperFilePath} title={path} onClick={() => void openPaperFile(path)}><FileCode2 size={13} /><span>{path.split('/').pop()}</span>{paperDirtyFiles[path] && <span className="paper-dirty-dot" />}</button>
+                  {tabs.length > 1 && <button type="button" className="paper-tab-close" title={`关闭 ${path}`} onClick={() => {
+                    setOpenTabs((paths) => paths.filter((p) => p !== path));
+                    if (path === activePaperFilePath) void openPaperFile(tabs.filter((p) => p !== path).at(-1)!);
+                  }}><X size={11} /></button>}
+                </div>)}
+              </div>
+              <div className="paper-editor-host">
+                <CodeMirror key={`${projectDir}:${activePaperFilePath}`} value={source} height="100%" extensions={editorExtensions}
+                  aria-label={`论文源码 ${activePaperFilePath}`} placeholder="在这里编写 LaTeX…"
+                  basicSetup={{ foldGutter: false, highlightActiveLine: true, lineNumbers: true }}
+                  onCreateEditor={(view) => { editorRef.current = view; editorPath.current = activePaperFilePath; }}
+                  onUpdate={(update) => {
+                    if (!update.selectionSet && !update.docChanged) return;
+                    const offset = update.state.selection.main.head;
+                    const line = update.state.doc.lineAt(offset);
+                    setLastPaperCursorOffset(offset); setCursor({ line: line.number, column: offset - line.from + 1 });
+                  }}
+                  onChange={(value) => updatePaperFileContent(activePaperFilePath, value)} />
+              </div>
+              <div className="paper-source-status"><span>LaTeX</span><span>UTF-8</span><span className="paper-command-spacer" /><span>行 {cursor.line}，列 {cursor.column}</span></div>
             </div>
-
-            <div className="flex-1 p-3 overflow-y-auto space-y-3">
-              {!compileResult ? (
-                <div className="p-6 text-center text-xs text-slate-400 border border-dashed border-slate-200 rounded-xl">
-                  点击上方「编译论文 PDF」按钮运行 TeX Live 编译整篇论文。
-                  <div className="mt-2">
-                    若您的 TeX Live 安装在自定义路径，可在{' '}
-                    <button
-                      type="button"
-                      onClick={() => openSettings('general')}
-                      className="text-indigo-600 underline cursor-pointer"
-                    >
-                      设置 → 通用与 TeX 环境
-                    </button>{' '}
-                    中指定或自动扫描 <code className="font-mono">bin</code> 目录。
-                  </div>
-                </div>
-              ) : (
-                <>
-                  <div
-                    className={`p-3 rounded-xl border text-xs font-medium ${
-                      compileResult.ok
-                        ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                        : 'bg-rose-50 border-rose-200 text-rose-800'
-                    }`}
-                  >
-                    {compileResult.message}
-                  </div>
-
-                  {compileResult.pdfDataUrl && (
-                    <iframe
-                      src={compileResult.pdfDataUrl}
-                      title="Compiled Paper PDF"
-                      className="w-full h-[380px] rounded-lg border border-slate-300 bg-white"
-                    />
-                  )}
-
-                  {compileResult.logExcerpt && (
-                    <pre className="p-3 rounded-lg bg-slate-900 text-slate-200 font-mono text-[11px] leading-relaxed overflow-x-auto max-h-60">
-                      {compileResult.logExcerpt}
-                    </pre>
-                  )}
-                </>
-              )}
+            {viewMode === 'both' && <div className="paper-resize-handle" role="separator" aria-label="调整源码与 PDF 的宽度" aria-orientation="vertical" tabIndex={0}
+              aria-valuemin={30} aria-valuemax={75} aria-valuenow={Math.round(sourceWidth)}
+              onKeyDown={(e) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); setSourceWidth((w) => Math.min(75, Math.max(30, w + (e.key === 'ArrowLeft' ? -2 : 2)))); } }}
+              onPointerDown={(e) => { if (e.button !== 0) return; e.preventDefault(); e.currentTarget.setPointerCapture(e.pointerId); setResizing(true); }}
+              onPointerMove={(e) => { if (!resizing || !splitRef.current) return; const rect = splitRef.current.getBoundingClientRect(); setSourceWidth(Math.min(75, Math.max(30, (e.clientX - rect.left) / rect.width * 100))); }}
+              onPointerUp={(e) => { setResizing(false); if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId); }}
+              onLostPointerCapture={() => setResizing(false)} />}
+            {viewMode === 'both' && <div className="paper-synctex-controls" style={{ left: `${sourceWidth}%` }} role="group" aria-label="源码与 PDF 双向定位">
+              <button type="button" aria-label="在 PDF 中定位当前源码位置"
+                title={syncUnavailable || '在 PDF 中定位当前源码位置'} disabled={!canSync || syncBusy || !/\.tex$/i.test(activePaperFilePath)}
+                onMouseDown={(e) => e.preventDefault()} onClick={() => void locatePdf()}>
+                {syncBusy ? <Loader2 size={14} className="animate-spin" /> : <ArrowRight size={14} />}
+              </button>
+              <button type="button" aria-label="在源码中定位当前 PDF 位置"
+                title={syncUnavailable || '在源码中定位当前 PDF 位置（也可 Ctrl/⌘ + 点击 PDF）'} disabled={!canSync || syncBusy}
+                onClick={() => void locateSource()}><ArrowLeft size={14} /></button>
+            </div>}
+            <div className="paper-preview" style={{ display: viewMode === 'source' ? 'none' : undefined }}>
+              <div className="paper-preview-header"><FileText size={14} /><span>PDF 预览</span><span className="paper-command-spacer" /><button type="button" className="paper-icon-button" title="TeX 编译设置" onClick={() => openSettings('general')}><Settings size={14} /></button></div>
+              <div className="paper-preview-content">
+                {compileResult?.ok && compileResult.pdfPath && projectDir ? <Suspense fallback={<div className="paper-preview-empty">正在加载 PDF…</div>}>
+                  <PaperPdfPreview key={`${compileResult.pdfPath}:${compileResult.buildId}`} ref={pdfRef} projectDir={projectDir} pdfPath={compileResult.pdfPath}
+                    onReadyChange={setPdfReady} onReverseSync={(point) => void locateSource(point)} />
+                </Suspense> : <div className="paper-preview-empty">
+                  <div className="paper-preview-page"><FileText size={30} strokeWidth={1.2} /><span /><span /><span /></div>
+                  <h2>{isCompiling ? '正在编译论文' : '在这里预览你的论文'}</h2>
+                  <p>{isCompiling ? '正在调用本地 TeX 引擎，请稍候。' : '点击「编译 PDF」，查看完整排版。'}</p>
+                  <button type="button" onClick={() => openSettings('general')}>配置 TeX Live <ChevronRight size={12} /></button>
+                </div>}
+              </div>
+              {compileResult && <div className={`paper-build-result ${compileResult.ok ? 'is-success' : 'is-error'}`} role="status">{compileResult.message}</div>}
+              {showLogs && compileResult?.logExcerpt && <pre className="paper-build-log">{compileResult.logExcerpt}</pre>}
+              <div className="paper-preview-status"><span className={isCompiling ? 'paper-dirty-dot' : 'paper-status-dot'} /><span>{isCompiling ? '正在编译' : compileResult ? (compileResult.ok ? (pdfStale ? '源码已更改 · 请重新编译' : '编译完成') : '未生成 PDF') : '等待编译'}</span><span className="paper-command-spacer" />
+                <button type="button" disabled={!compileResult?.logExcerpt} onClick={() => setShowLogs(!showLogs)}>{showLogs ? '收起日志' : '编译日志'}</button><span>{texEngine}</span></div>
             </div>
           </div>
         )}
       </div>
-    </div>
+    </section>
   );
 };

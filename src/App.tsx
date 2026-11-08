@@ -45,9 +45,10 @@ export const App: React.FC = () => {
         }
       } else if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
         e.preventDefault();
-        void useProjectStore.getState().saveActiveCanvasNow();
-        if (useProjectStore.getState().workbenchMode !== 'figure') {
+        if (useProjectStore.getState().workbenchMode === 'paper') {
           void useProjectStore.getState().saveAllDirtyPaperFiles();
+        } else {
+          void useProjectStore.getState().saveActiveCanvasNow();
         }
       } else if ((e.ctrlKey || e.metaKey) && (e.key === 'o' || e.key === 'O')) {
         e.preventDefault();
@@ -63,22 +64,12 @@ export const App: React.FC = () => {
       <TopToolbar />
 
       <div className="flex flex-1 min-h-0 w-full overflow-hidden">
-        <LeftTabbedSidebar />
+        {workbenchMode === 'figure' && <LeftTabbedSidebar />}
 
         <main className="relative flex-1 h-full min-w-0 bg-slate-200/70 flex flex-row overflow-hidden shadow-sm">
-          {(workbenchMode === 'paper' || workbenchMode === 'split') && (
-            <div
-              className={
-                workbenchMode === 'split'
-                  ? 'w-[48%] h-full min-w-[340px] flex flex-col overflow-hidden'
-                  : 'flex-1 h-full min-w-0 flex flex-col overflow-hidden'
-              }
-            >
-              <PaperWorkspaceView />
-            </div>
-          )}
-
-          {(workbenchMode === 'figure' || workbenchMode === 'split') && (
+          {workbenchMode === 'paper' ? (
+            <PaperWorkspaceView />
+          ) : (
             <div className="relative flex-1 h-full min-w-0 flex flex-col overflow-hidden">
               <CanvasTabsBar />
               <div className="relative flex-1 min-h-0 w-full overflow-hidden flex flex-col">
@@ -90,7 +81,7 @@ export const App: React.FC = () => {
           )}
         </main>
 
-        <RightAgentPanel />
+        {workbenchMode === 'figure' && <RightAgentPanel />}
       </div>
 
       <SettingsModal />
