@@ -24,6 +24,7 @@
 </p>
 
 <p align="center">
+  <a href="#界面与核心工作流预览">界面预览</a> ·
   <a href="#核心特性">核心特性</a> ·
   <a href="#工作原理与架构">工作原理</a> ·
   <a href="#顶刊模板与学术主题">顶刊模板与主题</a> ·
@@ -34,11 +35,42 @@
   <a href="#安全边界与许可证">安全与许可证</a>
 </p>
 
+<p align="center">
+  <img src="docs/screenshots/studio-overview.png" width="100%" alt="AgenTikZ 工作台全景 — 无损 AST 源码同步、交互式矢量画布与 BYOA 智能体增量 Diff 审阅">
+</p>
+
 ---
 
 **AgenTikZ** 是一款专为机器学习与自然科学研究者打造的 **TikZ 与 PGFPlots 可视化编辑器**，面向 **NeurIPS**、**ICLR**、**ICML**、**CVPR** 与 **Nature (NPG)** 论文插图标准设计。系统底层采用基于字符级源码跨度（`SourceSpan`）的 **无损 CST/AST 解析器与外科手术式补丁引擎（Surgical Patcher）**——在画布上拖拽网络层、调整 3D 特征图（$C\times H\times W$）通道厚度、拉动正交残差跳线或移动 PGFPlots 图例时，仅精准替换 `.tex` 源码中对应的数值区间，100% 保留手写注释、`\tikzset` 宏定义与原有缩进格式。
 
 在 AI 协同方面，AgenTikZ 采用 **自带智能体（BYOA, Bring Your Own Agent）** 架构，基于官方 [Agent Client Protocol (ACP)](https://agentclientprotocol.com)（`stdio`）直接连接你本机已安装并登录的 **Claude Code**、**Codex CLI**、**OpenCode**、**Gemini CLI**、**Cursor Agent** 或 **Kimi Code**。无需在软件内配置模型 API Key，无需经过第三方云端中继；支持一键附加 `@canvas` 与 `@选中` 图元上下文，所有 AI 生成的 TikZ 代码均需人工预览确认后才会应用到画布。
+
+## 界面与核心工作流预览
+
+### 1. 可视化工作室全景：无损 AST 源码同步与 BYOA 智能体增量 Diff 审阅
+左侧 CodeMirror 6 编辑器实时高亮选中图元对应的源码行与精确修改区间（`minimum width=3.5cm`），中间交互式 SVG + KaTeX 矢量画布支持多配图标签页与浮动属性快捷栏，右侧 BYOA / ACP 智能体面板展示 AST 推理过程、语义变更标签、几何健康度评分（`100分`）与内联 Diff 对比预览。
+
+![可视化工作室全景：无损 AST 源码同步与 BYOA 智能体增量 Diff 审阅](docs/screenshots/studio-overview.png)
+
+### 2. 顶刊构图模板库、实时 SVG 拓扑缩略图与 3D 特征张量检查器
+左侧内置 6 套顶会整图模板（带 AST 实时渲染的 SVG 拓扑缩略图）与 13 种深度学习 / PGFPlots 原语组件；中间画布展示 **CVPR / ICCV** 多尺度 3D 视觉特征金字塔（$\mathbf{C}_2 \rightarrow \mathbf{C}_5$），右侧属性抽屉支持实时微调 3D 通道厚度、张量维度标注、视觉显著性角色与期刊色板。
+
+![顶刊构图模板库与 3D 特征张量检查器](docs/screenshots/templates-and-3d-vision.png)
+
+### 3. Nature (NPG) 多面板科研实验图表、项目目录管理与 AI 透明抠图生成器
+左侧统一管理论文手稿（`main.tex`、`sections/*.tex`）、科研配图（`figures/*.tikz`）与 AI 透明抠图科研插图生成器；中间画布呈现符合 **Nature (NPG)** 规范的双联实验图（误差带收敛折线图 + 跨领域消融柱状图），右侧面板支持交互式编辑 `\addplot` 数据序列、误差棒与图例布局。
+
+![Nature 多面板科研实验图表与交互式数据表编辑](docs/screenshots/nature-pgfplots-dashboard.png)
+
+### 4. 一站式 LaTeX 论文手稿与科研配图同屏联动工作台（`⚖️ 同屏` 模式）
+左屏直接编写论文 LaTeX 手稿并自动识别文中引用的 `\input{figures/*.tikz}` 配图标签，支持「📌 一键插图」将当前活动配图与 `\usepackage{styles/agentikz-macros}` 色彩宏同步插入至论文光标处，实现论文写作与顶会插图设计的零切换协同。
+
+![一站式 LaTeX 论文手稿与科研配图同屏联动工作台](docs/screenshots/paper-split-workbench.png)
+
+### 5. Agentero 风格 BYOA (ACP v1) 与顶刊 5 点图件契约设置中心
+支持本机 `PATH` 与内置适配器双层探测（**Claude Code**、**OpenCode**、**Codex CLI**、**Gemini CLI**、**Cursor Agent**、**Kimi Code**），提供一键 `stdio` 握手延时测试，并可开启 **Nature Skills 常驻风格规范**与 **5 点图件契约（`% @figure-contract`）**。
+
+![BYOA ACP v1 与顶刊图件契约设置中心](docs/screenshots/settings-acp-byoa.png)
 
 ## 核心特性
 

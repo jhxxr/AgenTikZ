@@ -24,6 +24,7 @@
 </p>
 
 <p align="center">
+  <a href="#interface--workflow-tour">Screenshots</a> ·
   <a href="#key-features">Key Features</a> ·
   <a href="#architecture">Architecture</a> ·
   <a href="#publication-templates--themes">Templates &amp; Themes</a> ·
@@ -34,11 +35,42 @@
   <a href="#security--license">Security &amp; License</a>
 </p>
 
+<p align="center">
+  <img src="docs/screenshots/studio-overview.png" width="100%" alt="AgenTikZ Studio Overview — Lossless AST Code Sync, Interactive Vector Canvas, and BYOA Agent Diff Review">
+</p>
+
 ---
 
 **AgenTikZ** is a visual TikZ and PGFPlots editor built for machine learning researchers and scientific authors preparing figures for **NeurIPS**, **ICLR**, **ICML**, **CVPR**, and **Nature (NPG)**. It pairs an interactive vector canvas with a lossless Concrete/Abstract Syntax Tree (**CST/AST**) parser and surgical patcher—dragging a module, resizing a 3D feature volume, routing an orthogonal residual bypass, or repositioning a PGFPlots legend updates only the exact character span in your `.tex` source while preserving every user comment, `\tikzset` macro, and indentation space.
 
 Instead of locking you into a proprietary cloud model or asking for raw API keys, AgenTikZ adopts **Bring Your Own Agent (BYOA)** over the official [Agent Client Protocol (ACP)](https://agentclientprotocol.com) (`stdio`). Connect your locally installed **Claude Code**, **Codex CLI**, **OpenCode**, **Gemini CLI**, **Cursor Agent**, or **Kimi Code** directly to the canvas, attach `@canvas` and `@selection` context, and review proposed LaTeX replacements before applying them.
+
+## Interface & Workflow Tour
+
+### 1. Visual Studio, Lossless AST Code Sync & BYOA Agent Diff Review
+Real-time bidirectional synchronization between the CodeMirror 6 TikZ editor (left, with surgical `SourceSpan` value highlights), the interactive SVG + KaTeX vector canvas with floating selection bar (center), and the BYOA / ACP Agent collaboration panel with semantic AST change pills, layout health scoring, and inline diff preview (right).
+
+![Visual Studio, Lossless AST Code Sync & BYOA Agent Diff Review](docs/screenshots/studio-overview.png)
+
+### 2. Publication Template Gallery, SVG Topology Minimaps & 3D Feature Volume Inspector
+Browse 6 built-in venue templates with live AST-rendered SVG topology minimaps and 13 deep learning / PGFPlots primitives on the left, while inspecting 3D feature pyramid cuboids ($\mathbf{C}_2 \rightarrow \mathbf{C}_5$), channel dimensions ($C\times H\times W$), saliency roles, and journal color tokens on the right.
+
+![Publication Template Gallery & 3D Feature Volume Inspector](docs/screenshots/templates-and-3d-vision.png)
+
+### 3. Nature (NPG) Multi-Panel Scientific Charts, Project Assets & AI Cutout Generator
+Manage manuscript files (`main.tex`, `sections/*.tex`), multi-canvas figures (`figures/*.tikz`), and transparent AI scientific illustrations on the left, while editing multi-panel PGFPlots error-band curves, ablation bar charts, and data series tables on the right.
+
+![Nature Multi-Panel PGFPlots Dashboard & Interactive Data Series Inspector](docs/screenshots/nature-pgfplots-dashboard.png)
+
+### 4. One-Stop LaTeX Manuscript + Figure Split-Screen IDE (`⚖️ 同屏` Mode)
+Write your paper manuscript side-by-side with the interactive figure canvas. Insert figures directly at the LaTeX cursor with `\input{figures/...tikz}`, jump to detected figure references, and keep `\usepackage{styles/agentikz-macros}` automatically synchronized across themes.
+
+![One-Stop LaTeX Manuscript + Figure Split-Screen IDE](docs/screenshots/paper-split-workbench.png)
+
+### 5. Agentero-Style BYOA (ACP v1) & 5-Point Figure Contract Settings Center
+Configure local ACP agents (**Claude Code**, **OpenCode**, **Codex CLI**, **Gemini CLI**, **Cursor Agent**, **Kimi Code**) with dual-tier PATH + bundled adapter detection, one-click `stdio` handshake verification, and Nature Skills 5-Point Figure Contract enforcement.
+
+![BYOA ACP v1 & 5-Point Figure Contract Settings Center](docs/screenshots/settings-acp-byoa.png)
 
 ## Key Features
 
