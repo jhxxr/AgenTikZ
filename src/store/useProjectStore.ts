@@ -376,6 +376,36 @@ let inFlightSaveTarget: {
 let editVersion = 0;
 let savedEditVersion = 0;
 const failedAssetLookupCache = new Set<string>();
+const inFlightAssetLookups = new Map<string, Promise<string | null>>();
+const MAX_CACHED_ASSET_DATA_URLS = 40;
+
+function setBoundedAssetDataUrl(
+  current: Record<string, string>,
+  key: string,
+  value: string
+): Record<string, string> {
+  if (current[key] === value) {
+    return current;
+  }
+  const next: Record<string, string> = { ...current, [key]: value };
+  const keys = Object.keys(next);
+  if (keys.length <= MAX_CACHED_ASSET_DATA_URLS) {
+    return next;
+  }
+  const activeCanvasPaths = new Set(
+    useWorkspaceStore
+      .getState()
+      .parsedDoc.nodes.filter((n) => n.subtype === 'image' && n.imagePath)
+      .map((n) => (n.imagePath || '').replace(/\\/g, '/').trim())
+  );
+  for (const k of keys) {
+    if (Object.keys(next).length <= MAX_CACHED_ASSET_DATA_URLS) break;
+    if (k !== key && !activeCanvasPaths.has(k)) {
+      delete next[k];
+    }
+  }
+  return next;
+}
 
 export const useProjectStore = create<ProjectState>((set, get) => {
   const initialPrefs = loadPrefs();
@@ -627,6 +657,8 @@ export const useProjectStore = create<ProjectState>((set, get) => {
           ].slice(0, 15);
 
           savedEditVersion = editVersion;
+          failedAssetLookupCache.clear();
+          inFlightAssetLookups.clear();
           set({
             projectDir: info.projectDir,
             projectName: info.projectName,
@@ -1835,6 +1867,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       const { projectDir } = get();
       if (!projectDir) return;
       failedAssetLookupCache.clear();
+      inFlightAssetLookups.clear();
       set({ isScanningAssets: true });
       if (isTauriRuntime()) {
         try {
@@ -1855,7 +1888,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
 
     ensureAssetDataUrl: async (relativePath) => {
       const cleanRel = relativePath.replace(/\\/g, '/').trim();
-      if (!cleanRel) return null;
+      if (!cleanRel || cleanRel.toLowerCase().endsWith('.pdf')) return null;
       const cached = get().assetDataUrls[cleanRel];
       if (cached) return cached;
 
@@ -1865,29 +1898,58 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       const cacheKey = `${projectDir}::${cleanRel}`;
       if (failedAssetLookupCache.has(cacheKey)) return null;
 
+      const existingPromise = inFlightAssetLookups.get(cacheKey);
+      if (existingPromise) {
+        return await existingPromise;
+      }
+
       if (isTauriRuntime()) {
-        try {
-          const { invoke } = await import('@tauri-apps/api/core');
-          const dataUrl = await invoke<string>('project_read_asset_data_url', {
-            projectDir,
-            relativePath: cleanRel,
-          });
-          set((s) => ({
-            assetDataUrls: { ...s.assetDataUrls, [cleanRel]: dataUrl },
-          }));
-          return dataUrl;
-        } catch {
-          failedAssetLookupCache.add(cacheKey);
-          return null;
-        }
+        const task = (async (): Promise<string | null> => {
+          try {
+            const { invoke } = await import('@tauri-apps/api/core');
+            const dataUrl = await invoke<string>('project_read_asset_data_url', {
+              projectDir,
+              relativePath: cleanRel,
+            });
+            if (get().projectDir !== projectDir) {
+              return dataUrl;
+            }
+            set((s) => {
+              const nextUrls = setBoundedAssetDataUrl(
+                s.assetDataUrls,
+                cleanRel,
+                dataUrl
+              );
+              return nextUrls === s.assetDataUrls
+                ? s
+                : { assetDataUrls: nextUrls };
+            });
+            return dataUrl;
+          } catch {
+            failedAssetLookupCache.add(cacheKey);
+            return null;
+          } finally {
+            inFlightAssetLookups.delete(cacheKey);
+          }
+        })();
+
+        inFlightAssetLookups.set(cacheKey, task);
+        return await task;
       }
 
       const vfs = readVirtualProject(projectDir);
       const url = vfs.assetDataUrls?.[cleanRel] || null;
       if (url) {
-        set((s) => ({
-          assetDataUrls: { ...s.assetDataUrls, [cleanRel]: url },
-        }));
+        set((s) => {
+          const nextUrls = setBoundedAssetDataUrl(
+            s.assetDataUrls,
+            cleanRel,
+            url
+          );
+          return nextUrls === s.assetDataUrls
+            ? s
+            : { assetDataUrls: nextUrls };
+        });
       } else {
         failedAssetLookupCache.add(cacheKey);
       }

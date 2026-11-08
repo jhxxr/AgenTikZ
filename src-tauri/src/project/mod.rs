@@ -289,6 +289,20 @@ fn list_canvases_in_storage(storage_dir: &Path) -> Vec<CanvasFileSummary> {
     list
 }
 
+/// Dedicated directories inside `<project_dir>` where AgenTikZ saves AI-generated cutout
+/// illustrations (`figures/assets/ai`), user-imported assets (`figures/assets`),
+/// and imported external figures (`figures/external`).
+pub const DEDICATED_ASSET_DIRS: &[&str] = &[
+    "figures/assets",
+    "figures/external",
+];
+
+/// Dedicated subdirectories inside `<project_dir>` for LaTeX manuscript components.
+pub const DEDICATED_PAPER_SUBDIRS: &[&str] = &["sections", "styles", "figures"];
+
+const MAX_SCANNED_ASSETS: usize = 100;
+const MAX_SCAN_VISITED_ENTRIES: usize = 600;
+
 fn should_skip_dir(dir_name: &str) -> bool {
     if dir_name.starts_with('.') {
         return true;
@@ -305,17 +319,28 @@ fn should_skip_dir(dir_name: &str) -> bool {
             | "env"
             | "agentikzfile"
             | "tavottofile"
+            | "data"
+            | "dataset"
+            | "datasets"
+            | "checkpoints"
+            | "wandb"
+            | "runs"
+            | "logs"
+            | "cache"
+            | "tmp"
+            | "temp"
     )
 }
 
-fn scan_assets_recursive(
+fn scan_assets_in_dir(
     root: &Path,
     current: &Path,
     depth: usize,
     max_depth: usize,
+    visited_budget: &mut usize,
     out: &mut Vec<ProjectAssetItem>,
 ) {
-    if depth > max_depth || out.len() >= 300 {
+    if depth > max_depth || out.len() >= MAX_SCANNED_ASSETS || *visited_budget == 0 {
         return;
     }
     let entries = match fs::read_dir(current) {
@@ -324,23 +349,33 @@ fn scan_assets_recursive(
     };
 
     for entry in entries.flatten() {
-        if out.len() >= 300 {
+        if out.len() >= MAX_SCANNED_ASSETS || *visited_budget == 0 {
             break;
         }
+        *visited_budget = visited_budget.saturating_sub(1);
+
+        let ft = match entry.file_type() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        if ft.is_symlink() {
+            continue;
+        }
+
         let path = entry.path();
-        let file_name = match path.file_name().and_then(|n| n.to_str()) {
-            Some(n) => n.to_string(),
-            None => continue,
+        let file_name = match entry.file_name().into_string() {
+            Ok(n) => n,
+            Err(_) => continue,
         };
 
-        if path.is_dir() {
+        if ft.is_dir() {
             if !should_skip_dir(&file_name) {
-                scan_assets_recursive(root, &path, depth + 1, max_depth, out);
+                scan_assets_in_dir(root, &path, depth + 1, max_depth, visited_budget, out);
             }
             continue;
         }
 
-        if !path.is_file() {
+        if !ft.is_file() {
             continue;
         }
 
@@ -386,7 +421,7 @@ fn scan_assets_recursive(
             })
             .unwrap_or_else(|| ".".to_string());
 
-        let meta = fs::metadata(&path).ok();
+        let meta = entry.metadata().ok();
         let size_bytes = meta.as_ref().map(|m| m.len()).unwrap_or(0);
         let modified_at = meta
             .as_ref()
@@ -404,6 +439,28 @@ fn scan_assets_recursive(
             modified_at,
         });
     }
+}
+
+/// Scans only AgenTikZ's dedicated asset folders (`figures/assets`, `figures/external`,
+/// `agentikzfile/export`) rather than walking the entire project directory tree.
+fn scan_dedicated_project_assets(root: &Path) -> Vec<ProjectAssetItem> {
+    let mut assets = Vec::new();
+    let mut visited_budget = MAX_SCAN_VISITED_ENTRIES;
+
+    for rel_dir in DEDICATED_ASSET_DIRS {
+        let mut dir_path = root.to_path_buf();
+        for part in rel_dir.split('/') {
+            dir_path.push(part);
+        }
+        if let Ok(meta) = fs::symlink_metadata(&dir_path) {
+            if meta.is_dir() && !meta.file_type().is_symlink() {
+                scan_assets_in_dir(root, &dir_path, 0, 2, &mut visited_budget, &mut assets);
+            }
+        }
+    }
+
+    assets.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
+    assets
 }
 
 /// Opens the native OS folder selection dialog and returns the selected directory path.
@@ -527,10 +584,7 @@ pub async fn project_open_workspace(project_dir: String) -> Result<ProjectWorksp
 
     let meta = read_or_init_project_meta(&storage_dir, &project_name);
     let canvases = list_canvases_in_storage(&storage_dir);
-
-    let mut assets = Vec::new();
-    scan_assets_recursive(&clean_root, &clean_root, 0, 4, &mut assets);
-    assets.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
+    let assets = scan_dedicated_project_assets(&clean_root);
 
     Ok(ProjectWorkspaceInfo {
         project_dir: clean_root_str,
@@ -747,17 +801,14 @@ pub async fn project_delete_canvas(project_dir: String, file_name: String) -> Re
     Ok(true)
 }
 
-/// Rescans image/figure assets inside `<project_dir>`.
+/// Rescans image/figure assets inside AgenTikZ's dedicated folders (`figures/assets`, `figures/external`, `agentikzfile/export`).
 #[tauri::command]
 pub async fn project_scan_assets(project_dir: String) -> Result<Vec<ProjectAssetItem>, String> {
     let root_path = PathBuf::from(project_dir.trim());
     if !root_path.is_dir() {
         return Err("项目文件夹不存在".into());
     }
-    let mut assets = Vec::new();
-    scan_assets_recursive(&root_path, &root_path, 0, 4, &mut assets);
-    assets.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
-    Ok(assets)
+    Ok(scan_dedicated_project_assets(&root_path))
 }
 
 /// Reads an image asset from `<project_dir>/<relative_path>` as a `data:` URL for canvas rendering & export.
@@ -780,24 +831,27 @@ pub async fn project_read_asset_data_url(
         }
     }
 
-    if let Ok(meta) = fs::metadata(&full_path) {
-        if meta.len() > 25 * 1024 * 1024 {
-            return Err("素材文件超过 25MB 预览上限".into());
-        }
-    }
-
     let ext = full_path
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
 
+    if ext == "pdf" {
+        return Err("PDF 文件不支持直接作为位图 Data URL 预览".into());
+    }
+
+    if let Ok(meta) = fs::metadata(&full_path) {
+        if meta.len() > 10 * 1024 * 1024 {
+            return Err("素材文件超过 10MB 内存预览上限".into());
+        }
+    }
+
     let mime = match ext.as_str() {
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
         "svg" => "image/svg+xml",
         "webp" => "image/webp",
-        "pdf" => "application/pdf",
         _ => "application/octet-stream",
     };
 
@@ -1009,14 +1063,15 @@ fn classify_paper_file(rel_str: &str) -> String {
     }
 }
 
-fn scan_paper_files_recursive(
+fn scan_paper_files_in_dir(
     root: &Path,
     current: &Path,
     depth: usize,
     max_depth: usize,
+    visited_budget: &mut usize,
     out: &mut Vec<PaperFileItem>,
 ) {
-    if depth > max_depth || out.len() >= 250 {
+    if depth > max_depth || out.len() >= 150 || *visited_budget == 0 {
         return;
     }
     let entries = match fs::read_dir(current) {
@@ -1025,20 +1080,33 @@ fn scan_paper_files_recursive(
     };
 
     for entry in entries.flatten() {
+        if out.len() >= 150 || *visited_budget == 0 {
+            break;
+        }
+        *visited_budget = visited_budget.saturating_sub(1);
+
+        let ft = match entry.file_type() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        if ft.is_symlink() {
+            continue;
+        }
+
         let path = entry.path();
-        let file_name = match path.file_name().and_then(|n| n.to_str()) {
-            Some(n) => n.to_string(),
-            None => continue,
+        let file_name = match entry.file_name().into_string() {
+            Ok(n) => n,
+            Err(_) => continue,
         };
 
-        if path.is_dir() {
-            if !should_skip_dir(&file_name) {
-                scan_paper_files_recursive(root, &path, depth + 1, max_depth, out);
+        if ft.is_dir() {
+            if depth < max_depth && !should_skip_dir(&file_name) {
+                scan_paper_files_in_dir(root, &path, depth + 1, max_depth, visited_budget, out);
             }
             continue;
         }
 
-        if !path.is_file() {
+        if !ft.is_file() {
             continue;
         }
 
@@ -1065,7 +1133,7 @@ fn scan_paper_files_recursive(
             .collect::<Vec<_>>()
             .join("/");
 
-        let meta = fs::metadata(&path).ok();
+        let meta = entry.metadata().ok();
         let size_bytes = meta.as_ref().map(|m| m.len()).unwrap_or(0);
         let modified_at = meta
             .as_ref()
@@ -1082,6 +1150,28 @@ fn scan_paper_files_recursive(
             modified_at,
         });
     }
+}
+
+/// Scans top-level manuscript files in `<root>` plus dedicated paper folders (`sections`, `styles`, `figures`)
+/// without traversing unrelated subdirectories in the user's workspace.
+fn scan_dedicated_paper_files(root: &Path) -> Vec<PaperFileItem> {
+    let mut list = Vec::new();
+    let mut visited_budget = MAX_SCAN_VISITED_ENTRIES;
+
+    // 1. Top-level files in root only (depth = 0, max_depth = 0 -> does not recurse into arbitrary folders)
+    scan_paper_files_in_dir(root, root, 0, 0, &mut visited_budget, &mut list);
+
+    // 2. Dedicated paper subdirectories (`sections/`, `styles/`, `figures/`)
+    for sub in DEDICATED_PAPER_SUBDIRS {
+        let sub_path = root.join(sub);
+        if let Ok(meta) = fs::symlink_metadata(&sub_path) {
+            if meta.is_dir() && !meta.file_type().is_symlink() {
+                scan_paper_files_in_dir(root, &sub_path, 0, 1, &mut visited_budget, &mut list);
+            }
+        }
+    }
+
+    list
 }
 
 /// Initializes a clean academic paper directory structure (`main.tex`, `sections/`, `styles/`, `figures/`, etc.).
@@ -1120,15 +1210,14 @@ pub async fn project_init_paper_workspace(
     Ok(true)
 }
 
-/// Lists all `.tex`, `.bib`, `.sty`, `.cls`, and `.tikz` files inside `<project_dir>`.
+/// Lists `.tex`, `.bib`, `.sty`, `.cls`, and `.tikz` files inside `<project_dir>` root and dedicated paper folders.
 #[tauri::command]
 pub async fn project_list_paper_files(project_dir: String) -> Result<Vec<PaperFileItem>, String> {
     let root = PathBuf::from(project_dir.trim());
     if !root.is_dir() {
         return Ok(Vec::new());
     }
-    let mut list = Vec::new();
-    scan_paper_files_recursive(&root, &root, 0, 4, &mut list);
+    let mut list = scan_dedicated_paper_files(&root);
     list.sort_by(|a, b| {
         let rank = |cat: &str| match cat {
             "main" => 0,
@@ -1308,31 +1397,41 @@ mod tests {
         let png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
         let data_url = format!("data:image/png;base64,{}", png_b64);
 
+        // Save into dedicated folder `figures/assets/ai/test.png`
         let item = project_import_asset(
             dir_str.clone(),
-            "figs/test.png".to_string(),
+            "figures/assets/ai/test.png".to_string(),
             data_url.clone(),
         )
         .await
         .expect("import asset should succeed");
 
-        assert_eq!(item.relative_path, "figs/test.png");
+        assert_eq!(item.relative_path, "figures/assets/ai/test.png");
         assert_eq!(item.file_name, "test.png");
-        assert_eq!(item.folder, "figs");
+        assert_eq!(item.folder, "figures/assets/ai");
         assert_eq!(item.ext, "png");
         assert!(item.size_bytes > 0);
-        assert!(dir.join("figs").join("test.png").exists());
+        assert!(dir.join("figures").join("assets").join("ai").join("test.png").exists());
 
-        let read_back = project_read_asset_data_url(dir_str.clone(), "figs/test.png".to_string())
-            .await
-            .expect("read asset data url should succeed");
+        // Also place an unrelated image in the project root / arbitrary subfolder;
+        // `project_scan_assets` must NOT scan unrelated images outside dedicated folders.
+        fs::create_dir_all(dir.join("random_dataset")).unwrap();
+        fs::write(dir.join("root_wallpaper.png"), b"fake").unwrap();
+        fs::write(dir.join("random_dataset").join("sample_001.png"), b"fake").unwrap();
+
+        let read_back = project_read_asset_data_url(
+            dir_str.clone(),
+            "figures/assets/ai/test.png".to_string(),
+        )
+        .await
+        .expect("read asset data url should succeed");
         assert_eq!(read_back, data_url);
 
         let scanned = project_scan_assets(dir_str.clone())
             .await
             .expect("scan assets should succeed");
         assert_eq!(scanned.len(), 1);
-        assert_eq!(scanned[0].relative_path, "figs/test.png");
+        assert_eq!(scanned[0].relative_path, "figures/assets/ai/test.png");
 
         // Reject path traversal
         let traversal = project_import_asset(

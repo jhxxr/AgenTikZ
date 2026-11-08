@@ -775,5 +775,50 @@ describe('useProjectStore', () => {
       );
       expect(useProjectStore.getState().assets).toHaveLength(0);
     });
+
+    it('deduplicates concurrent ensureAssetDataUrl calls and skips PDF files', async () => {
+      enableTauriRuntime();
+      useProjectStore.setState({
+        projectDir: 'E:/Papers/TestProject',
+        assets: [],
+        assetDataUrls: {},
+      });
+
+      let resolveRead!: (val: string) => void;
+      const readPromise = new Promise<string>((r) => {
+        resolveRead = r;
+      });
+      mockInvoke.mockImplementation((cmd: string) => {
+        if (cmd === 'project_read_asset_data_url') {
+          return readPromise;
+        }
+        return Promise.resolve(null);
+      });
+
+      // PDF should be skipped immediately without IPC call
+      const pdfRes = await useProjectStore
+        .getState()
+        .ensureAssetDataUrl('figures/external/paper_fig.pdf');
+      expect(pdfRes).toBeNull();
+      expect(mockInvoke).not.toHaveBeenCalled();
+
+      // Fire 3 concurrent calls for the same image
+      const p1 = useProjectStore
+        .getState()
+        .ensureAssetDataUrl('figures/assets/ai/cutout1.png');
+      const p2 = useProjectStore
+        .getState()
+        .ensureAssetDataUrl('figures/assets/ai/cutout1.png');
+      const p3 = useProjectStore
+        .getState()
+        .ensureAssetDataUrl('figures/assets/ai/cutout1.png');
+
+      resolveRead('data:image/png;base64,AAAA');
+      const [r1, r2, r3] = await Promise.all([p1, p2, p3]);
+      expect(r1).toBe('data:image/png;base64,AAAA');
+      expect(r2).toBe('data:image/png;base64,AAAA');
+      expect(r3).toBe('data:image/png;base64,AAAA');
+      expect(mockInvoke).toHaveBeenCalledTimes(1);
+    });
   });
 });

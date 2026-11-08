@@ -95,34 +95,6 @@ fn apply_project_texinputs(cmd: &mut Command, project_dir: Option<&str>) {
     }
 }
 
-fn encode_base64(bytes: &[u8]) -> String {
-    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
-    let mut i = 0;
-    while i + 3 <= bytes.len() {
-        let n = ((bytes[i] as u32) << 16) | ((bytes[i + 1] as u32) << 8) | (bytes[i + 2] as u32);
-        out.push(TABLE[((n >> 18) & 0x3F) as usize] as char);
-        out.push(TABLE[((n >> 12) & 0x3F) as usize] as char);
-        out.push(TABLE[((n >> 6) & 0x3F) as usize] as char);
-        out.push(TABLE[(n & 0x3F) as usize] as char);
-        i += 3;
-    }
-    let rem = bytes.len() - i;
-    if rem == 1 {
-        let n = (bytes[i] as u32) << 16;
-        out.push(TABLE[((n >> 18) & 0x3F) as usize] as char);
-        out.push(TABLE[((n >> 12) & 0x3F) as usize] as char);
-        out.push('=');
-        out.push('=');
-    } else if rem == 2 {
-        let n = ((bytes[i] as u32) << 16) | ((bytes[i + 1] as u32) << 8);
-        out.push(TABLE[((n >> 18) & 0x3F) as usize] as char);
-        out.push(TABLE[((n >> 12) & 0x3F) as usize] as char);
-        out.push(TABLE[((n >> 6) & 0x3F) as usize] as char);
-        out.push('=');
-    }
-    out
-}
 
 /// Scans standard system locations and an optional custom directory for TeX Live / MiKTeX / MacTeX installations.
 #[tauri::command]
@@ -436,17 +408,14 @@ pub async fn tex_compile_paper(
     let log_excerpt = log_lines[tail_start..].join("\n");
 
     let pdf_path = root.join(format!("{}.pdf", stem));
-    if pdf_path.is_file() {
-        let pdf_bytes = fs::read(&pdf_path).unwrap_or_default();
-        let pdf_data_url = if !pdf_bytes.is_empty() && pdf_bytes.len() <= 35 * 1024 * 1024 {
-            Some(format!("data:application/pdf;base64,{}", encode_base64(&pdf_bytes)))
-        } else {
-            None
-        };
+    let pdf_non_empty = fs::metadata(&pdf_path)
+        .map(|m| m.is_file() && m.len() > 0)
+        .unwrap_or(false);
+    if pdf_non_empty {
         PaperCompileResult {
-            ok: final_out.status.success() || !pdf_bytes.is_empty(),
+            ok: true,
             pdf_path: Some(pdf_path.to_string_lossy().to_string()),
-            pdf_data_url,
+            pdf_data_url: None,
             message: format!("{} 编译完成 → {}.pdf", engine, stem),
             log_excerpt,
             errors,

@@ -185,15 +185,16 @@ export const InteractiveCanvas: React.FC = () => {
 
   // Preload image data URLs for any `\includegraphics` nodes in the parsed AST
   useEffect(() => {
+    const currentUrls = useProjectStore.getState().assetDataUrls;
     for (const node of parsedDoc.nodes) {
       if (node.subtype === 'image' && node.imagePath) {
         const cleanPath = node.imagePath.replace(/\\/g, '/').trim();
-        if (cleanPath && !assetDataUrls[cleanPath]) {
+        if (cleanPath && !currentUrls[cleanPath]) {
           void ensureAssetDataUrl(cleanPath);
         }
       }
     }
-  }, [parsedDoc.nodes, assetDataUrls, ensureAssetDataUrl]);
+  }, [parsedDoc.nodes, ensureAssetDataUrl]);
 
   // Unified drag state: move, pan, connect, resize_node, route_edge, move_edge_label, or resize_canvas
   const [dragState, setDragState] = useState<{

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useWorkspaceStore } from '../../store/useWorkspaceStore';
 import { useAgentStore } from '../../store/useAgentStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
@@ -136,20 +136,53 @@ const TemplateMinimap: React.FC<{ tpl: FullFigureTemplate }> = React.memo(({ tpl
   );
 });
 
+const MAX_AUTO_THUMBNAIL_BYTES = 8 * 1024 * 1024; // 8 MB
+
 const AssetThumbnailCard: React.FC<{
   asset: ProjectAssetItem;
   dataUrl?: string;
-  onEnsureDataUrl: (relPath: string) => void;
   onInsert: (relPath: string) => void;
-}> = React.memo(({ asset, dataUrl, onEnsureDataUrl, onInsert }) => {
+}> = React.memo(({ asset, dataUrl, onInsert }) => {
+  const cardRef = useRef<HTMLDivElement | null>(null);
+  const hasDataUrl = Boolean(dataUrl);
+
   useEffect(() => {
-    if (!dataUrl && asset.ext !== 'pdf') {
-      onEnsureDataUrl(asset.relativePath);
+    if (
+      hasDataUrl ||
+      asset.ext === 'pdf' ||
+      (asset.sizeBytes > 0 && asset.sizeBytes > MAX_AUTO_THUMBNAIL_BYTES)
+    ) {
+      return;
     }
-  }, [asset.relativePath, asset.ext, dataUrl, onEnsureDataUrl]);
+
+    const triggerLoad = () => {
+      void useProjectStore.getState().ensureAssetDataUrl(asset.relativePath);
+    };
+
+    const el = cardRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') {
+      triggerLoad();
+      return;
+    }
+
+    let didTrigger = false;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting) && !didTrigger) {
+          didTrigger = true;
+          observer.disconnect();
+          triggerLoad();
+        }
+      },
+      { rootMargin: '120px' }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [asset.relativePath, asset.ext, asset.sizeBytes, hasDataUrl]);
 
   return (
     <div
+      ref={cardRef}
       draggable
       onDragStart={(e) => {
         e.dataTransfer.setData(
@@ -167,6 +200,8 @@ const AssetThumbnailCard: React.FC<{
           <img
             src={dataUrl}
             alt={asset.fileName}
+            loading="lazy"
+            decoding="async"
             className="max-h-full max-w-full object-contain rounded-xs group-hover:scale-105 transition-transform"
           />
         ) : (
@@ -237,7 +272,6 @@ export const LeftTabbedSidebar: React.FC = () => {
     duplicateCurrentCanvasFile,
     deleteCanvasFile,
     refreshProjectAssets,
-    ensureAssetDataUrl,
     registerLocalBrowserAssetFiles,
     registerGeneratedAsset,
     revealInFileManager,
@@ -247,11 +281,19 @@ export const LeftTabbedSidebar: React.FC = () => {
     useState<TemplateCategory>('all');
   const [assetFolderFilter, setAssetFolderFilter] = useState<string>('all');
   const [assetSearch, setAssetSearch] = useState<string>('');
+  const [visibleAssetLimit, setVisibleAssetLimit] = useState<number>(24);
   const [showAiGenerator, setShowAiGenerator] = useState<boolean>(false);
   const [aiPrompt, setAiPrompt] = useState<string>('');
   const [aiAspect, setAiAspect] = useState<'1:1' | '4:3' | '16:9'>('1:1');
   const [isGeneratingAi, setIsGeneratingAi] = useState<boolean>(false);
   const [aiMessage, setAiMessage] = useState<string | null>(null);
+
+  const handleInsertAsset = useCallback(
+    (relPath: string) => {
+      addImageAssetToCanvas(relPath);
+    },
+    [addImageAssetToCanvas]
+  );
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const externalFigInputRef = useRef<HTMLInputElement | null>(null);
@@ -728,7 +770,7 @@ export const LeftTabbedSidebar: React.FC = () => {
                     type="button"
                     onClick={() => void refreshProjectAssets()}
                     className="p-1 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-600 transition-colors cursor-pointer"
-                    title="重新扫描项目目录中的图片素材"
+                    title="刷新专属目录 (figures/assets/ 与 figures/external/) 中的图片素材"
                   >
                     <RefreshCw
                       className={`w-3 h-3 ${
@@ -870,7 +912,7 @@ export const LeftTabbedSidebar: React.FC = () => {
                         type="text"
                         value={assetSearch}
                         onChange={(e) => setAssetSearch(e.target.value)}
-                        placeholder="搜索同目录图片文件名或子目录..."
+                        placeholder="搜索专属素材目录图片文件名..."
                         className="w-full pl-7 pr-2.5 py-1 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-400"
                       />
                     </div>
@@ -883,28 +925,37 @@ export const LeftTabbedSidebar: React.FC = () => {
                   <Images className="w-6 h-6 text-slate-300 mx-auto" />
                   <div className="text-[11px] font-medium text-slate-600">
                     {projectDir
-                      ? '当前项目文件夹下暂未扫描到图片文件'
+                      ? '专属素材目录下暂无生成或导入的图片'
                       : '尚未关联项目文件夹或导入图片'}
                   </div>
                   <p className="text-[10px] text-slate-400 leading-relaxed">
-                    点击上方「AI 抠图」直接生成透明插图，或点击「导入外部图」将画好的{' '}
+                    点击上方「AI 抠图」生成透明插图（保存在{' '}
+                    <code className="font-mono">figures/assets/ai/</code>），或点击「导入外部图」将画好的{' '}
                     <code className="font-mono">.pdf/.svg/.png</code> 放入{' '}
                     <code className="font-mono">figures/external/</code>，即可插入论文或拖拽进画布。
                   </p>
                 </div>
               ) : (
-                <div className="grid grid-cols-2 gap-2">
-                  {filteredAssets.map((asset) => (
-                    <AssetThumbnailCard
-                      key={asset.relativePath}
-                      asset={asset}
-                      dataUrl={assetDataUrls[asset.relativePath]}
-                      onEnsureDataUrl={(relPath) =>
-                        void ensureAssetDataUrl(relPath)
-                      }
-                      onInsert={(relPath) => addImageAssetToCanvas(relPath)}
-                    />
-                  ))}
+                <div className="space-y-2">
+                  <div className="grid grid-cols-2 gap-2">
+                    {filteredAssets.slice(0, visibleAssetLimit).map((asset) => (
+                      <AssetThumbnailCard
+                        key={asset.relativePath}
+                        asset={asset}
+                        dataUrl={assetDataUrls[asset.relativePath]}
+                        onInsert={handleInsertAsset}
+                      />
+                    ))}
+                  </div>
+                  {filteredAssets.length > visibleAssetLimit && (
+                    <button
+                      type="button"
+                      onClick={() => setVisibleAssetLimit((n) => n + 24)}
+                      className="w-full py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 text-[11px] font-medium transition-colors cursor-pointer"
+                    >
+                      显示更多素材（剩余 {filteredAssets.length - visibleAssetLimit} 项）
+                    </button>
+                  )}
                 </div>
               )}
             </div>
