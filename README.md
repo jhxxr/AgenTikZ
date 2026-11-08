@@ -165,17 +165,44 @@ npm run tauri dev
   npm run tauri build
   ```
 
+### Desktop package layout
+
+The application remains a native Rust/Tauri executable. npm/Vite are build tools, not a development environment shipped to users. esbuild combines the Claude/Codex ACP adapters into standalone `.mjs` files. Only those bundles, their manifest, the Linux browser-launch helper, and third-party notices are packaged—not a full `node_modules` tree, type declarations, or source maps.
+
+```text
+adapters/
+├── manifest.json
+├── THIRD_PARTY_NOTICES.txt
+├── claude-code/index.mjs
+└── codex-cli/
+    ├── index.mjs
+    └── xdg-open
+```
+
+This reduces adapter resources; it does **not** embed a Node runtime. The bundled adapters still require local Node.js (22+ required for Claude, 22+ recommended for both) and an installed, authenticated Claude Code or Codex CLI. A standalone ACP adapter on PATH takes precedence. Otherwise, the desktop launcher uses the bundled adapter and supplies `CLAUDE_CODE_EXECUTABLE` / `CODEX_PATH` pointing to the user's CLI. Non-AI editing, rendering, and export do not depend on these adapters.
+
+```sh
+npm run adapters:stage           # Install pinned adapters, bundle, verify; automatic during builds
+npm run adapters:stage -- --force
+npm run adapters:verify          # Relocated version + ACP initialize tests; no model calls
+npm run test:packaging           # Cache, resource, size-limit, and rollback tests
+```
+
+The manifest records a build fingerprint and per-file SHA-256 hashes. Corrupt resources or changed build scripts invalidate the cache. Bundles are verified in an isolated location without user credentials before replacing existing resources. Adapter upgrades must review dynamic assets and third-party terms, not simply remove files absent from static imports.
+
+After a successful Windows NSIS reinstall/update, the installer recognizes and removes the legacy packaged `adapters/node_modules` tree, without deleting user projects, configuration, or globally installed CLIs.
+
 ## BYOA (ACP) Setup & Prompting Guide
 
-AgenTikZ connects to external coding agents over `stdio` using the Agent Client Protocol (`v1`). AgenTikZ never downloads packages implicitly (`npx -y` is not used) and never stores model API keys—install and authenticate the agent CLI you prefer on your machine first.
+AgenTikZ connects to external coding agents over `stdio` using the Agent Client Protocol (`v1`). AgenTikZ never downloads packages implicitly at runtime (`npx -y` is not used) and never stores model API keys—install and authenticate your preferred agent CLI first. Claude/Codex can use the bundled adapters; other agents must provide ACP support locally.
 
 ### Supported Local ACP Agents
 
 | Agent Provider | Expected Executable on `PATH` | Default Args | Setup Notes |
 | --- | --- | --- | --- |
-| **Claude Code (ACP)** | `claude-agent-acp` | *(none)* | Install `@agentclientprotocol/claude-agent-acp` globally and authenticate Claude Code |
+| **Claude Code (ACP)** | `claude-agent-acp`, or `claude` + `node` | *(none)* | Standalone ACP adapter takes precedence; otherwise use the bundled adapter with Node.js 22+ and authenticate Claude Code |
 | **OpenCode (ACP)** | `opencode` | `acp` | Install OpenCode CLI (`opencode acp`) |
-| **Codex CLI (ACP)** | `codex-acp` | *(none)* | Install `@zed-industries/codex-acp` globally and sign in to Codex CLI |
+| **Codex CLI (ACP)** | `codex-acp`, or `codex` + `node` | *(none)* | Standalone ACP adapter takes precedence; otherwise use the bundled adapter with Node.js (22+ recommended) and authenticate Codex CLI |
 | **Gemini CLI (ACP)** | `gemini` | `--acp` | Install Gemini CLI with `--acp` support |
 | **Cursor Agent (ACP)** | `cursor-agent` | `acp` | Install Cursor Agent CLI |
 | **Kimi Code (ACP)** | `kimi` | `acp` | Install Kimi CLI with `acp` subcommand |

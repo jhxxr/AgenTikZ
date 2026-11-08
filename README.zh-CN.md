@@ -165,17 +165,44 @@ npm run tauri dev
   npm run tauri build
   ```
 
+### 桌面安装包结构
+
+应用主体仍是 Rust/Tauri 原生程序；构建时使用的 npm/Vite 不会作为完整开发环境安装到用户电脑。Claude/Codex ACP 适配器由 esbuild 合并为两个独立的 `.mjs`，只随包附带清单、Linux 浏览器启动辅助脚本及第三方许可证，不再复制整棵 `node_modules`、类型声明或 source map。
+
+```text
+adapters/
+├── manifest.json
+├── THIRD_PARTY_NOTICES.txt
+├── claude-code/index.mjs
+└── codex-cli/
+    ├── index.mjs
+    └── xdg-open
+```
+
+这是**精简适配器资源**，不是内置 Node 运行时：使用内置适配器仍需本机 Node.js（Claude 适配器要求 22+，建议统一使用 22+），以及已安装、已登录的 Claude Code 或 Codex CLI。桌面端优先使用 PATH 中的独立 ACP 适配器，否则使用内置适配器，并通过 `CLAUDE_CODE_EXECUTABLE` / `CODEX_PATH` 指向用户自己的 CLI。无需 AI 的编辑、渲染、导出不依赖这些适配器。
+
+```sh
+npm run adapters:stage           # 安装固定版本依赖、合并并校验；构建时自动执行
+npm run adapters:stage -- --force
+npm run adapters:verify          # 在隔离目录检查版本与 ACP initialize，不调用模型
+npm run test:packaging           # 缓存、资源、体积限制与失败回滚测试
+```
+
+生成清单记录构建指纹和各文件的 SHA-256；缓存资源损坏或构建脚本改变会触发重建。打包前自动验证移位后的适配器，不使用用户登录信息；验证成功后才替换旧资源。升级适配器时需复查动态资源及第三方条款，不能仅删除未被静态导入的文件。
+
+Windows NSIS 安装包在覆盖安装成功后，会识别并清理旧版随包安装的 `adapters/node_modules`，不删除用户项目、配置或本机全局 CLI。
+
 ## BYOA 智能体接入与提示词指南
 
-AgenTikZ 通过标准输入输出（`stdio`）使用 ACP v1 协议与本机安装的智能体 CLI 通信。**AgenTikZ 不会隐式下载任何外部程序（不使用 `npx -y`），也不代管模型 API Key**——请先在本机安装对应适配器并完成 CLI 登录。
+AgenTikZ 通过标准输入输出（`stdio`）使用 ACP v1 协议与本机安装的智能体 CLI 通信。**AgenTikZ 在运行时不会隐式下载任何外部程序（不使用 `npx -y`），也不代管模型 API Key**——请先在本机安装并登录对应 CLI；Claude/Codex 可使用内置适配器，其他智能体需自行提供 ACP 支持。
 
 ### 支持的本地 ACP 智能体列表
 
 | 智能体选项 | 本机 `PATH` 需存在的可执行文件 | 默认启动参数 | 安装与配置说明 |
 | --- | --- | --- | --- |
-| **Claude Code (ACP)** | `claude-agent-acp` | *(无)* | 全局安装 `@agentclientprotocol/claude-agent-acp` 并完成 Claude CLI 登录 |
+| **Claude Code (ACP)** | `claude-agent-acp`，或 `claude` + `node` | *(无)* | 独立 ACP 适配器优先；也可用内置适配器 + Node.js 22+，需完成 Claude CLI 登录 |
 | **OpenCode (ACP)** | `opencode` | `acp` | 安装 OpenCode CLI（支持 `opencode acp` 子命令） |
-| **Codex CLI (ACP)** | `codex-acp` | *(无)* | 全局安装 `@zed-industries/codex-acp` 并完成 Codex CLI 登录 |
+| **Codex CLI (ACP)** | `codex-acp`，或 `codex` + `node` | *(无)* | 独立 ACP 适配器优先；也可用内置适配器 + Node.js（建议 22+），需完成 Codex CLI 登录 |
 | **Gemini CLI (ACP)** | `gemini` | `--acp` | 安装支持 `--acp` 参数的 Gemini CLI |
 | **Cursor Agent (ACP)** | `cursor-agent` | `acp` | 安装支持 `acp` 子命令的 Cursor Agent CLI |
 | **Kimi Code (ACP)** | `kimi` | `acp` | 安装支持 `acp` 子命令的 Kimi CLI |

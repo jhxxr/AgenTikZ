@@ -8,6 +8,7 @@ dist/
 src-tauri/target/
 src-tauri/gen/schemas
 src-tauri/adapters/
+src-tauri/.adapters-build-*/
 
 # IDE
 .vscode/

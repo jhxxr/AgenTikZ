@@ -65,6 +65,9 @@ jobs:
       - name: Run frontend unit tests (Vitest)
         run: npm test
 
+      - name: Test adapter packaging guards and isolated bundles
+        run: npm run test:packaging
+
       - name: Stress persistence test isolation
         run: node scripts/test-persistence-isolation.mjs
 
