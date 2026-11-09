@@ -41,6 +41,8 @@ pub struct PiPrompt {
     request_id: String,
     conversation_id: String,
     provider: String,
+    #[serde(default)]
+    channel: Option<PiChannel>,
     model: String,
     thinking_level: String,
     prompt: String,
@@ -51,6 +53,57 @@ pub struct PiPrompt {
     #[serde(default)]
     reference_images: Vec<crate::agent_image::AgentImage>,
     target: crate::mcp::bridge::CanvasTarget,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PiChannel {
+    id: String,
+    name: String,
+    provider: String,
+    api: String,
+    base_url: String,
+    #[serde(default)]
+    default_model_id: Option<String>,
+    models: Vec<PiChannelModel>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PiChannelModel {
+    id: String,
+    name: String,
+    reasoning: bool,
+    supports_images: bool,
+    context_window: u32,
+    max_tokens: u32,
+}
+
+impl PiChannel {
+    fn validate(&self) -> Result<(), String> {
+        validate_provider(&self.id)?;
+        if self.models.len() > 2000 || self.name.len() > 400 || self.base_url.len() > 4096
+            || !matches!(self.api.as_str(), "openai-completions" | "openai-responses" | "anthropic-messages" | "google-generative-ai")
+        {
+            return Err("Pi 渠道参数无效。".into());
+        }
+        let url = tauri::Url::parse(&self.base_url).map_err(|_| "Pi 渠道地址无效。")?;
+        if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none()
+            || !url.username().is_empty() || url.password().is_some()
+            || url.query().is_some() || url.fragment().is_some()
+        {
+            return Err("渠道地址仅支持 HTTP(S)，不能包含用户名、密码、查询参数或片段。".into());
+        }
+        for model in &self.models {
+            if model.id.trim().is_empty() || model.id.len() > 256 || model.name.len() > 1024
+                || !(1024..=10_000_000).contains(&model.context_window)
+                || model.max_tokens == 0 || model.max_tokens > model.context_window
+            {
+                return Err("Pi 渠道模型参数无效。".into());
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Serialize)]
@@ -330,6 +383,23 @@ pub async fn pi_probe(app: AppHandle, window: WebviewWindow) -> Result<Value, St
 }
 
 #[tauri::command]
+pub async fn pi_fetch_models(
+    app: AppHandle,
+    window: WebviewWindow,
+    channel: PiChannel,
+) -> Result<Value, String> {
+    channel.validate()?;
+    let api_key = credentials(&channel.id)?.get_password()
+        .map_err(|_| "请先保存该渠道的 API Key。")?;
+    let mut worker = Worker::start(&app).await?;
+    let request = json!({"type":"fetch_models", "requestId":uuid::Uuid::new_v4().to_string(),
+        "channel":channel, "apiKey":api_key});
+    let result = timeout(Duration::from_secs(60), worker.run(&app, window.label(), &request))
+        .await.map_err(|_| "获取模型超时，请检查渠道地址或手动添加模型。")??;
+    Ok(result["models"].clone())
+}
+
+#[tauri::command]
 pub fn pi_cancel_prompt(window: WebviewWindow, request_id: String) -> Result<(), String> {
     let jobs = RUNNING.lock().map_err(|_| "Pi 状态不可用。")?;
     let job = jobs.get(&request_id).ok_or("Pi 请求已结束。")?;
@@ -362,6 +432,12 @@ pub async fn pi_send_prompt(
     request: PiPrompt,
 ) -> Result<PiResponse, String> {
     validate_provider(&request.provider)?;
+    if let Some(channel) = &request.channel {
+        channel.validate()?;
+        if !channel.models.iter().any(|model| model.id == request.model) {
+            return Err("所选模型不在当前 Pi 渠道中，请重新选择。".into());
+        }
+    }
     crate::agent_image::validate_images(&request.images)?;
     crate::agent_image::validate_images(&request.reference_images)?;
     if request.request_id.is_empty()
@@ -394,9 +470,10 @@ pub async fn pi_send_prompt(
         );
     }
     let _guard = RequestGuard(request.request_id.clone());
-    let api_key = credentials(&request.provider)?
+    let credential_id = request.channel.as_ref().map(|channel| channel.id.as_str()).unwrap_or(&request.provider);
+    let api_key = credentials(credential_id)?
         .get_password()
-        .map_err(|_| "请在设置 → Agent → 内置 Pi 中保存该 provider 的 API Key。")?;
+        .map_err(|_| "请在设置 → Agent → 内置 Pi 中保存当前渠道的 API Key。")?;
     let config = crate::mcp::mcp_get_config(app.clone()).await?;
     if !config.builtin_enabled {
         return Err("请先启用内置 MCP 工具；Pi 不会改用原生文件或命令工具。".into());
@@ -411,6 +488,7 @@ pub async fn pi_send_prompt(
     let record = json!({
         "type":"prompt", "requestId":request.request_id, "conversationId":request.conversation_id,
         "projectId":request.target.project_id, "provider":request.provider, "model":request.model,
+        "channel":request.channel,
         "apiKey":api_key, "prompt":request.prompt, "history":request.history, "thinkingLevel":request.thinking_level,
         "images":request.images,
         "referenceImages":request.reference_images,
@@ -474,6 +552,28 @@ pub async fn pi_send_prompt(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn validates_custom_channels_and_rejects_credential_fields_in_renderer_configuration() {
+        let value = json!({"id":"channel-one","name":"Local gateway","provider":"openai",
+            "api":"openai-completions","baseUrl":"https://example.test/proxy/v1","defaultModelId":"fixture",
+            "models":[{"id":"fixture","name":"Fixture","reasoning":false,"supportsImages":false,
+                "contextWindow":32768,"maxTokens":4096}]});
+        let mut channel: PiChannel = serde_json::from_value(value.clone()).unwrap();
+        assert!(channel.validate().is_ok());
+        channel.base_url = "https://example.test/v1?key=secret".into();
+        assert!(channel.validate().is_err());
+        channel.base_url = "https://user:secret@example.test/v1".into();
+        assert!(channel.validate().is_err());
+        channel.base_url = "file:///tmp/models".into();
+        assert!(channel.validate().is_err());
+        let mut secret = value.clone();
+        secret["apiKey"] = json!("must-not-accept");
+        assert!(serde_json::from_value::<PiChannel>(secret).is_err());
+        let mut nested = value;
+        nested["models"][0]["apiKey"] = json!("must-not-accept");
+        assert!(serde_json::from_value::<PiChannel>(nested).is_err());
+    }
+
     #[test]
     fn worker_and_version_probe_do_not_inherit_injected_node_hooks_or_credentials() {
         let mut command = Command::new("node");

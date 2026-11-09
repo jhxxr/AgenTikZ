@@ -114,7 +114,7 @@ flowchart TB
 
 - **Lossless CST/AST Engine**: Located in `src/core/parser/`, the parser resolves `\tikzset` style definitions, `\node` statements, orthogonal/curved/residual `\draw` edges, and `\begin{axis}...\end{axis}` PGFPlots environments using depth-aware bracket `[]` and brace `{}` matching so math expressions like `$p(x;\theta)$` never truncate statement boundaries.
 - **Official ACP v1 Transport**: Located in `src-tauri/src/acp/mod.rs`, the desktop backend launches locally installed ACP adapters over `stdio` with bounded initialization (`20s`), session creation (`20s`), prompt execution (`180s`), and transport shutdown timeouts.
-- **Release Scope**: **v0.5.0** adds a shared project assistant, reviewable multi-file manuscript edits, an embedded Pi SDK with long-lived sessions, and safer image/TikZ insertion alongside the existing canvas, paper workspace, TeX preview and ACP integration. Pi exposes AgenTikZ tools only; external MCP and full-local-access settings apply to ACP. Draft compilation sandboxes and fully automatic repair loops are not yet implemented.
+- **Release Scope**: **v0.7.0** adds multi-channel Pi configuration with custom API URLs, independent keychain credentials and model management, plus agent-advertised ACP model selection, alongside the shared project assistant, manuscript review, visual review and scientific drawing skills. Pi exposes AgenTikZ tools only; external MCP and full-local-access settings apply to ACP. Draft compilation sandboxes and fully automatic repair loops are not yet implemented. See [v0.7.0 release notes](docs/releases/v0.7.0.md).
 
 ## Paper Templates & Themes
 
@@ -208,6 +208,8 @@ AgenTikZ connects to external coding agents over `stdio` using the Agent Client 
 | **Cursor Agent (ACP)** | `cursor-agent` | `acp` | Install Cursor Agent CLI |
 | **Kimi Code (ACP)** | `kimi` | `acp` | Install Kimi CLI with `acp` subcommand |
 | **Custom ACP Agent** | User-configured executable | User-configured | Click the terminal icon in the right panel and enter `<executable> <args>` or `{"command":"...","args":[],"env":{}}` |
+
+**Model selection:** connect to an ACP agent to load its advertised model options, then select a model in settings or chat. Each prompt session applies and verifies that selection before sending context. Embedded Pi supports multiple independent channels with custom base URLs/API protocols, OS-keychain credentials, fetched or manually added/deleted models, and quick channel/model switching in chat. See [Pi configuration](docs/pi-runtime.zh-CN.md) and [ACP model selection / gateway troubleshooting](docs/mcp-guide.zh-CN.md#acp-连接与模型选择).
 
 ### Ready-to-Use Scientific Figure Prompts
 

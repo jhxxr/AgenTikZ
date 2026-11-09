@@ -27,7 +27,8 @@ describe('Pi runtime catalog discovery', () => {
   });
 
   it('clears a previously detected catalog if the runtime becomes unavailable', async () => {
-    usePiStore.setState({ models: [{ provider: 'anthropic', id: 'old', name: 'Old catalog' }] });
+    usePiStore.setState({ models: [{ provider: 'anthropic', id: 'old', name: 'Old catalog',
+      reasoning: false, supportsImages: false, contextWindow: 32768, maxTokens: 4096 }] });
     invoke.mockRejectedValue(new Error('Node runtime not found'));
     expect(await usePiStore.getState().probe()).toMatchObject({ ok: false, message: 'Node runtime not found' });
     expect(usePiStore.getState().models).toEqual([]);

@@ -17,6 +17,31 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('agent access preferences', () => {
+  it('persists multiple independent channels and model selections but strips nested credentials', async () => {
+    const { useSettingsStore } = await import('../useSettingsStore');
+    const { newPiModel } = await import('../../types/pi');
+    const models = [{ ...newPiModel('same-model'), apiKey: 'nested-model-secret' }];
+    useSettingsStore.getState().updateSettings({
+      piChannels: [
+        { id: 'channel-one', name: 'One', provider: 'openai', api: 'openai-completions',
+          baseUrl: 'https://one.test/v1', models, apiKey: 'nested-channel-secret' },
+        { id: 'channel-two', name: 'Two', provider: 'openai', api: 'openai-responses',
+          baseUrl: 'https://two.test/api/v1', models },
+      ] as any,
+      piActiveChannelId: 'channel-two', piModel: 'same-model',
+      acpModelSelections: { 'claude-code': 'claude-fixture', 'codex-cli': 'codex-fixture' },
+    });
+    const stored = storage.get(STORAGE_KEY)!;
+    expect(stored).not.toContain('secret');
+    vi.resetModules();
+    const { useSettingsStore: reloaded } = await import('../useSettingsStore');
+    expect(reloaded.getState().piChannels).toHaveLength(2);
+    expect(reloaded.getState()).toMatchObject({ piActiveChannelId: 'channel-two',
+      acpModelSelections: { 'claude-code': 'claude-fixture', 'codex-cli': 'codex-fixture' } });
+    reloaded.getState().updateSettings({ piChannels: reloaded.getState().piChannels.filter((channel) => channel.id !== 'channel-one') });
+    expect(JSON.parse(storage.get(STORAGE_KEY)!).piChannels).toHaveLength(1);
+  });
+
   it('persists non-secret Pi model preferences without accepting a key into settings storage', async () => {
     const { useSettingsStore } = await import('../useSettingsStore');
     useSettingsStore.getState().updateSettings({

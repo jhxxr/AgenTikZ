@@ -3,6 +3,7 @@
 //! and Codex (`@agentclientprotocol/codex-acp`).
 
 mod access;
+mod models;
 
 use agent_client_protocol::v1::schema::{
     ContentBlock, ImageContent, InitializeRequest, NewSessionRequest, PromptRequest, ReadTextFileRequest,
@@ -85,6 +86,8 @@ pub struct AcpHandshakeResult {
     pub protocol_version: Option<String>,
     pub resolved_source: Option<String>,
     pub message: String,
+    #[serde(flatten)]
+    pub model_state: models::ModelState,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -706,10 +709,13 @@ pub async fn acp_probe_agents(custom_command: Option<String>) -> Vec<AgentProbeR
 
 #[tauri::command]
 pub async fn acp_test_agent(
+    app: AppHandle,
     agent_id: String,
     custom_command: Option<String>,
     proxy_url: Option<String>,
     user_agent: Option<String>,
+    full_access: Option<bool>,
+    working_directory: Option<String>,
 ) -> AcpHandshakeResult {
     let (base_config, resolved_source) =
         match resolve_agent_command(&agent_id, custom_command.as_deref()) {
@@ -722,6 +728,7 @@ pub async fn acp_test_agent(
                     protocol_version: None,
                     resolved_source: None,
                     message: err,
+                    model_state: Default::default(),
                 };
             }
         };
@@ -735,6 +742,11 @@ pub async fn acp_test_agent(
     let handshake_info: Arc<Mutex<Option<(Option<String>, Option<String>, String)>>> =
         Arc::new(Mutex::new(None));
     let info_sink = handshake_info.clone();
+    let model_info = Arc::new(Mutex::new(models::ModelState::default()));
+    let model_sink = model_info.clone();
+    let full_access = full_access.unwrap_or(false);
+    let cwd = app.path().app_data_dir().map_err(|error| error.to_string())
+        .and_then(|root| access::resolve_working_directory(&root.join("agent-workspace"), full_access, working_directory.as_deref()));
 
     let session = Client
         .v1()
@@ -759,15 +771,24 @@ pub async fn acp_test_agent(
             )
             .await
             .map_err(|_| protocol_error("ACP 握手超时 (15s)"))??;
+            if init.protocol_version != ProtocolVersion::V1 {
+                return Err(protocol_error("Agent does not support ACP v1"));
+            }
 
             let name = init.agent_info.as_ref().map(|i| i.name.clone());
             let ver = init.agent_info.as_ref().map(|i| i.version.clone());
             let proto = format!("{:?}", init.protocol_version);
             *info_sink.lock().unwrap() = Some((name, ver, proto));
+            let cwd = cwd.map_err(|error| protocol_error(&error))?;
+            // No prompt, project context or MCP servers are sent during discovery.
+            let session = timeout(Duration::from_secs(30), connection
+                .send_request(NewSessionRequest::new(cwd)).block_task()).await
+                .map_err(|_| protocol_error("ACP 模型会话创建超时 (30s)"))??;
+            *model_sink.lock().unwrap() = models::from_config(session.config_options.as_deref());
             Ok(())
         });
 
-    match timeout(Duration::from_secs(20), session).await {
+    match timeout(Duration::from_secs(50), session).await {
         Ok(Ok(())) => {
             let (agent_name, agent_version, protocol_version) = handshake_info
                 .lock()
@@ -779,13 +800,17 @@ pub async fn acp_test_agent(
                 (Some(n), None) => n.clone(),
                 _ => agent_id.clone(),
             };
+            let model_state = model_info.lock().unwrap().clone();
             AcpHandshakeResult {
                 ok: true,
                 agent_name,
                 agent_version,
                 protocol_version: Some(protocol_version),
                 resolved_source,
-                message: format!("ACP Initialize 握手成功 · {label}"),
+                message: format!("ACP 连接成功 · {label} · {}",
+                    if model_state.models.is_empty() { "Agent 未提供模型选项".to_string() }
+                    else { format!("已读取 {} 个模型", model_state.models.len()) }),
+                model_state,
             }
         }
         Ok(Err(e)) => AcpHandshakeResult {
@@ -794,7 +819,8 @@ pub async fn acp_test_agent(
             agent_version: None,
             protocol_version: None,
             resolved_source,
-            message: format!("ACP 握手失败: {e}"),
+            message: models::explain_error(&format!("ACP 连接失败: {e}")),
+            model_state: Default::default(),
         },
         Err(_) => AcpHandshakeResult {
             ok: false,
@@ -802,7 +828,8 @@ pub async fn acp_test_agent(
             agent_version: None,
             protocol_version: None,
             resolved_source,
-            message: "ACP 握手连接超时 (20s)".into(),
+            message: "ACP 连接与模型读取超时 (50s)".into(),
+            model_state: Default::default(),
         },
     }
 }
@@ -903,6 +930,7 @@ pub async fn acp_send_prompt(
     images: Option<Vec<crate::agent_image::AgentImage>>,
     proxy_url: Option<String>,
     user_agent: Option<String>,
+    model_id: Option<String>,
     response_language: Option<String>,
     personal_prompt: Option<String>,
     template_references: Option<String>,
@@ -1073,6 +1101,9 @@ pub async fn acp_send_prompt(
                     .send_request(SetSessionModeRequest::new(session.session_id.clone(), mode_id)).block_task()).await
                     .map_err(|_| protocol_error("ACP access mode selection timed out after 30 seconds"))??;
             }
+            let model_state = models::apply_selection(&connection, &session, model_id.as_deref()).await?;
+            let _ = session_app.emit_to(&session_window, "acp:stream", AcpStreamEvent::text(
+                &session_request_id, "model_state", serde_json::to_string(&model_state).unwrap_or_default()));
             let mut content = vec![ContentBlock::Text(TextContent::new(structured_prompt))];
             if !init.agent_capabilities.prompt_capabilities.image {
                 content.push(ContentBlock::Text(TextContent::new(
@@ -1096,7 +1127,7 @@ pub async fn acp_send_prompt(
         _ = cancelled.changed() => Err("Agent 请求已取消。".to_string()),
         result = timeout(Duration::from_secs(660), session) =>
             result.map_err(|_| "ACP connection timed out".to_string())
-                .and_then(|result| result.map_err(|e| format!("ACP request failed: {e}"))),
+                .and_then(|result| result.map_err(|e| models::explain_error(&format!("ACP request failed: {e}")))),
     };
     let _ = app_handle.emit(
         "acp:stream",
@@ -1404,6 +1435,11 @@ fn handle_session_notification(
             event.tool_call_id = Some(update.tool_call_id.to_string());
             event.tool_status = update.fields.status;
             Some(event)
+        }
+        SessionUpdate::ConfigOptionUpdate(update) => {
+            let state = models::from_config(Some(&update.config_options));
+            Some(AcpStreamEvent::text(request_id, "model_state",
+                serde_json::to_string(&state).unwrap_or_default()))
         }
         _ => None,
     };

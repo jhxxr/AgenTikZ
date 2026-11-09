@@ -112,7 +112,7 @@ flowchart TB
 
 - **无损 CST/AST 解析引擎**：位于 `src/core/parser/`，通过深度感知括号 `[]` 与花括号 `{}` 匹配解析 `\tikzset` 样式、`\node` 节点、正交/弧线/残差 `\draw` 连线以及 `\begin{axis}...\end{axis}` 实验图表，确保含分号的数学公式（如 `$p(x;\theta)$`）或含括号文本绝不误截断语句。
 - **官方 ACP v1 通信实现**：位于 `src-tauri/src/acp/mod.rs`，桌面端通过 `stdio` 启动本地已安装的 ACP 适配器，对初始化握手（`20s`）、会话创建（`20s`）、提示词生成（`180s`）及子进程退出均设有严格超时边界。
-- **当前版本边界**：当前版本 **v0.5.0** 支持可视化画布交互、独立论文工作区、共享项目 Agent、多文件论文修改审阅、内置 Pi 长驻会话、ACP v1 流式对话、图片与 TikZ 插图及本机 TeX Live 预览。Pi 仅使用 AgenTikZ 内置工具；外部 MCP 与完整本机访问开关适用于 ACP。所有工具修改均需审核；草稿编译沙盒与全自动修复循环尚未实现。详见 [MCP 服务指南](docs/mcp-guide.zh-CN.md) 和 [Pi 接入说明](docs/pi-runtime.zh-CN.md)。
+- **当前版本边界**：当前版本 **v0.7.0** 新增 Pi 多渠道、自定义 API URL、独立系统凭据与模型管理，以及 ACP Agent 实际模型列表与选择；保留可视化画布、论文工作区、共享项目 Agent、多文件修改审阅、视觉复核与内置绘图 skill。Pi 仅使用 AgenTikZ 内置工具；外部 MCP 与完整本机访问开关适用于 ACP。所有工具修改均需审核；草稿编译沙盒与全自动修复循环尚未实现。详见 [v0.7.0 发布说明](docs/releases/v0.7.0.md)、[MCP 服务指南](docs/mcp-guide.zh-CN.md) 和 [Pi 接入说明](docs/pi-runtime.zh-CN.md)。
 
 ## 论文模板与学术主题
 
@@ -208,6 +208,8 @@ AgenTikZ 的 BYOA 模式通过标准输入输出（`stdio`）使用 ACP v1 协�
 | **Cursor Agent (ACP)** | `cursor-agent` | `acp` | 安装支持 `acp` 子命令的 Cursor Agent CLI |
 | **Kimi Code (ACP)** | `kimi` | `acp` | 安装支持 `acp` 子命令的 Kimi CLI |
 | **自定义 ACP Agent** | 用户自定义路径与命令 | 用户自定义 | 点击右侧面板终端图标，输入可执行文件与参数或 JSON 配置 `{"command":"...","args":[],"env":{}}` |
+
+**模型选择**：点击“连接 / 获取模型”，可在设置或聊天面板选择 ACP Agent 实际提供的模型；每轮建立会话后确认模型切换成功再发送提示词。内置 Pi 支持多个独立渠道、自定义 URL/API 协议、系统凭据库 Key、获取/手动添加/删除模型，以及聊天面板快速切换。详见 [Pi 配置](docs/pi-runtime.zh-CN.md) 与 [ACP 模型选择和网关排错](docs/mcp-guide.zh-CN.md#acp-连接与模型选择)。
 
 ### 常用科研绘图提示词模板（可直接复制）
 

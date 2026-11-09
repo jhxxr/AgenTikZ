@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { AcpAgentId } from '../types/acp';
 import { ImageGenProviderId } from '../core/agent/illustration-prompt';
+import { sanitizePiChannels, type PiChannel } from '../types/pi';
 
 export type SettingsSection =
   | 'general'
@@ -49,6 +50,9 @@ export interface PersistedSettings {
   piProvider: string;
   piModel: string;
   piThinkingLevel: 'off' | 'low' | 'medium' | 'high';
+  piChannels: PiChannel[];
+  piActiveChannelId: string;
+  acpModelSelections: Partial<Record<AcpAgentId, string>>;
   responseLanguage: AgentResponseLanguage;
   defaultAttachCanvas: boolean;
   defaultAttachSelection: boolean;
@@ -95,6 +99,9 @@ export const DEFAULT_SETTINGS: PersistedSettings = {
   piProvider: 'anthropic',
   piModel: '',
   piThinkingLevel: 'medium',
+  piChannels: [],
+  piActiveChannelId: '',
+  acpModelSelections: {},
   responseLanguage: 'zh-CN',
   defaultAttachCanvas: true,
   defaultAttachSelection: true,
@@ -118,10 +125,18 @@ function loadInitialSettings(): PersistedSettings {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return DEFAULT_SETTINGS;
     const parsed = JSON.parse(raw);
-    return { ...DEFAULT_SETTINGS, ...parsed };
+    return { ...DEFAULT_SETTINGS, ...parsed, piChannels: sanitizePiChannels(parsed.piChannels),
+      acpModelSelections: sanitizeAcpSelections(parsed.acpModelSelections) };
   } catch {
     return DEFAULT_SETTINGS;
   }
+}
+
+function sanitizeAcpSelections(value: unknown): Partial<Record<AcpAgentId, string>> {
+  if (!value || typeof value !== 'object') return {};
+  return Object.fromEntries(Object.entries(value).filter(([id, model]) =>
+    ['claude-code', 'codex-cli', 'opencode', 'gemini-cli', 'cursor-agent', 'kimi-code', 'custom-acp'].includes(id) &&
+    typeof model === 'string' && model.length <= 256));
 }
 
 function saveSettings(state: PersistedSettings) {
@@ -241,6 +256,9 @@ export const useSettingsStore = create<SettingsState>((set) => {
           piProvider: patch.piProvider ?? state.piProvider,
           piModel: patch.piModel ?? state.piModel,
           piThinkingLevel: patch.piThinkingLevel ?? state.piThinkingLevel,
+          piChannels: sanitizePiChannels(patch.piChannels ?? state.piChannels),
+          piActiveChannelId: patch.piActiveChannelId ?? state.piActiveChannelId,
+          acpModelSelections: sanitizeAcpSelections(patch.acpModelSelections ?? state.acpModelSelections),
           responseLanguage: patch.responseLanguage ?? state.responseLanguage,
           defaultAttachCanvas: patch.defaultAttachCanvas ?? state.defaultAttachCanvas,
           defaultAttachSelection: patch.defaultAttachSelection ?? state.defaultAttachSelection,

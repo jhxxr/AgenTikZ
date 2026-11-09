@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import type { AcpHandshakeResult } from '../types/acp';
+import type { PiChannelModel } from '../types/pi';
 
-export interface PiModel { provider: string; id: string; name: string }
+export interface PiModel extends PiChannelModel { provider: string }
 export interface PiProbe extends AcpHandshakeResult { models?: PiModel[] }
 interface PiState {
   models: PiModel[];

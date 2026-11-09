@@ -215,7 +215,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
     set((state) => ({
       providers: state.providers.map((p) =>
         p.id === agentId
-          ? { ...p, handshakeStatus: 'testing', handshakeMessage: '正在执行 ACP Initialize 握手探测...' }
+          ? { ...p, handshakeStatus: 'testing', handshakeMessage: agentId === 'pi' ? '正在检测 Pi SDK…' : '正在连接 ACP 并读取模型列表…' }
           : p
       ),
     }));
@@ -241,6 +241,9 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
         customCommand: get().customCommand,
         proxyUrl,
         userAgent,
+        fullAccess: settings.agentFullAccess,
+        workingDirectory: settings.agentFullAccess
+          ? settings.agentWorkingDirectory.trim() || useProjectStore.getState().projectDir || undefined : undefined,
       });
       set((state) => ({
         providers: state.providers.map((p) =>
@@ -250,6 +253,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
                 detected: res.ok ? true : p.detected,
                 handshakeStatus: res.ok ? 'ok' : 'error',
                 handshakeMessage: res.message,
+                ...(agentId !== 'pi' ? { models: res.models ?? [], currentModelId: res.currentModelId } : {}),
                 handshakeAgentName: res.agentName
                   ? `${res.agentName}${res.agentVersion ? ` v${res.agentVersion}` : ''}`
                   : undefined,
@@ -700,6 +704,16 @@ async function sendViaRealAcp(
     // Establish delivery before creating a placeholder or invoking the backend.
     unlisten = await listen<AcpStreamEvent>('acp:stream', ({ payload: event }) => {
       if (finished || event.requestId !== requestId) return;
+      if (event.kind === 'model_state') {
+        try {
+          const modelState = JSON.parse(event.text) as AcpHandshakeResult;
+          if (Array.isArray(modelState.models)) useAgentStore.setState((state) => ({
+            providers: state.providers.map((provider) => provider.id === agentId
+              ? { ...provider, models: modelState.models, currentModelId: modelState.currentModelId } : provider),
+          }));
+        } catch { /* Ignore malformed model metadata, never interpret it as chat content. */ }
+        return;
+      }
       if (event.kind === 'mcp_status') {
         useMcpStore.setState({ sessionStatus: event.text });
         return;
@@ -756,8 +770,10 @@ async function sendViaRealAcp(
     useAgentStore.setState({ activeRequestId: requestId, activeRequestBackend: agentId === 'pi' ? 'pi' : 'acp' });
     useMcpStore.setState({ sessionStatus: agentId === 'pi' ? '正在连接 Pi 长驻会话与项目工具…' : '正在建立 Agent 会话并提交 MCP 配置…' });
     const response = agentId === 'pi' ? await (async () => {
+      const channel = settings.piChannels.find((item) => item.id === settings.piActiveChannelId);
+      if (settings.piActiveChannelId && !channel) throw new Error('Pi 渠道已被删除，请重新选择渠道。');
       if (!settings.piProvider.trim() || !settings.piModel.trim()) {
-        throw new Error('请先在设置 → Agent → 内置 Pi 中选择 provider、模型并保存 API Key。');
+        throw new Error('请先在设置 → Agent → 内置 Pi 中选择渠道、模型并保存该渠道的 API Key。');
       }
       if (!useMcpStore.getState().config.builtinEnabled) throw new Error('内置 Pi 需要启用 AgenTikZ 内置 MCP 工具。');
       piRuntimeUsed = true;
@@ -770,6 +786,7 @@ async function sendViaRealAcp(
         request: {
           requestId, conversationId: activeSessionId, target,
           provider: settings.piProvider.trim(), model: settings.piModel.trim(),
+          ...(channel ? { channel } : {}),
           thinkingLevel: settings.piThinkingLevel, history,
           images: newImages, referenceImages: images.filter((image) => !newImages.some((added) => added.id === image.id)),
           prompt: [
@@ -798,6 +815,7 @@ async function sendViaRealAcp(
       history,
       proxyUrl,
       userAgent,
+      modelId: settings.acpModelSelections[agentId] || undefined,
       responseLanguage: settings.responseLanguage,
       personalPrompt: settings.personalPrompt || undefined,
       workbenchMode: paperMode ? 'paper' : 'figure',

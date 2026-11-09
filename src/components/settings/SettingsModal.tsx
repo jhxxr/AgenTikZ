@@ -1,6 +1,7 @@
 import { useShallow } from 'zustand/react/shallow';
 import React, { useEffect, useState } from 'react';
 import { PiSettingsPane } from './PiSettingsPane';
+import { AgentModelSelector } from '../agent/AgentModelSelector';
 import {
   Bot,
   Check,
@@ -740,6 +741,7 @@ export const SettingsModal: React.FC = () => {
                                 </div>
                               )}
 
+                              <AgentModelSelector agentId={provider.id} showConnectButton={false} />
                               {!provider.detected && provider.installHint && (
                                 <div className="mt-1.5 flex items-center gap-2 rounded-lg bg-slate-100/90 px-2.5 py-1 text-[10.5px] font-mono text-slate-600">
                                   <span className="truncate flex-1">
@@ -778,14 +780,14 @@ export const SettingsModal: React.FC = () => {
                                 disabled={isTesting}
                                 onClick={() => testAgentHandshake(provider.id)}
                                 className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 cursor-pointer"
-                                title="启动子进程并发送 ACP InitializeRequest(V1) 验证协议连通性"
+                                title={provider.id === 'pi' ? '启动 Pi SDK 并读取本地目录' : '初始化并建立无提示词的会话，获取 Agent 提供的模型列表；不发送项目上下文'}
                               >
                                 {isTesting ? (
                                   <Loader2 className="h-3 w-3 animate-spin text-blue-600" />
                                 ) : (
                                   <Play className="h-3 w-3 text-blue-600" />
                                 )}
-                                <span>握手测试</span>
+                                <span>{provider.id === 'pi' ? '检测运行时' : '连接 / 获取模型'}</span>
                               </button>
 
                               <button
@@ -1673,7 +1675,7 @@ export const SettingsModal: React.FC = () => {
                     label="应用版本"
                     description="Tauri v2 + React 19 + Rust + CodeMirror 6"
                   >
-                    <StatusBadge tone="blue">v0.2.0 (BYOA · ACP Edition)</StatusBadge>
+                    <StatusBadge tone="blue">v0.7.0 (Pi · BYOA / ACP)</StatusBadge>
                   </SettingsRow>
 
                   <SettingsRow

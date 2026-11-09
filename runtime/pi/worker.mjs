@@ -3,6 +3,7 @@ import {
 } from '@earendil-works/pi-coding-agent';
 import { InMemoryCredentialStore } from '@earendil-works/pi-ai';
 import { PiEngine } from './engine.mjs';
+import { fetchChannelModels } from './channels.mjs';
 
 const engine = new PiEngine({
   createAgentSession, createExtensionRuntime, SessionManager, SettingsManager,
@@ -41,6 +42,10 @@ process.stdin.on('data', (chunk) => {
       if (engine.active) write({ type: 'error', requestId: record.requestId, error: 'Pi task is running' });
       else void engine.inspect().then((models) => write({ type: 'models', requestId: record.requestId, models }))
         .catch(() => write({ type: 'error', requestId: record.requestId, error: 'Pi catalog unavailable' }));
+    } else if (record.type === 'fetch_models') {
+      void fetchChannelModels(record.channel, record.apiKey)
+        .then((models) => write({ type: 'models', requestId: record.requestId, models }))
+        .catch((error) => write({ type: 'error', requestId: record.requestId, error: error.message }));
     } else if (record.type === 'prompt') {
       void engine.prompt(record, (event) => write({ type: 'event', requestId: record.requestId, ...event }))
         .then((result) => write({ type: 'result', requestId: record.requestId, ...result }))

@@ -89,6 +89,45 @@ afterEach(() => {
 });
 
 describe('real ACP frontend contract', () => {
+  it('loads agent-advertised models on connection and forwards the persisted selection on every prompt', async () => {
+    const store = await freshStore();
+    bridge.invoke.mockResolvedValueOnce({ ok: true, message: 'Connected', currentModelId: 'default-model',
+      models: [{ id: 'default-model', name: 'Default' }, { id: 'chosen-model', name: 'Chosen' }] });
+    await store.getState().testAgentHandshake('claude-code');
+    expect(store.getState().providers.find((provider) => provider.id === 'claude-code')?.models).toEqual([
+      { id: 'default-model', name: 'Default' }, { id: 'chosen-model', name: 'Chosen' },
+    ]);
+    useSettingsStore.getState().updateSettings({ acpModelSelections: { 'claude-code': 'chosen-model' } });
+    await store.getState().sendPromptToAgent('Use the selected model');
+    expect(bridge.invoke).toHaveBeenLastCalledWith('acp_send_prompt', expect.objectContaining({ modelId: 'chosen-model' }));
+    useSettingsStore.getState().updateSettings({ acpModelSelections: {} });
+    await store.getState().sendPromptToAgent('Use the agent default');
+    expect(bridge.invoke).toHaveBeenLastCalledWith('acp_send_prompt', expect.objectContaining({ modelId: undefined }));
+  });
+
+  it('does not invent model lists for an ACP agent that does not advertise them', async () => {
+    const store = await freshStore();
+    bridge.invoke.mockResolvedValueOnce({ ok: true, message: 'No selector' });
+    await store.getState().testAgentHandshake('opencode');
+    expect(store.getState().providers.find((provider) => provider.id === 'opencode')?.models).toEqual([]);
+  });
+
+  it('uses the active custom Pi channel without passing API keys through renderer requests', async () => {
+    const store = await freshStore();
+    const { newPiModel } = await import('../../types/pi');
+    const channel = { id: 'custom-one', name: 'Gateway', provider: 'openai', api: 'openai-completions' as const,
+      baseUrl: 'https://gateway.example.test/custom/v1', models: [newPiModel('custom-model')] };
+    useSettingsStore.getState().updateSettings({ piChannels: [channel], piActiveChannelId: channel.id,
+      piProvider: 'openai', piModel: 'custom-model' });
+    store.getState().setActiveAgentId('pi');
+    bridge.invoke.mockResolvedValue({ runtimeStarted: true, reply: 'Custom channel response', resumed: false });
+    await store.getState().sendPromptToAgent('Hello');
+    const call = bridge.invoke.mock.calls.find(([command]) => command === 'pi_send_prompt');
+    expect(call?.[1].request.channel).toMatchObject(channel);
+    expect(call?.[1].request).not.toHaveProperty('apiKey');
+    expect(call?.[1].request.channel).not.toHaveProperty('apiKey');
+  });
+
   it('delivers every IPC call when reset and send import the Tauri wrapper concurrently', async () => {
     bridge.invoke.mockImplementation((_command: string, args: { index: number }) => Promise.resolve(args.index));
     const results = await Promise.allSettled(Array.from({ length: 32 }, async (_, index) => {
@@ -219,7 +258,7 @@ describe('real ACP frontend contract', () => {
     store.getState().setActiveAgentId('pi');
     await store.getState().sendPromptToAgent('Draw');
     expect(bridge.invoke).not.toHaveBeenCalled();
-    expect(JSON.stringify(store.getState().sessions)).toContain('选择 provider');
+    expect(JSON.stringify(store.getState().sessions)).toContain('选择渠道');
     const { useSettingsStore } = await import('../useSettingsStore');
     useSettingsStore.getState().updateSettings({ piModel: 'fixture' });
     bridge.invoke.mockResolvedValue({

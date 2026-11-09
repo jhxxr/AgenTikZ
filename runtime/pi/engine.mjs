@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { registerChannel, validateChannel } from './channels.mjs';
 
 // These providers accept a standalone API key; OAuth/ambient-cloud credential flows are not exposed.
 export const API_KEY_PROVIDERS = ['anthropic', 'openai', 'google', 'openrouter', 'groq', 'mistral', 'xai', 'deepseek'];
@@ -39,7 +40,7 @@ export function sessionKey(request) {
   // Credentials/config changes cannot accidentally reuse a differently authorized model session.
   return createHash('sha256').update(JSON.stringify([
     request.conversationId, request.projectId, request.provider, request.model,
-    request.apiKey, request.tools, request.thinkingLevel ?? 'medium',
+    request.apiKey, request.tools, request.thinkingLevel ?? 'medium', request.channel ?? null,
   ])).digest('hex');
 }
 
@@ -90,12 +91,14 @@ export class PiEngine {
   async inspect() {
     const runtime = await this.sdk.createModelRuntime();
     return runtime.getModels().filter((model) => this.providers.has(model.provider))
-      .map(({ provider, id, name }) => ({ provider, id, name }));
+      .map(({ provider, id, name, reasoning, input, contextWindow, maxTokens }) =>
+        ({ provider, id, name, reasoning, supportsImages: input?.includes('image') === true, contextWindow, maxTokens }));
   }
 
   async prompt(input, emit) {
     if (this.active) throw new Error('A Pi task is already running');
-    if (!this.providers.has(input.provider)) throw new Error('This provider is not supported by the embedded API-key setup');
+    if (input.channel) validateChannel(input.channel);
+    else if (!this.providers.has(input.provider)) throw new Error('This provider is not supported by the embedded API-key setup');
     if (!input.requestId || !input.conversationId || !input.projectId ||
         typeof input.prompt !== 'string' || input.prompt.length > 1024 * 1024 ||
         !input.provider || !input.model || !input.apiKey ||
@@ -125,10 +128,11 @@ export class PiEngine {
           this.sessions.delete(oldest);
         }
         const modelRuntime = await this.sdk.createModelRuntime();
-        const model = modelRuntime.getModel(input.provider, input.model);
+        const provider = input.channel ? registerChannel(modelRuntime, input.channel, input.model) : input.provider;
+        const model = modelRuntime.getModel(provider, input.model);
         if (!model) throw new Error('Selected model is not in the pinned Pi catalog');
         if (images.length && !model.input?.includes('image')) throw new Error('Selected model does not support image input');
-        await modelRuntime.setRuntimeApiKey(input.provider, input.apiKey);
+        await modelRuntime.setRuntimeApiKey(provider, input.apiKey);
         const { session } = await this.sdk.createAgentSession({
           cwd: process.cwd(), agentDir: process.cwd(), modelRuntime, model,
           thinkingLevel: input.thinkingLevel ?? 'medium',

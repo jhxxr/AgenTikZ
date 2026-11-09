@@ -9,7 +9,7 @@ const [major, minor] = process.versions.node.split('.').map(Number);
 if (major < 22 || (major === 22 && minor < 19)) throw new Error('Pi requires Node.js >= 22.19');
 const source = path.join(root, 'runtime/pi');
 const output = path.join(root, 'src-tauri/pi-runtime');
-const files = ['package.json', 'package-lock.json', 'worker.mjs', 'engine.mjs'];
+const files = ['package.json', 'package-lock.json', 'worker.mjs', 'engine.mjs', 'channels.mjs'];
 const fingerprint = createHash('sha256');
 fingerprint.update(fs.readFileSync(fileURLToPath(import.meta.url)));
 for (const file of files) fingerprint.update(fs.readFileSync(path.join(source, file)));

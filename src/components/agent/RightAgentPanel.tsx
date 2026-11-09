@@ -14,6 +14,7 @@ import { ProjectPatchCard } from './ProjectPatchCard';
 import { usePaperBuildStore } from '../../store/usePaperBuildStore';
 import { useMcpStore } from '../../store/useMcpStore';
 import { AgentComposer } from './AgentComposer';
+import { AgentModelSelector } from './AgentModelSelector';
 import { imageDataUrl } from '../../core/agent/image-attachments';
 import {
   Bot,
@@ -433,6 +434,7 @@ export const RightAgentPanel: React.FC = () => {
           </button>
         </div>
 
+        <AgentModelSelector agentId={activeAgentId} includePi />
         <button
           type="button"
           onClick={() => openSettings('agent')}

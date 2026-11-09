@@ -13,6 +13,12 @@ export type AcpAgentId =
 
 export type AcpHandshakeStatus = 'idle' | 'testing' | 'ok' | 'error';
 
+export interface AcpModelChoice { id: string; name: string }
+export interface AcpModelState {
+  models?: AcpModelChoice[];
+  currentModelId?: string;
+}
+
 export interface AcpAgentProvider {
   id: AcpAgentId;
   name: string;
@@ -30,11 +36,13 @@ export interface AcpAgentProvider {
   handshakeStatus?: AcpHandshakeStatus;
   handshakeMessage?: string;
   handshakeAgentName?: string;
+  models?: AcpModelChoice[];
+  currentModelId?: string;
   description: string;
   badgeColor: string;
 }
 
-export interface AcpHandshakeResult {
+export interface AcpHandshakeResult extends AcpModelState {
   ok: boolean;
   agentName?: string;
   agentVersion?: string;
@@ -63,7 +71,7 @@ export interface EnvironmentDiagnostics {
 /** Streamed from the Rust backend via Tauri event `acp:stream`. */
 export interface AcpStreamEvent {
   requestId: string;
-  kind: 'message' | 'thought' | 'tool_call' | 'tool_update' | 'completed' | 'failed' | 'permission_denied' | 'mcp_status';
+  kind: 'message' | 'thought' | 'tool_call' | 'tool_update' | 'completed' | 'failed' | 'permission_denied' | 'mcp_status' | 'model_state';
   text: string;
   toolName?: string;
   toolCallId?: string;
