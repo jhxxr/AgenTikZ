@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useAgentStore } from '../useAgentStore';
+import { useSettingsStore } from '../useSettingsStore';
+import { useMcpStore } from '../useMcpStore';
 
 const bridge = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -45,7 +48,6 @@ vi.mock('../useWorkspaceStore', () => ({
 }));
 
 async function freshStore() {
-  const { useAgentStore } = await import('../useAgentStore');
   useAgentStore.setState({
     ...useAgentStore.getInitialState(),
     providers: useAgentStore.getState().providers.map((provider) => ({ ...provider, detected: true })),
@@ -58,7 +60,7 @@ async function freshStore() {
   return useAgentStore;
 }
 
-beforeEach(async () => {
+beforeEach(() => {
   // Keep one live module graph and its subscriptions, as in the app. Reset
   // Zustand snapshots instead of clearing module caches/listeners while lazy
   // dependencies may still hold references to the previous module instance.
@@ -75,9 +77,7 @@ beforeEach(async () => {
     return bridge.unlisten;
   });
   bridge.invoke.mockResolvedValue({ usedNativeCli: true, reply: 'Real final response' });
-  const { useSettingsStore } = await import('../useSettingsStore');
   useSettingsStore.setState(useSettingsStore.getInitialState(), true);
-  const { useMcpStore } = await import('../useMcpStore');
   useMcpStore.setState(useMcpStore.getInitialState(), true);
 });
 
