@@ -47,6 +47,7 @@ vi.mock('../useWorkspaceStore', () => ({
 async function freshStore() {
   const { useAgentStore } = await import('../useAgentStore');
   useAgentStore.setState({
+    ...useAgentStore.getInitialState(),
     providers: useAgentStore.getState().providers.map((provider) => ({ ...provider, detected: true })),
     sessions: [{ id: 'test-session', title: 'Test', agentId: 'claude-code', createdAt: '', messages: [] }],
     activeSessionId: 'test-session',
@@ -57,15 +58,16 @@ async function freshStore() {
   return useAgentStore;
 }
 
-beforeEach(() => {
-  vi.resetModules();
+beforeEach(async () => {
+  // Keep one live module graph and its subscriptions, as in the app. Reset
+  // Zustand snapshots instead of clearing module caches/listeners while lazy
+  // dependencies may still hold references to the previous module instance.
   vi.clearAllMocks();
   bridge.onEvent = undefined;
   bridge.canvasCode = '% original canvas';
   bridge.revision = 0;
   bridge.projectDir = 'E:\\Research\\current-project';
   bridge.workbenchMode = 'figure';
-  bridge.projectListeners.clear();
   bridge.setTikzCode.mockImplementation((code: string) => { bridge.canvasCode = code; bridge.revision += 1; });
   vi.stubGlobal('window', { __TAURI_INTERNALS__: {} });
   bridge.listen.mockImplementation(async (_name, callback) => {
@@ -73,6 +75,10 @@ beforeEach(() => {
     return bridge.unlisten;
   });
   bridge.invoke.mockResolvedValue({ usedNativeCli: true, reply: 'Real final response' });
+  const { useSettingsStore } = await import('../useSettingsStore');
+  useSettingsStore.setState(useSettingsStore.getInitialState(), true);
+  const { useMcpStore } = await import('../useMcpStore');
+  useMcpStore.setState(useMcpStore.getInitialState(), true);
 });
 
 afterEach(() => {
