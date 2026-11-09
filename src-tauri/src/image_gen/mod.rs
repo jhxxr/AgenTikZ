@@ -508,21 +508,9 @@ pub async fn img_generate_illustration(
     let slug = sanitize_slug(&node_id);
     let rel_path = format!("figures/assets/ai/{}.png", slug);
 
-    // Also write initial raw asset if project_dir is provided
-    if let Some(dir) = project_dir.as_deref() {
-        let root = PathBuf::from(dir.trim());
-        if root.is_dir() {
-            if let Some((_, raw_b64)) = data_url.split_once(";base64,") {
-                if let Ok(bytes) = decode_base64_bytes(raw_b64) {
-                    let full = root.join("figures").join("assets").join("ai").join(format!("{}.png", slug));
-                    if let Some(p) = full.parent() {
-                        let _ = fs::create_dir_all(p);
-                    }
-                    let _ = fs::write(&full, &bytes);
-                }
-            }
-        }
-    }
+    // No raw write here: persist only the successfully decoded/post-processed result.
+    // Retain the request parameter for compatibility with desktop clients.
+    let _ = project_dir;
 
     Ok(IllustrationBackendResult {
         data_url,
@@ -544,6 +532,7 @@ pub async fn img_save_processed_asset(
     theme_id: String,
     width_px: u32,
     height_px: u32,
+    target_relative_path: Option<String>,
 ) -> Result<SavedIllustrationAsset, String> {
     let root = PathBuf::from(project_dir.trim());
     if !root.is_dir() {
@@ -551,19 +540,29 @@ pub async fn img_save_processed_asset(
     }
 
     let slug = sanitize_slug(&node_id);
-    let ai_dir = root.join("figures").join("assets").join("ai");
-    fs::create_dir_all(&ai_dir).map_err(|e| format!("无法创建 figures/assets/ai 目录: {}", e))?;
+    let relative_path = target_relative_path.unwrap_or_else(|| format!("figures/assets/ai/{slug}.png")).replace('\\', "/");
+    if !relative_path.starts_with("figures/assets/ai/") || !relative_path.to_ascii_lowercase().ends_with(".png") {
+        return Err("生成图片必须保存为 figures/assets/ai/ 内的 PNG 文件。".into());
+    }
 
     let raw_b64 = data_url
         .split_once(";base64,")
         .map(|(_, b)| b)
         .unwrap_or(&data_url);
     let png_bytes = decode_base64_bytes(raw_b64)?;
+    if width_px == 0 || height_px == 0 || png_bytes.len() < 24 ||
+        !png_bytes.starts_with(b"\x89PNG\r\n\x1a\n") || &png_bytes[12..16] != b"IHDR" {
+        return Err("处理结果不是有效的 PNG 或缺少真实尺寸，未保存占位图片。".into());
+    }
+    let actual_width = u32::from_be_bytes(png_bytes[16..20].try_into().unwrap());
+    let actual_height = u32::from_be_bytes(png_bytes[20..24].try_into().unwrap());
+    if actual_width != width_px || actual_height != height_px {
+        return Err("PNG 实际尺寸与生成记录不一致，未保存。".into());
+    }
 
-    let png_name = format!("{}.png", slug);
-    let meta_name = format!("{}.meta.json", slug);
-    let png_path = ai_dir.join(&png_name);
-    let meta_path = ai_dir.join(&meta_name);
+    let png_path = crate::project::checked_project_output(&project_dir, &relative_path)?;
+    let metadata_relative = PathBuf::from(&relative_path).with_extension("meta.json").to_string_lossy().replace('\\', "/");
+    let meta_path = crate::project::checked_project_output(&project_dir, &metadata_relative)?;
 
     fs::write(&png_path, &png_bytes).map_err(|e| format!("保存透明抠图 PNG 失败: {}", e))?;
 
@@ -579,13 +578,11 @@ pub async fn img_save_processed_asset(
         "heightPx": height_px,
         "updatedAt": now_millis(),
     });
-    if let Ok(meta_str) = serde_json::to_string_pretty(&meta_json) {
-        let _ = fs::write(&meta_path, meta_str.as_bytes());
-    }
+    let meta_str = serde_json::to_string_pretty(&meta_json).map_err(|_| "无法编码图片生成记录。")?;
+    fs::write(&meta_path, meta_str.as_bytes()).map_err(|_| "PNG 已保存，但生成记录保存失败，请检查项目目录。")?;
 
-    let rel_path = format!("figures/assets/ai/{}", png_name);
     Ok(SavedIllustrationAsset {
-        relative_path: rel_path,
+        relative_path,
         full_path: png_path.to_string_lossy().to_string(),
         meta_path: meta_path.to_string_lossy().to_string(),
     })
@@ -594,6 +591,29 @@ pub async fn img_save_processed_asset(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn processed_images_keep_the_requested_path_without_overwriting_a_shared_default() {
+        let dir = std::env::temp_dir().join(format!("agentikz_image_paths_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/1FEAAAAASUVORK5CYII=";
+        for name in ["first_unique", "second_unique"] {
+            let path = format!("figures/assets/ai/{name}.png");
+            let result = img_save_processed_asset(
+                dir.to_string_lossy().into(), "same_node".into(), png.into(), "fixture".into(),
+                "fixture".into(), "fixture".into(), "fixture".into(), "nature".into(), 1, 1, Some(path.clone()),
+            ).await.unwrap();
+            assert_eq!(result.relative_path, path);
+            assert!(dir.join(path).is_file());
+        }
+        assert!(!dir.join("figures/assets/ai/same_node.png").exists());
+        let rejected = img_save_processed_asset(
+            dir.to_string_lossy().into(), "same_node".into(), png.into(), "fixture".into(),
+            "fixture".into(), "fixture".into(), "fixture".into(), "nature".into(), 512, 512, None,
+        ).await;
+        assert!(rejected.is_err());
+        let _ = fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn test_floodfill_removes_outer_white_but_keeps_inner_white() {

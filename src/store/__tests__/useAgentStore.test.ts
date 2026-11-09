@@ -7,6 +7,9 @@ const bridge = vi.hoisted(() => ({
   setTikzCode: vi.fn(),
   canvasCode: '% original canvas',
   revision: 0,
+  projectDir: 'E:\\Research\\current-project',
+  workbenchMode: 'figure' as 'figure' | 'paper',
+  onProjectChange: undefined as undefined | ((state: any, previous: any) => void),
   onEvent: undefined as undefined | ((event: { payload: Record<string, unknown> }) => void),
 }));
 
@@ -14,7 +17,16 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: bridge.invoke }));
 vi.mock('@tauri-apps/api/event', () => ({ listen: bridge.listen }));
 vi.mock('../../core/mcp/runtime', () => ({ ensureMcpRuntime: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../useProjectStore', () => ({
-  useProjectStore: { getState: () => ({ projectDir: 'E:\\Research\\current-project' }) },
+  getPaperWorkspaceVersion: () => 0,
+  useProjectStore: {
+    subscribe: vi.fn((callback) => { bridge.onProjectChange = callback; return () => {}; }),
+    getState: () => ({
+      projectDir: bridge.projectDir, workbenchMode: bridge.workbenchMode,
+      activePaperFilePath: 'main.tex', paperFileContents: { 'main.tex': 'Unsaved manuscript' },
+      paperFiles: [{ relativePath: 'main.tex', category: 'main' }], paperDirtyFiles: { 'main.tex': true },
+      paperEditRevision: 3,
+    }),
+  },
 }));
 vi.mock('../useWorkspaceStore', () => ({
   useWorkspaceStore: {
@@ -37,6 +49,7 @@ async function freshStore() {
     activeSessionId: 'test-session',
     activeAgentId: 'claude-code',
     isStreaming: false,
+    activeRequestBackend: null,
   });
   return useAgentStore;
 }
@@ -47,6 +60,9 @@ beforeEach(() => {
   bridge.onEvent = undefined;
   bridge.canvasCode = '% original canvas';
   bridge.revision = 0;
+  bridge.projectDir = 'E:\\Research\\current-project';
+  bridge.workbenchMode = 'figure';
+  bridge.onProjectChange = undefined;
   bridge.setTikzCode.mockImplementation((code: string) => { bridge.canvasCode = code; bridge.revision += 1; });
   vi.stubGlobal('window', { __TAURI_INTERNALS__: {} });
   bridge.listen.mockImplementation(async (_name, callback) => {
@@ -61,6 +77,125 @@ afterEach(() => {
 });
 
 describe('real ACP frontend contract', () => {
+  it('routes Pi to its own long-lived backend without forwarding secrets or native access flags', async () => {
+    const store = await freshStore();
+    const { useSettingsStore } = await import('../useSettingsStore');
+    useSettingsStore.getState().updateSettings({ piProvider: 'anthropic', piModel: 'fixture', agentFullAccess: true });
+    store.getState().setActiveAgentId('pi');
+    bridge.workbenchMode = 'paper';
+    bridge.invoke.mockResolvedValue({ runtimeStarted: true, reply: 'Pi response', resumed: true });
+    await store.getState().sendPromptToAgent('Update the caption');
+    expect(bridge.invoke).toHaveBeenCalledWith('pi_send_prompt', { request: expect.objectContaining({
+      conversationId: 'test-session', provider: 'anthropic', model: 'fixture', thinkingLevel: 'medium',
+      target: expect.objectContaining({ projectId: bridge.projectDir }),
+    }) });
+    const args = bridge.invoke.mock.calls[0][1].request;
+    expect(args).not.toHaveProperty('apiKey');
+    expect(args).not.toHaveProperty('fullAccess');
+    expect(args.prompt).toContain('Unsaved manuscript');
+    expect(store.getState().sessions[0].messages.at(-1)?.content).toBe('Pi response');
+  });
+
+  it('cancels the running Pi backend even after the provider selector changes', async () => {
+    const store = await freshStore();
+    const { useSettingsStore } = await import('../useSettingsStore');
+    useSettingsStore.getState().updateSettings({ piModel: 'fixture' });
+    store.getState().setActiveAgentId('pi');
+    let finish!: (value: unknown) => void;
+    bridge.invoke.mockImplementation((command) => command === 'pi_send_prompt'
+      ? new Promise((resolve) => { finish = resolve; }) : Promise.resolve());
+    const running = store.getState().sendPromptToAgent('Long Pi task');
+    await vi.waitFor(() => expect(store.getState().activeRequestBackend).toBe('pi'));
+    store.getState().setActiveAgentId('codex-cli');
+    await store.getState().cancelPrompt();
+    expect(bridge.invoke).toHaveBeenCalledWith('pi_cancel_prompt', { requestId: store.getState().activeRequestId });
+    finish({ runtimeStarted: true, reply: 'Stopped', resumed: false });
+    await running;
+    expect(store.getState().activeRequestBackend).toBeNull();
+  });
+
+  it('resets the Pi process on project changes and waits for reset before sending the next project', async () => {
+    const store = await freshStore();
+    const { useSettingsStore } = await import('../useSettingsStore');
+    useSettingsStore.getState().updateSettings({ piModel: 'fixture' });
+    store.getState().setActiveAgentId('pi');
+    bridge.invoke.mockResolvedValue({ runtimeStarted: true, reply: 'Pi result', resumed: false });
+    const projectSubscription = bridge.onProjectChange;
+    await store.getState().sendPromptToAgent('Project A');
+    let finishReset!: () => void;
+    bridge.invoke.mockImplementation((command) => command === 'pi_reset_runtime'
+      ? new Promise<void>((resolve) => { finishReset = resolve; })
+      : Promise.resolve({ runtimeStarted: true, reply: 'Pi result', resumed: false }));
+    const before = bridge.projectDir;
+    bridge.projectDir = 'E:\\OtherProject';
+    projectSubscription?.({ projectDir: bridge.projectDir }, { projectDir: before });
+    const sending = store.getState().sendPromptToAgent('Project B');
+    await vi.waitFor(() => expect(bridge.invoke).toHaveBeenCalledWith('pi_reset_runtime'));
+    expect(bridge.invoke.mock.calls.filter(([command]) => command === 'pi_send_prompt')).toHaveLength(1);
+    finishReset();
+    await sending;
+    const last = bridge.invoke.mock.calls.at(-1);
+    expect(last?.[0]).toBe('pi_send_prompt');
+    expect(last?.[1].request.target.projectId).toBe(bridge.projectDir);
+    expect(last?.[1].request.history).toEqual([]);
+  });
+
+  it('does not select a fallback model or turn a Pi code block into an unreviewed tool proposal', async () => {
+    const store = await freshStore();
+    store.getState().setActiveAgentId('pi');
+    await store.getState().sendPromptToAgent('Draw');
+    expect(bridge.invoke).not.toHaveBeenCalled();
+    expect(JSON.stringify(store.getState().sessions)).toContain('选择 provider');
+    const { useSettingsStore } = await import('../useSettingsStore');
+    useSettingsStore.getState().updateSettings({ piModel: 'fixture' });
+    bridge.invoke.mockResolvedValue({
+      runtimeStarted: true, resumed: false,
+      reply: '```latex\n\\begin{tikzpicture}\\node {Not a tool proposal};\\end{tikzpicture}\n```',
+    });
+    await store.getState().sendPromptToAgent('Draw');
+    expect(store.getState().sessions[0].messages.at(-1)?.patchProposal).toBeUndefined();
+    expect(bridge.setTikzCode).not.toHaveBeenCalled();
+  });
+
+  it('uses manuscript context without drawing constraints and never turns paper prose into a canvas patch', async () => {
+    const store = await freshStore();
+    bridge.workbenchMode = 'paper';
+    bridge.invoke.mockResolvedValue({ usedNativeCli: true, reply: 'Review manuscript changes.', proposedTikz: '% not a canvas edit' });
+    await store.getState().sendPromptToAgent('Polish my manuscript');
+    const args = bridge.invoke.mock.calls[0][1];
+    expect(args).toMatchObject({ workbenchMode: 'paper', canvasTikz: '', selectedIds: [], prompt: 'Polish my manuscript' });
+    expect(args.agentContext).toContain('Unsaved manuscript');
+    expect(args.agentContext).toContain('propose_project_patch');
+    expect(args.agentContext).not.toContain('REGISTERED PRIMITIVE');
+    expect(store.getState().sessions[0].messages.some((m) => m.patchProposal)).toBe(false);
+    expect(bridge.setTikzCode).not.toHaveBeenCalled();
+  });
+
+  it('keeps one conversation across paper/figure views but starts a fresh conversation for another project', async () => {
+    const store = await freshStore();
+    await store.getState().sendPromptToAgent('Figure task for project A');
+    bridge.workbenchMode = 'paper';
+    await store.getState().sendPromptToAgent('Continue in paper');
+    expect(store.getState().activeSessionId).toBe('test-session');
+    expect(bridge.invoke.mock.calls[1][1].history.some((m: { content: string }) => m.content === 'Figure task for project A')).toBe(true);
+    bridge.projectDir = 'E:\\Research\\different-project';
+    await store.getState().sendPromptToAgent('New project task');
+    expect(store.getState().activeSessionId).not.toBe('test-session');
+    expect(bridge.invoke.mock.calls[2][1].history).toEqual([]);
+  });
+
+  it('does not send old project context to another project while the listener is being attached', async () => {
+    const store = await freshStore();
+    bridge.listen.mockImplementation(async () => {
+      bridge.projectDir = 'E:\\Other';
+      return bridge.unlisten;
+    });
+    await store.getState().sendPromptToAgent('Read current project');
+    expect(bridge.invoke).not.toHaveBeenCalled();
+    expect(JSON.stringify(store.getState().sessions[0].messages)).toContain('项目已切换');
+    expect(bridge.unlisten).toHaveBeenCalledOnce();
+  });
+
   it('preserves an MCP proposal instead of replacing it with a duplicate text proposal', async () => {
     const store = await freshStore();
     bridge.invoke.mockImplementation(async (_command, args) => {

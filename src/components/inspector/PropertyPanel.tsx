@@ -1,7 +1,7 @@
 import { useShallow } from 'zustand/react/shallow';
 import React, { useState, useEffect } from 'react';
 import { useWorkspaceStore } from '../../store/useWorkspaceStore';
-import { useProjectStore } from '../../store/useProjectStore';
+import { getPaperWorkspaceVersion, useProjectStore } from '../../store/useProjectStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import { JOURNAL_THEMES } from '../../core/themes/journal-presets';
 import { generateScientificIllustration } from '../../core/agent/illustration-prompt';
@@ -860,6 +860,9 @@ export const PropertyPanel: React.FC = () => {
                         if (!aiImgPrompt.trim() || isGeneratingImg) return;
                         setIsGeneratingImg(true);
                         setAiImgStatus('正在调用 AI 绘图引擎并执行边缘泛洪去背与 Alpha 裁切...');
+                        const version = getPaperWorkspaceVersion();
+                        const canvasFile = useProjectStore.getState().activeCanvasFileName;
+                        const originalPath = selectedNode.imagePath;
                         try {
                           const targetRelPath =
                             selectedNode.imagePath &&
@@ -882,20 +885,29 @@ export const PropertyPanel: React.FC = () => {
                               ? settings.proxyUrl
                               : undefined,
                           });
+                          if (getPaperWorkspaceVersion() !== version) return;
                           if (!res.ok || !res.dataUrl) {
                             setAiImgStatus(`❌ 生成失败: ${res.error || '未知错误'}`);
                           } else {
                             const finalRel = await registerGeneratedAsset(
                               res.savedRelativePath || targetRelPath,
-                              res.dataUrl
+                              res.dataUrl,
+                              projectDir,
                             );
+                            if (getPaperWorkspaceVersion() !== version) return;
+                            const liveNode = useWorkspaceStore.getState().parsedDoc.nodes.find((node) => node.id === selectedNode.id);
+                            if (useProjectStore.getState().activeCanvasFileName !== canvasFile ||
+                                !liveNode || liveNode.subtype !== 'image' || liveNode.imagePath !== originalPath) {
+                              setAiImgStatus(`素材已保存至 ${finalRel}；画布或节点已变化，未覆盖当前节点。`);
+                              return;
+                            }
                             updateImageNodePathById(selectedNode.id, finalRel);
                             setAiImgStatus(
                               `✅ 已生成透明抠图 (${res.width}×${res.height}px) 并绑定至 ${finalRel}`
                             );
                           }
                         } catch (err) {
-                          setAiImgStatus(`❌ 错误: ${String(err)}`);
+                          if (getPaperWorkspaceVersion() === version) setAiImgStatus(`❌ 错误: ${String(err)}`);
                         } finally {
                           setIsGeneratingImg(false);
                         }

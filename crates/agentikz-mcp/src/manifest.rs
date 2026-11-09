@@ -72,6 +72,25 @@ pub fn builtin_tools() -> Vec<ToolSpec> {
     repair["themeId"] = json!({"type":"string", "enum":["neurips","cvpr","nature","ieee"]});
     add("propose_layout_repair", "Create a pending layout-repair proposal using AgenTikZ diagnostics. Does not change the canvas.", repair,
         vec!["baseRevision", "baseSourceHash", "summary"]);
+    add("get_project_context", "Read the current project file index, active manuscript, canvas identity, dirty state and paper revision. Works across paper/figure views of the same project.", json!({}), vec![]);
+    add("read_project_file", "Read an indexed project text file without changing the editor tab. Returns current editor source (including unsaved edits), paperRevision and sourceHash. Read every affected file before proposing manuscript changes.", json!({
+        "relativePath": {"type":"string", "minLength":1, "maxLength":1024}
+    }), vec!["relativePath"]);
+    add("propose_project_patch", "Submit one reviewable change set for existing .tex/.bib/.sty/.cls files. Does not write files or apply edits. Use the paperRevision and hashes from read_project_file; .tikz edits must use canvas proposals.", json!({
+        "baseRevision": {"type":"integer","minimum":0},
+        "summary": {"type":"string","minLength":1,"maxLength":2000},
+        "rationale": {"type":"string","maxLength":8000},
+        "files": {"type":"array","minItems":1,"maxItems":20,"items":{
+            "type":"object","additionalProperties":false,
+            "properties":{
+                "relativePath":{"type":"string","minLength":1,"maxLength":1024},
+                "baseSourceHash":{"type":"string","minLength":1},
+                "newContent":{"type":"string","maxLength":262144}
+            },
+            "required":["relativePath","baseSourceHash","newContent"]
+        }}
+    }), vec!["baseRevision","summary","files"]);
+    add("get_paper_diagnostics", "Read the latest user-triggered paper compilation status, actual logs, errors and stale-revision flag. Does not run a compiler. Pending proposals are not compiled; successful compilation is not a visual review.", json!({}), vec![]);
     tools
 }
 

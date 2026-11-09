@@ -14,6 +14,7 @@ import {
 } from '../../core/tex/document';
 import { getExactPreviewReasons } from '../../core/tex/source';
 import { compileWorkspaceTexPreview } from '../../core/tex/preview';
+import { hasDrawableFigure } from '../../core/paper/figure-insertion';
 import {
   exportCleanCanvasSvg,
   exportSvgStringPng,
@@ -99,6 +100,7 @@ const PaperTopToolbar: React.FC = () => {
   const projectName = useProjectStore((s) => s.projectName);
   const projectDir = useProjectStore((s) => s.projectDir);
   const setPickerOpen = useProjectStore((s) => s.setPickerOpen);
+  const insertionNotice = useProjectStore((s) => s.figureInsertionError || s.lastExportedNotice);
   const openSettings = useSettingsStore((s) => s.openSettings);
   return (
     <header className="h-14 bg-white border-b border-slate-200 px-4 flex items-center gap-4 shrink-0 select-none">
@@ -115,6 +117,7 @@ const PaperTopToolbar: React.FC = () => {
         <ChevronDown className="h-3 w-3 shrink-0 text-slate-400" />
       </button>
       <div className="flex-1" />
+      {insertionNotice && <span className="hidden md:block max-w-xs truncate text-[11px] text-slate-600" title={insertionNotice} role="status">{insertionNotice}</span>}
       <WorkbenchSwitcher />
       <button type="button" onClick={() => openSettings('general')} title="设置 (Ctrl+,)"
         className="p-2 rounded-md text-slate-500 hover:bg-slate-100 cursor-pointer">
@@ -161,6 +164,9 @@ const FigureTopToolbar: React.FC = () => {
     lastExportedNotice,
     setInsertFigureModalOpen,
     quickInsertActiveFigureIntoPaper,
+    isInsertingFigure,
+    figureInsertionError,
+    paperFiles,
     setPickerOpen,
     exportFileToProject,
   } = useProjectStore(useShallow((s) => ({
@@ -171,6 +177,9 @@ const FigureTopToolbar: React.FC = () => {
     lastExportedNotice: s.lastExportedNotice,
     setInsertFigureModalOpen: s.setInsertFigureModalOpen,
     quickInsertActiveFigureIntoPaper: s.quickInsertActiveFigureIntoPaper,
+    isInsertingFigure: s.isInsertingFigure,
+    figureInsertionError: s.figureInsertionError,
+    paperFiles: s.paperFiles,
     setPickerOpen: s.setPickerOpen,
     exportFileToProject: s.exportFileToProject,
   })));
@@ -393,6 +402,7 @@ const FigureTopToolbar: React.FC = () => {
         </div>
       {/* Right: Workbench Switcher + 1-Click Split-Button Insert + Theme + Preview + Export + Agent Toggle */}
       <div className="flex max-w-full flex-wrap items-center justify-end gap-1.5">
+        {figureInsertionError && <span className="max-w-64 truncate text-[11px] text-amber-700" role="status" title={figureInsertionError}>{figureInsertionError}</span>}
         {lastExportedNotice && (
           <div className="hidden lg:flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-[11px] font-medium shadow-xs animate-fade-in">
             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
@@ -408,15 +418,19 @@ const FigureTopToolbar: React.FC = () => {
           <button
             type="button"
             onClick={() => void quickInsertActiveFigureIntoPaper()}
-            title="一键将当前配图 (\input{figures/xxx.tikz}) 按当前主题配置直接插入到论文光标处"
-            className="flex items-center gap-1 pl-2.5 pr-2 py-1.5 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100 transition-colors cursor-pointer"
+            disabled={isInsertingFigure || !projectDir || !paperFiles.some((file) => /\.tex$/i.test(file.relativePath)) || !hasDrawableFigure(tikzCode)}
+            title={!projectDir || !paperFiles.some((file) => /\.tex$/i.test(file.relativePath)) ? '请先打开或新建论文；右侧箭头可打开插图设置'
+              : !hasDrawableFigure(tikzCode) ? '当前画布为空，请先绘图或通过右侧箭头选择已有图片'
+              : '保存当前配图后插入目标章节的安全位置；重复点击只定位已有配图'}
+            className="flex items-center gap-1 pl-2.5 pr-2 py-1.5 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100 transition-colors cursor-pointer disabled:opacity-40"
           >
             <BookOpenText className="w-3.5 h-3.5 text-indigo-600" />
-            <span>📌 一键插图</span>
+            <span>{isInsertingFigure ? '插入中…' : '插入当前配图'}</span>
           </button>
           <button
             type="button"
             onClick={() => setInsertFigureModalOpen(true)}
+            disabled={isInsertingFigure}
             title="展开高级插图设置（切换单双栏、\includegraphics 外部图模式、自定义 Caption）"
             className="px-1.5 py-1.5 border-l border-indigo-200/80 text-indigo-600 hover:bg-indigo-100 transition-colors cursor-pointer"
           >

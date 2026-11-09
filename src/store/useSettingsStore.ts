@@ -46,6 +46,9 @@ export interface PersistedSettings {
 
   // Agent (BYOA · ACP)
   defaultAgentId: AcpAgentId;
+  piProvider: string;
+  piModel: string;
+  piThinkingLevel: 'off' | 'low' | 'medium' | 'high';
   responseLanguage: AgentResponseLanguage;
   defaultAttachCanvas: boolean;
   defaultAttachSelection: boolean;
@@ -89,6 +92,9 @@ export const DEFAULT_SETTINGS: PersistedSettings = {
   imageGenAutoTrimAlpha: true,
 
   defaultAgentId: 'claude-code',
+  piProvider: 'anthropic',
+  piModel: '',
+  piThinkingLevel: 'medium',
   responseLanguage: 'zh-CN',
   defaultAttachCanvas: true,
   defaultAttachSelection: true,
@@ -232,6 +238,9 @@ export const useSettingsStore = create<SettingsState>((set) => {
           imageGenAutoTrimAlpha:
             patch.imageGenAutoTrimAlpha ?? state.imageGenAutoTrimAlpha,
           defaultAgentId: patch.defaultAgentId ?? state.defaultAgentId,
+          piProvider: patch.piProvider ?? state.piProvider,
+          piModel: patch.piModel ?? state.piModel,
+          piThinkingLevel: patch.piThinkingLevel ?? state.piThinkingLevel,
           responseLanguage: patch.responseLanguage ?? state.responseLanguage,
           defaultAttachCanvas: patch.defaultAttachCanvas ?? state.defaultAttachCanvas,
           defaultAttachSelection: patch.defaultAttachSelection ?? state.defaultAttachSelection,

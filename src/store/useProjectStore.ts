@@ -5,11 +5,17 @@ import {
   buildFigureLaTeXSnippet,
   buildPaperTemplateFiles,
   generateAgentikzMacrosSty,
-  InsertFigureSnippetOptions,
   PAPER_VENUE_TEMPLATES,
   PaperVenueTemplateId,
 } from '../core/paper/paper-templates';
 import { useWorkspaceStore } from './useWorkspaceStore';
+import { isEditablePaperPath, isPaperFilePath, type PaperFileChange } from '../types/project-agent';
+import {
+  canvasFigurePath, canInsertGraphic, defaultFigureLabel, defaultFigureSpan, ensureFigurePackages,
+  escapeLatexText, findExistingFigure, hasDrawableFigure, insertFigureAtSafePosition,
+  manuscriptCode, normalizeFigurePath, uniqueFigureLabel,
+  type FigureInsertionOptions, type FigureInsertionResult, type FigureInsertSource, type PaperInsertionLocation,
+} from '../core/paper/figure-insertion';
 
 export const AGENTIKZ_FOLDER_NAME = 'agentikzfile';
 
@@ -257,6 +263,11 @@ interface ProjectState {
   paperEditRevision: number;
   lastPaperCursorOffset: number | null;
   isInsertFigureModalOpen: boolean;
+  figureInsertSource: FigureInsertSource | null;
+  figureInsertRequestId: string | null;
+  isInsertingFigure: boolean;
+  figureInsertionError: string | null;
+  paperInsertionLocation: PaperInsertionLocation | null;
 
   canvases: CanvasFileSummary[];
   localCanvases: Record<string, CanvasFileDocument>;
@@ -275,7 +286,8 @@ interface ProjectState {
   initOnStartup: () => Promise<void>;
   setPickerOpen: (open: boolean, tab?: ProjectPickerTab) => void;
   setWorkbenchMode: (mode: WorkbenchMode) => void;
-  setInsertFigureModalOpen: (open: boolean) => void;
+  setInsertFigureModalOpen: (open: boolean, source?: FigureInsertSource) => void;
+  clearPaperInsertionLocation: () => void;
   setLastPaperCursorOffset: (offset: number | null) => void;
   setAutoOpenLastProject: (autoOpen: boolean) => void;
   setAutoSyncTikz: (autoSync: boolean) => void;
@@ -291,23 +303,16 @@ interface ProjectState {
 
   // Paper File Actions
   refreshPaperFiles: () => Promise<void>;
+  readPaperFile: (relativePath: string) => Promise<string>;
   openPaperFile: (relativePath: string) => Promise<string>;
+  applyPaperFileChanges: (projectId: string, revision: number, changes: PaperFileChange[]) => boolean;
   updatePaperFileContent: (relativePath: string, content: string) => void;
   savePaperFileNow: (relativePath?: string) => Promise<boolean>;
   saveAllDirtyPaperFiles: () => Promise<boolean>;
   createNewPaperFile: (relativePath: string, initialContent?: string) => Promise<boolean>;
   ensureAgentikzMacrosSty: () => Promise<void>;
-  insertFigureIntoPaper: (
-    opts: InsertFigureSnippetOptions & {
-      targetTexFile?: string;
-      insertAtCursor?: boolean;
-    }
-  ) => Promise<{ ok: boolean; snippet: string; targetFile: string }>;
-  quickInsertActiveFigureIntoPaper: () => Promise<{
-    ok: boolean;
-    snippet: string;
-    targetFile: string;
-  }>;
+  insertFigureIntoPaper: (opts: FigureInsertionOptions) => Promise<FigureInsertionResult>;
+  quickInsertActiveFigureIntoPaper: () => Promise<FigureInsertionResult>;
 
   switchCanvasFile: (fileName: string) => Promise<void>;
   createNewCanvasFile: (
@@ -330,7 +335,8 @@ interface ProjectState {
   ) => Promise<ProjectAssetItem[]>;
   registerGeneratedAsset: (
     relativePath: string,
-    dataUrl: string
+    dataUrl: string,
+    expectedProjectDir?: string | null
   ) => Promise<string>;
   exportFileToProject: (
     fileName: string,
@@ -368,7 +374,11 @@ function buildCurrentCanvasDoc(
 
 let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
 const paperAutoSaveTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+const figureInsertions = new Set<number>();
+const reservedAssetPaths = new Map<number, Set<string>>();
 let paperWorkspaceVersion = 0;
+let assetScanSequence = 0;
+export function getPaperWorkspaceVersion(): number { return paperWorkspaceVersion; }
 const inFlightPaperSaves = new Map<
   string,
   { content: string; promise: Promise<boolean> }
@@ -453,6 +463,11 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     paperEditRevision: 0,
     lastPaperCursorOffset: null,
     isInsertFigureModalOpen: false,
+    figureInsertSource: null,
+    figureInsertRequestId: null,
+    isInsertingFigure: false,
+    figureInsertionError: null,
+    paperInsertionLocation: null,
 
     canvases: [
       {
@@ -497,8 +512,10 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       }
     },
 
-    setInsertFigureModalOpen: (isInsertFigureModalOpen) =>
-      set({ isInsertFigureModalOpen }),
+    setInsertFigureModalOpen: (isInsertFigureModalOpen, source) =>
+      set({ isInsertFigureModalOpen, figureInsertSource: isInsertFigureModalOpen ? source ?? null : null,
+        figureInsertRequestId: isInsertFigureModalOpen ? crypto.randomUUID() : null }),
+    clearPaperInsertionLocation: () => set({ paperInsertionLocation: null }),
 
     setLastPaperCursorOffset: (lastPaperCursorOffset) =>
       set({ lastPaperCursorOffset }),
@@ -923,6 +940,61 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       });
     },
 
+    readPaperFile: async (relativePath) => {
+      if (!isPaperFilePath(relativePath) ||
+          !get().paperFiles.some((file) => file.relativePath === relativePath)) {
+        throw new Error('只能读取当前项目文件列表中的论文文件。');
+      }
+      const state = get();
+      if (Object.hasOwn(state.paperFileContents, relativePath)) return state.paperFileContents[relativePath];
+      const { projectDir } = state;
+      if (!projectDir) throw new Error('请先打开论文项目。');
+      const version = paperWorkspaceVersion;
+      let content: string;
+      if (isTauriRuntime()) {
+        const { invoke } = await import('@tauri-apps/api/core');
+        content = await invoke<string>('project_read_text_file', { projectDir, relativePath });
+      } else {
+        const files = readVirtualProject(projectDir).paperFiles || {};
+        if (!Object.hasOwn(files, relativePath)) throw new Error('论文文件不存在。');
+        content = files[relativePath];
+      }
+      if (version !== paperWorkspaceVersion || get().projectDir !== projectDir) {
+        throw new Error('读取期间项目已切换。');
+      }
+      // Never replace a newer editor buffer or navigate the user's editor from a tool.
+      if (Object.hasOwn(get().paperFileContents, relativePath)) return get().paperFileContents[relativePath];
+      set((s) => ({ paperFileContents: { ...s.paperFileContents, [relativePath]: content } }));
+      return content;
+    },
+
+    applyPaperFileChanges: (projectId, revision, changes) => {
+      const state = get();
+      if ((state.projectDir || 'temporary') !== projectId || state.paperEditRevision !== revision ||
+          changes.length === 0 || changes.length > 20 ||
+          new Set(changes.map((change) => change.relativePath)).size !== changes.length ||
+          changes.some((change) => !isEditablePaperPath(change.relativePath) ||
+            !state.paperFiles.some((file) => file.relativePath === change.relativePath) ||
+            state.paperFileContents[change.relativePath] !== change.before)) return false;
+      const version = paperWorkspaceVersion;
+      const contents = { ...state.paperFileContents };
+      const dirty = { ...state.paperDirtyFiles };
+      for (const change of changes) {
+        contents[change.relativePath] = change.after;
+        dirty[change.relativePath] = true;
+      }
+      // Validate the entire set first and publish it in one update, never a partial edit.
+      set({ paperFileContents: contents, paperDirtyFiles: dirty, paperEditRevision: revision + 1 });
+      for (const { relativePath } of changes) {
+        clearTimeout(paperAutoSaveTimers[relativePath]);
+        paperAutoSaveTimers[relativePath] = setTimeout(() => {
+          delete paperAutoSaveTimers[relativePath];
+          if (version === paperWorkspaceVersion) void get().savePaperFileNow(relativePath);
+        }, 500);
+      }
+      return true;
+    },
+
     openPaperFile: async (relativePath) => {
       const cleanRel = relativePath.replace(/\\/g, '/').trim();
       if (!cleanRel) return '';
@@ -1018,11 +1090,12 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         try {
           if (projectDir && isTauriRuntime()) {
             const { invoke } = await import('@tauri-apps/api/core');
-            await invoke('project_write_text_file', {
+            const written = await invoke<boolean | void>('project_write_text_file', {
               projectDir,
               relativePath: targetRel,
               content,
             });
+            if (written === false) throw new Error(`保存失败：${targetRel}`);
           } else if (projectDir) {
             const vfs = readVirtualProject(projectDir);
             vfs.paperFiles = { ...(vfs.paperFiles || {}), [targetRel]: content };
@@ -1088,119 +1161,200 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         get().paperFileContents[styPath] === styContent &&
         !get().paperDirtyFiles[styPath]
       ) return;
+      if (get().paperDirtyFiles[styPath] && get().paperFileContents[styPath] !== styContent) {
+        throw new Error('宏包存在未保存的手动修改，请先保存或撤销，避免被同步覆盖。');
+      }
       get().updatePaperFileContent(styPath, styContent);
-      await get().savePaperFileNow(styPath);
+      if (!await get().savePaperFileNow(styPath)) throw new Error('TikZ 宏包保存失败，已停止插入。');
     },
 
     insertFigureIntoPaper: async (opts) => {
-      // 1. Ensure current canvas is saved (and synced to figures/<stem>.tikz) and macros sty is up-to-date
-      await get().saveActiveCanvasNow();
-      await get().ensureAgentikzMacrosSty();
-
-      const snippet = buildFigureLaTeXSnippet(opts);
-      const targetFile = (
-        opts.targetTexFile ||
-        get().activePaperFilePath ||
-        'main.tex'
-      )
-        .replace(/\\/g, '/')
-        .trim();
-
-      let currentTex = await get().openPaperFile(targetFile);
-      if (!currentTex.trim()) {
-        currentTex =
-          get().paperFileContents['main.tex'] ||
-          buildPaperTemplateFiles('neurips')['main.tex'];
-      }
-
-      // If inserting into main.tex, ensure \usepackage{styles/agentikz-macros} is present before \begin{document}
-      let preambleOffsetDelta = 0;
-      if (
-        targetFile.endsWith('main.tex') &&
-        !currentTex.includes('agentikz-macros')
-      ) {
-        const injectStr = '\\usepackage{styles/agentikz-macros}\n\n';
-        const docIdx = currentTex.indexOf('\\begin{document}');
-        if (docIdx !== -1) {
-          currentTex =
-            currentTex.slice(0, docIdx) +
-            injectStr +
-            currentTex.slice(docIdx);
-          preambleOffsetDelta = injectStr.length;
+      const origin = get();
+      const version = paperWorkspaceVersion;
+      const targetFile = (opts.targetTexFile || origin.activePaperFilePath || 'main.tex').replace(/\\/g, '/').trim();
+      if (figureInsertions.has(version)) return { ok: false, snippet: '', targetFile, error: '配图正在插入，请勿重复点击。' };
+      figureInsertions.add(version);
+      set({ isInsertingFigure: true, figureInsertionError: null, lastExportedNotice: null });
+      const checkProject = () => {
+        if (paperWorkspaceVersion !== version || get().projectDir !== origin.projectDir) {
+          throw new Error('插入期间项目已切换，已停止后续操作。');
         }
-      }
-
-      const cursorOffset = get().lastPaperCursorOffset;
-      const shouldInsertAtCursor =
-        opts.insertAtCursor !== false &&
-        cursorOffset !== null &&
-        targetFile === get().activePaperFilePath;
-
-      let updatedTex: string;
-      const adjustedCursor =
-        cursorOffset !== null ? cursorOffset + preambleOffsetDelta : null;
-      const beginDocIdx = currentTex.indexOf('\\begin{document}');
-      const endDocIdx = currentTex.indexOf('\\end{document}');
-
-      if (
-        shouldInsertAtCursor &&
-        adjustedCursor !== null &&
-        adjustedCursor >= 0 &&
-        adjustedCursor <= currentTex.length &&
-        (beginDocIdx === -1 ||
-          adjustedCursor >= beginDocIdx + '\\begin{document}'.length) &&
-        (endDocIdx === -1 || adjustedCursor <= endDocIdx)
-      ) {
-        const before = currentTex.slice(0, adjustedCursor);
-        const after = currentTex.slice(adjustedCursor);
-        updatedTex = `${before.trimEnd()}\n\n${snippet}\n\n${after.trimStart()}`;
-      } else if (currentTex.includes('\\end{document}')) {
-        updatedTex = currentTex.replace(
-          /\\end\{document\}/,
-          `\n${snippet}\n\n\\end{document}`
-        );
-      } else {
-        updatedTex = `${currentTex.trimEnd()}\n\n${snippet}\n`;
-      }
-
-      get().updatePaperFileContent(targetFile, updatedTex);
-      await get().savePaperFileNow(targetFile);
-      await get().refreshPaperFiles();
-      set({
-        activePaperFilePath: targetFile,
-        lastExportedNotice: `已将配图插入至 ${targetFile}`,
-      });
-      setTimeout(() => {
-        if (get().lastExportedNotice === `已将配图插入至 ${targetFile}`) {
-          set({ lastExportedNotice: null });
+      };
+      try {
+        if (!origin.projectDir) throw new Error('请先打开或新建论文项目，再插入配图。');
+        const path = normalizeFigurePath(opts.relativePath || opts.figureRelPath || '');
+        const normalized = { ...opts, relativePath: path, label: opts.label || defaultFigureLabel(path) };
+        buildFigureLaTeXSnippet(normalized); // Validate before any writes.
+        const texFiles = origin.paperFiles.filter((file) =>
+          /\.tex$/i.test(file.relativePath) && isPaperFilePath(file.relativePath) && !file.relativePath.startsWith('agentikzfile/'));
+        if (!isPaperFilePath(targetFile) || !texFiles.some((file) => file.relativePath === targetFile)) {
+          throw new Error('目标章节不存在；请先新建论文或选择当前项目中的 .tex 文件。');
         }
-      }, 4000);
-      return { ok: true, snippet, targetFile };
+        await Promise.all(texFiles.map((file) => get().readPaperFile(file.relativePath)));
+        checkProject();
+        const candidates = texFiles.filter((file) => {
+          const code = manuscriptCode(get().paperFileContents[file.relativePath] || '');
+          return /\\documentclass\b/.test(code) && /\\begin\s*\{document\}/.test(code);
+        });
+        const entry = candidates.find((file) => file.relativePath === 'main.tex')
+          || candidates.find((file) => file.category === 'main') || candidates[0];
+        if (!entry) throw new Error('未找到完整论文主文件；不会用整篇模板替换空章节。');
+        ensureFigurePackages(get().paperFileContents[entry.relativePath], opts.mode);
+
+        if (opts.mode === 'external_graphic') {
+          if (!origin.assets.some((asset) => asset.relativePath === path) || !canInsertGraphic(path)) {
+            throw new Error('请先导入或刷新图片素材，再选择实际存在的 PDF、PNG 或 JPEG 文件。');
+          }
+          if (isTauriRuntime()) {
+            const { invoke } = await import('@tauri-apps/api/core');
+            if (!await invoke<boolean>('project_check_figure_asset', { projectDir: origin.projectDir, relativePath: path })) {
+              throw new Error('配图文件无法确认存在，请刷新素材或重新导入。');
+            }
+            checkProject();
+          } else if (!get().assetDataUrls[path] && !readVirtualProject(origin.projectDir).assetDataUrls[path]) {
+            throw new Error('浏览器项目中缺少这张图片的数据，请重新导入。');
+          }
+        } else {
+          const currentPath = origin.activeCanvasFileName ? canvasFigurePath(origin.activeCanvasFileName) : '';
+          const fromCurrent = path === currentPath;
+          let source: string;
+          if (fromCurrent) {
+            source = useWorkspaceStore.getState().tikzCode;
+          } else if (origin.paperFiles.some((file) => file.relativePath === path)) {
+            source = await get().readPaperFile(path);
+          } else {
+            const canvas = origin.canvases.find((item) => canvasFigurePath(item.fileName) === path);
+            if (!canvas) throw new Error('所选图源不存在，请保存画布或刷新项目文件。');
+            if (isTauriRuntime()) {
+              const { invoke } = await import('@tauri-apps/api/core');
+              const raw = await invoke<string>('project_load_canvas', { projectDir: origin.projectDir, fileName: canvas.fileName });
+              const document = JSON.parse(raw) as CanvasFileDocument;
+              if (typeof document.tikzCode !== 'string') throw new Error('画布文件没有有效图源。');
+              source = document.tikzCode;
+            } else {
+              const document = readVirtualProject(origin.projectDir).canvases[canvas.fileName];
+              if (!document) throw new Error('所选画布文件不存在。');
+              source = document.tikzCode;
+            }
+          }
+          checkProject();
+          if (!hasDrawableFigure(source)) throw new Error('所选画布为空，不能插入空白配图。');
+          if (/\\documentclass\b/.test(manuscriptCode(source))) {
+            throw new Error('完整 LaTeX 文档不能作为 TikZ 代码包嵌入，请改用独立 tikzpicture 或导出 PDF。');
+          }
+          if (/\\includegraphics\s*(?:\[[^\]]*\]\s*)?\{[^{}]*\.(?:svg|webp)\s*\}/i.test(manuscriptCode(source))) {
+            throw new Error('图源含 SVG/WebP 图片，请先转换为 PDF、PNG 或 JPEG，避免论文编译失败。');
+          }
+          if (get().paperDirtyFiles[path] && get().paperFileContents[path] !== source) {
+            throw new Error('图源文件有未保存的手工修改，请先处理，避免被画布覆盖。');
+          }
+          if (fromCurrent) {
+            if (!await get().saveActiveCanvasNow()) throw new Error('画布保存失败，已停止插入。');
+            checkProject();
+            if (get().activeCanvasFileName !== origin.activeCanvasFileName || useWorkspaceStore.getState().tikzCode !== source) {
+              throw new Error('保存期间画布已变化，请重新插入。');
+            }
+          }
+          get().updatePaperFileContent(path, source);
+          if (!await get().savePaperFileNow(path)) throw new Error('TikZ 图源保存失败，已停止插入。');
+          checkProject();
+          await get().ensureAgentikzMacrosSty();
+          checkProject();
+        }
+
+        const live = get();
+        const currentTex = live.paperFileContents[targetFile];
+        const mainTex = live.paperFileContents[entry.relativePath];
+        const existing = opts.allowDuplicate ? undefined : findExistingFigure(currentTex, path, opts.mode);
+        const label = existing ? existing.label || normalized.label
+          : uniqueFigureLabel(normalized.label, texFiles.map((file) => live.paperFileContents[file.relativePath]));
+        const snippet = existing?.snippet || buildFigureLaTeXSnippet({ ...normalized, label });
+        const cursor = opts.insertAtCursor !== false && origin.activePaperFilePath === targetFile &&
+          live.activePaperFilePath === targetFile ? live.lastPaperCursorOffset : null;
+        const inserted = existing ? { text: currentTex, offset: existing.offset } : insertFigureAtSafePosition(currentTex, snippet, cursor);
+        const changes: PaperFileChange[] = [];
+        if (entry.relativePath === targetFile) {
+          const after = ensureFigurePackages(inserted.text, opts.mode);
+          if (after !== currentTex) changes.push({ relativePath: targetFile, before: currentTex, after });
+        } else {
+          const afterMain = ensureFigurePackages(mainTex, opts.mode);
+          if (inserted.text !== currentTex) changes.push({ relativePath: targetFile, before: currentTex, after: inserted.text });
+          if (afterMain !== mainTex) changes.push({ relativePath: entry.relativePath, before: mainTex, after: afterMain });
+        }
+        if (changes.length && !live.applyPaperFileChanges(origin.projectDir, live.paperEditRevision, changes)) {
+          throw new Error('论文版本或目标文件已变化，请重新插入。');
+        }
+        const expectedTarget = get().paperFileContents[targetFile];
+        for (const file of new Set([entry.relativePath, targetFile])) {
+          if (!await get().savePaperFileNow(file)) throw new Error('论文保存失败，修改已保留在编辑器中，请重试保存；不会提示插入成功。');
+          checkProject();
+        }
+        if (get().paperFileContents[targetFile] !== expectedTarget) throw new Error('保存期间章节又有编辑，请检查插入结果后重试。');
+        await get().refreshPaperFiles();
+        checkProject();
+        const offset = existing
+          ? findExistingFigure(get().paperFileContents[targetFile], path, opts.mode)?.offset ?? inserted.offset
+          : get().paperFileContents[targetFile].indexOf(snippet);
+        const notice = existing ? `配图已在 ${targetFile}，未重复插入` : `已将配图插入至 ${targetFile}`;
+        set({
+          activePaperFilePath: targetFile, lastExportedNotice: notice, errorMessage: null,
+          paperInsertionLocation: { id: crypto.randomUUID(), projectId: origin.projectDir, path: targetFile, offset: Math.max(0, offset) },
+        });
+        setTimeout(() => {
+          if (paperWorkspaceVersion === version && get().lastExportedNotice === notice) set({ lastExportedNotice: null });
+        }, 4000);
+        return { ok: true, snippet, targetFile, alreadyPresent: Boolean(existing), label };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (paperWorkspaceVersion === version) set({ figureInsertionError: message, errorMessage: message });
+        return { ok: false, snippet: '', targetFile, error: message };
+      } finally {
+        figureInsertions.delete(version);
+        if (paperWorkspaceVersion === version) set({ isInsertingFigure: false });
+      }
     },
 
     quickInsertActiveFigureIntoPaper: async () => {
       const ws = useWorkspaceStore.getState();
       const s = get();
-      const stem =
-        s.activeCanvasFileName.replace(/\.canvas\.json$/i, '') ||
-        'fig1-overview';
-      const targetTex = s.activePaperFilePath.endsWith('.tex')
-        ? s.activePaperFilePath
-        : 'main.tex';
+      const version = paperWorkspaceVersion;
+      const texFiles = s.paperFiles.filter((file) => /\.tex$/i.test(file.relativePath) &&
+        !file.relativePath.startsWith('agentikzfile/'));
+      if (!s.projectDir || !texFiles.length) {
+        const error = '请先打开或新建论文项目，再插入当前配图。';
+        set({ figureInsertionError: error });
+        return { ok: false, snippet: '', targetFile: '', error };
+      }
+      if (!hasDrawableFigure(ws.tikzCode)) {
+        const error = '当前画布为空，请先绘图或选择已有图片。';
+        set({ figureInsertionError: error });
+        return { ok: false, snippet: '', targetFile: s.activePaperFilePath, error };
+      }
+      let path: string;
+      try { path = canvasFigurePath(s.activeCanvasFileName); }
+      catch (error) {
+        const message = String(error instanceof Error ? error.message : error);
+        set({ figureInsertionError: message });
+        return { ok: false, snippet: '', targetFile: s.activePaperFilePath, error: message };
+      }
+      const entryFile = texFiles.find((file) => file.relativePath === 'main.tex')
+        || texFiles.find((file) => file.category === 'main') || texFiles[0];
+      const targetTex = texFiles.some((file) => file.relativePath === s.activePaperFilePath)
+        ? s.activePaperFilePath : entryFile.relativePath;
       const contractClaim = ws.parsedDoc.contract?.claim;
       const caption =
         ws.parsedDoc.figureCaption ||
         contractClaim ||
-        `${s.activeCanvasName || stem}: Architecture and experimental analysis.`;
+        escapeLatexText(s.activeCanvasName || s.activeCanvasFileName.replace(/\.canvas\.json$/i, ''));
       const label =
         ws.parsedDoc.figureLabel ||
-        `fig:${stem.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
-      const columnSpan =
-        ws.canvasWidthCm >= 12 ? 'double_column' : 'single_column';
+        defaultFigureLabel(path);
+      const entry = s.paperFileContents[entryFile.relativePath] || Object.values(s.paperFileContents).find((source) => /\\documentclass\b/.test(manuscriptCode(source))) || '';
+      const columnSpan = defaultFigureSpan(entry, ws.canvasWidthCm);
 
       const res = await get().insertFigureIntoPaper({
         mode: 'tikz_package',
-        figureRelPath: `figures/${stem}.tikz`,
+        figureRelPath: path,
         caption,
         label,
         columnSpan,
@@ -1210,7 +1364,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         insertAtCursor: true,
       });
 
-      if (res.ok) {
+      if (res.ok && paperWorkspaceVersion === version) {
         get().setWorkbenchMode('paper');
       }
       return res;
@@ -1819,6 +1973,14 @@ export const useProjectStore = create<ProjectState>((set, get) => {
                 : r
             );
 
+            const syncedFigurePath = `figures/${savingFileName.replace(/\.canvas\.json$/i, '') || 'figure'}.tikz`;
+            const syncedPaper = autoSyncTikz ? {
+              paperFileContents: currentState.paperDirtyFiles[syncedFigurePath]
+                ? currentState.paperFileContents
+                : { ...currentState.paperFileContents, [syncedFigurePath]: doc.tikzCode },
+              paperEditRevision: currentState.paperEditRevision +
+                (currentState.paperFileContents[syncedFigurePath] === doc.tikzCode ? 0 : 1),
+            } : {};
             if (isSameCanvas) {
               savedEditVersion = Math.max(savedEditVersion, saveEditVersion);
               set({
@@ -1827,11 +1989,13 @@ export const useProjectStore = create<ProjectState>((set, get) => {
                 saveStatus: wasEditedDuringSave ? 'dirty' : 'saved',
                 lastSavedAt: res.updatedAt,
                 recentProjects: nextRecents,
+                ...syncedPaper,
               });
             } else {
               set({
                 canvases: nextCanvases,
                 recentProjects: nextRecents,
+                ...syncedPaper,
               });
             }
             persistCurrentPrefs({ recentProjects: nextRecents });
@@ -1899,9 +2063,11 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       savedEditVersion = editVersion;
       set((s) => ({
         canvases: nextCanvases,
-        paperFileContents: autoSyncTikz
+        paperFileContents: autoSyncTikz && !s.paperDirtyFiles[figRelPath]
           ? { ...s.paperFileContents, [figRelPath]: doc.tikzCode }
           : s.paperFileContents,
+        paperEditRevision: s.paperEditRevision +
+          (autoSyncTikz && s.paperFileContents[figRelPath] !== doc.tikzCode ? 1 : 0),
         saveStatus: 'saved',
         lastSavedAt: doc.updatedAt,
       }));
@@ -1916,7 +2082,10 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         set({ saveStatus: 'local_only' });
         return;
       }
-      set({ saveStatus: 'dirty' });
+      set((s) => ({
+        saveStatus: 'dirty',
+        paperEditRevision: s.paperEditRevision + (s.autoSyncTikz ? 1 : 0),
+      }));
       if (autoSaveTimer) clearTimeout(autoSaveTimer);
       autoSaveTimer = setTimeout(() => {
         autoSaveTimer = null;
@@ -1925,8 +2094,10 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     },
 
     refreshProjectAssets: async () => {
-      const { projectDir } = get();
+      const { projectDir, assets: initialAssets } = get();
       if (!projectDir) return;
+      const version = paperWorkspaceVersion;
+      const scan = ++assetScanSequence;
       failedAssetLookupCache.clear();
       inFlightAssetLookups.clear();
       set({ isScanningAssets: true });
@@ -1937,9 +2108,17 @@ export const useProjectStore = create<ProjectState>((set, get) => {
             'project_scan_assets',
             { projectDir }
           );
-          set({ assets, isScanningAssets: false });
+          if (paperWorkspaceVersion !== version || scan !== assetScanSequence) return;
+          const merged = new Map(assets.map((asset) => [asset.relativePath, asset]));
+          // An import/generation finishing after scan start must not disappear from the library.
+          for (const asset of get().assets) {
+            if (!initialAssets.includes(asset)) merged.set(asset.relativePath, asset);
+          }
+          set({ assets: [...merged.values()], isScanningAssets: false });
         } catch (err) {
-          set({ isScanningAssets: false, errorMessage: String(err) });
+          if (paperWorkspaceVersion === version && scan === assetScanSequence) {
+            set({ isScanningAssets: false, errorMessage: String(err) });
+          }
         }
       } else {
         const vfs = readVirtualProject(projectDir);
@@ -1955,6 +2134,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
 
       const { projectDir } = get();
       if (!projectDir) return null;
+      const version = paperWorkspaceVersion;
 
       const cacheKey = `${projectDir}::${cleanRel}`;
       if (failedAssetLookupCache.has(cacheKey)) return null;
@@ -1972,7 +2152,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
               projectDir,
               relativePath: cleanRel,
             });
-            if (get().projectDir !== projectDir) {
+            if (get().projectDir !== projectDir || paperWorkspaceVersion !== version) {
               return dataUrl;
             }
             set((s) => {
@@ -1987,14 +2167,15 @@ export const useProjectStore = create<ProjectState>((set, get) => {
             });
             return dataUrl;
           } catch {
-            failedAssetLookupCache.add(cacheKey);
+            if (paperWorkspaceVersion === version) failedAssetLookupCache.add(cacheKey);
             return null;
-          } finally {
-            inFlightAssetLookups.delete(cacheKey);
           }
         })();
 
         inFlightAssetLookups.set(cacheKey, task);
+        void task.then(() => {
+          if (inFlightAssetLookups.get(cacheKey) === task) inFlightAssetLookups.delete(cacheKey);
+        });
         return await task;
       }
 
@@ -2021,18 +2202,40 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       const fileArray = Array.from(files);
       if (fileArray.length === 0) return [];
 
-      const cleanFolder = targetFolder.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '') || 'figs';
+      const cleanFolder = normalizeFigurePath(targetFolder || 'figs');
       const { projectDir } = get();
+      const version = paperWorkspaceVersion;
+      const checkProject = () => {
+        if (version !== paperWorkspaceVersion || get().projectDir !== projectDir) throw new Error('导入期间项目已切换，已停止更新当前项目素材。');
+      };
       const newAssets: ProjectAssetItem[] = [];
       const newUrls: Record<string, string> = {};
+      const usedPaths = new Set(get().assets.map((asset) => asset.relativePath.toLowerCase()));
+      const reserved = reservedAssetPaths.get(version) || new Set<string>();
+      reservedAssetPaths.set(version, reserved);
+      const allocations: string[] = [];
 
+      try {
       for (const file of fileArray) {
         const ext = (file.name.split('.').pop() || 'png').toLowerCase();
         if (!['png', 'jpg', 'jpeg', 'svg', 'webp', 'pdf'].includes(ext)) {
           continue;
         }
-        const relPath = `${cleanFolder}/${file.name}`;
-        const dataUrl = await readFileAsDataUrl(file);
+        const safeName = file.name.replace(/[\\/:*?"<>|%#{}\u0000-\u001f]/g, '_').replace(/^\.+/, '').trim() || `image.${ext}`;
+        const base = safeName.replace(/\.[^.]*$/, '');
+        let relPath = `${cleanFolder}/${safeName}`;
+        for (let count = 2; usedPaths.has(relPath.toLowerCase()) || reserved.has(relPath.toLowerCase()); count++) {
+          relPath = `${cleanFolder}/${base}-${count}.${ext}`;
+        }
+        usedPaths.add(relPath.toLowerCase());
+        reserved.add(relPath.toLowerCase());
+        allocations.push(relPath.toLowerCase());
+        let dataUrl: string;
+        try { dataUrl = await readFileAsDataUrl(file); checkProject(); }
+        catch (error) {
+          if (version === paperWorkspaceVersion) set({ errorMessage: String(error) });
+          return [];
+        }
 
         if (projectDir && isTauriRuntime()) {
           try {
@@ -2045,13 +2248,14 @@ export const useProjectStore = create<ProjectState>((set, get) => {
                 dataUrl,
               }
             );
+            checkProject();
             const effectiveRelPath = savedAsset?.relativePath || relPath;
             failedAssetLookupCache.delete(`${projectDir}::${relPath}`);
             failedAssetLookupCache.delete(`${projectDir}::${effectiveRelPath}`);
             newAssets.push(
               savedAsset || {
                 relativePath: relPath,
-                fileName: file.name,
+                fileName: relPath.split('/').pop()!,
                 folder: cleanFolder,
                 ext,
                 sizeBytes: file.size,
@@ -2060,7 +2264,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
             );
             newUrls[effectiveRelPath] = dataUrl;
           } catch (err) {
-            set({ saveStatus: 'error', errorMessage: String(err) });
+            if (version === paperWorkspaceVersion) set({ saveStatus: 'error', errorMessage: String(err) });
             return [];
           }
         } else {
@@ -2069,7 +2273,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
           }
           newAssets.push({
             relativePath: relPath,
-            fileName: file.name,
+            fileName: relPath.split('/').pop()!,
             folder: cleanFolder,
             ext,
             sizeBytes: file.size,
@@ -2079,7 +2283,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         }
       }
 
-      if (newAssets.length === 0) return [];
+      if (newAssets.length === 0 || version !== paperWorkspaceVersion) return [];
 
       const currentState = get();
       const mergedAssets = [
@@ -2106,26 +2310,41 @@ export const useProjectStore = create<ProjectState>((set, get) => {
 
       set({ assets: mergedAssets, assetDataUrls: mergedUrls });
       return newAssets;
+      } finally {
+        for (const path of allocations) reserved.delete(path);
+        if (!reserved.size) reservedAssetPaths.delete(version);
+      }
     },
 
-    registerGeneratedAsset: async (relativePath, dataUrl) => {
-      const cleanRel = relativePath.replace(/\\/g, '/').replace(/^\/+/, '');
+    registerGeneratedAsset: async (relativePath, dataUrl, expectedProjectDir) => {
+      const cleanRel = normalizeFigurePath(relativePath);
       const parts = cleanRel.split('/');
       const fileName = parts[parts.length - 1] || 'ai_cutout.png';
       const folder = parts.length > 1 ? parts.slice(0, -1).join('/') : 'figures/assets/ai';
       const ext = (fileName.split('.').pop() || 'png').toLowerCase();
       const { projectDir } = get();
+      const version = paperWorkspaceVersion;
+      const checkProject = () => {
+        if (version !== paperWorkspaceVersion || get().projectDir !== projectDir ||
+            (expectedProjectDir !== undefined && expectedProjectDir !== projectDir)) {
+          throw new Error('生成期间项目已切换，结果不会写入其他项目或画布。');
+        }
+      };
+      checkProject();
 
       if (projectDir && isTauriRuntime()) {
         try {
           const { invoke } = await import('@tauri-apps/api/core');
-          await invoke('img_save_processed_asset', {
+          const saved = await invoke('project_import_asset', {
             projectDir,
             relativePath: cleanRel,
             dataUrl,
           });
-        } catch {
-          // Even if disk save fails or already saved by img_generate_illustration, still cache in memory
+          if (saved === false) throw new Error('生成图片保存失败。');
+          checkProject();
+        } catch (error) {
+          if (version === paperWorkspaceVersion) set({ errorMessage: String(error) });
+          throw error;
         }
       }
 
@@ -2156,7 +2375,8 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         const vfs = readVirtualProject(projectDir);
         vfs.assets = mergedAssets;
         vfs.assetDataUrls = mergedUrls;
-        writeVirtualProject(projectDir, vfs);
+        const result = writeVirtualProject(projectDir, vfs);
+        if (!result.ok) throw new Error(`生成图片未保存：${result.error}`);
       }
 
       set({ assets: mergedAssets, assetDataUrls: mergedUrls });
@@ -2222,6 +2442,10 @@ export const useProjectStore = create<ProjectState>((set, get) => {
 useProjectStore.subscribe((state, prev) => {
   if (state.projectDir === prev.projectDir) return;
   paperWorkspaceVersion += 1;
+  if (autoSaveTimer) {
+    clearTimeout(autoSaveTimer);
+    autoSaveTimer = null;
+  }
   for (const path of Object.keys(paperAutoSaveTimers)) {
     clearTimeout(paperAutoSaveTimers[path]);
     delete paperAutoSaveTimers[path];
@@ -2232,6 +2456,13 @@ useProjectStore.subscribe((state, prev) => {
     paperDirtyFiles: {},
     activePaperFilePath: 'main.tex',
     lastPaperCursorOffset: null,
+    isInsertFigureModalOpen: false,
+    figureInsertSource: null,
+    figureInsertRequestId: null,
+    isInsertingFigure: false,
+    figureInsertionError: null,
+    paperInsertionLocation: null,
+    isScanningAssets: false,
   });
 });
 
@@ -2250,6 +2481,9 @@ useWorkspaceStore.subscribe((state, prev) => {
     state.activeThemeId !== prev.activeThemeId &&
     useProjectStore.getState().projectDir
   ) {
-    void useProjectStore.getState().ensureAgentikzMacrosSty();
+    const version = paperWorkspaceVersion;
+    void useProjectStore.getState().ensureAgentikzMacrosSty().catch((error) => {
+      if (paperWorkspaceVersion === version) useProjectStore.setState({ errorMessage: String(error) });
+    });
   }
 });

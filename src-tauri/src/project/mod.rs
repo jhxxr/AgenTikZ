@@ -121,6 +121,28 @@ fn normalize_relative_path(rel: &str) -> Result<PathBuf, String> {
     Ok(out)
 }
 
+/// Resolve a project-owned output before creating directories or overwriting a file.
+pub(crate) fn checked_project_output(project_dir: &str, relative_path: &str) -> Result<PathBuf, String> {
+    let root = fs::canonicalize(project_dir.trim()).map_err(|_| "项目目录不存在或无法访问。")?;
+    if !root.is_dir() { return Err("项目路径不是文件夹。".into()); }
+    let full = root.join(normalize_relative_path(relative_path)?);
+    let parent = full.parent().ok_or("无效的项目文件路径。")?;
+    let mut ancestor = parent;
+    while !ancestor.exists() {
+        ancestor = ancestor.parent().ok_or("无法定位项目内父目录。")?;
+    }
+    let canonical = fs::canonicalize(ancestor).map_err(|_| "无法检查输出目录。")?;
+    if !canonical.starts_with(&root) { return Err("禁止写入项目目录之外的路径。".into()); }
+    if fs::symlink_metadata(&full).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        return Err("不能覆盖链接文件，请选择项目内的普通文件。".into());
+    }
+    fs::create_dir_all(parent).map_err(|error| format!("无法创建项目内目录：{error}"))?;
+    if !fs::canonicalize(parent).map_err(|_| "无法检查输出目录。")?.starts_with(&root) {
+        return Err("禁止写入项目目录之外的路径。".into());
+    }
+    Ok(full)
+}
+
 fn encode_base64(bytes: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
@@ -673,11 +695,11 @@ pub async fn project_save_canvas(
             exported_tikz_path = Some(tikz_file.to_string_lossy().to_string());
         }
         // Also write to `<project_dir>/figures/<stem>.tikz` for clean `\input{figures/<stem>.tikz}` paper workflows
-        let figures_dir = root_path.join("figures");
-        if fs::create_dir_all(&figures_dir).is_ok() {
-            let clean_fig_tikz = figures_dir.join(format!("{}.tikz", stem));
-            let _ = fs::write(&clean_fig_tikz, tikz_code.as_bytes());
-        }
+        let figure_relative = format!("figures/{stem}.tikz");
+        let clean_fig_tikz = checked_project_output(&project_dir, &figure_relative)
+            .map_err(|error| format!("画布已保存，但论文图源同步失败：{error}"))?;
+        fs::write(&clean_fig_tikz, tikz_code.as_bytes())
+            .map_err(|error| format!("画布已保存，但论文图源同步失败：{error}"))?;
     }
 
     let now = now_millis();
@@ -819,7 +841,30 @@ pub async fn project_scan_assets(project_dir: String) -> Result<Vec<ProjectAsset
     Ok(scan_dedicated_project_assets(&root_path))
 }
 
-/// Reads an image asset from `<project_dir>/<relative_path>` as a `data:` URL for canvas rendering & export.
+/// Check the exact disk resource without decoding it or loading a potentially large PDF into memory.
+#[tauri::command]
+pub async fn project_check_figure_asset(
+    project_dir: String,
+    relative_path: String,
+) -> Result<bool, String> {
+    let root = fs::canonicalize(project_dir.trim()).map_err(|_| "项目目录不存在或无法访问。")?;
+    let clean = normalize_relative_path(&relative_path)?;
+    let full = fs::canonicalize(root.join(clean)).map_err(|_| format!("配图文件不存在或无法访问：{relative_path}"))?;
+    if !full.starts_with(&root) {
+        return Err("不能把项目目录之外的链接文件插入论文。".into());
+    }
+    let metadata = fs::metadata(&full).map_err(|_| "无法读取配图文件属性。")?;
+    if !metadata.is_file() || metadata.len() == 0 {
+        return Err("配图必须是非空的普通文件。".into());
+    }
+    let ext = full.extension().and_then(|value| value.to_str()).unwrap_or("").to_ascii_lowercase();
+    if !matches!(ext.as_str(), "pdf" | "png" | "jpg" | "jpeg") {
+        return Err("论文直接插图支持 PDF、PNG、JPEG；其他格式请先转换。".into());
+    }
+    Ok(true)
+}
+
+/// Reads a previewable bitmap/vector asset, not a PDF.
 #[tauri::command]
 pub async fn project_read_asset_data_url(
     project_dir: String,
@@ -904,18 +949,7 @@ pub async fn project_import_asset(
         .unwrap_or(&data_url);
     let bytes = decode_base64(raw_b64)?;
 
-    let full_path = root_path.join(&clean_rel);
-    if let Some(parent) = full_path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("无法创建素材目录: {}", e))?;
-        if let (Ok(canon_root), Ok(canon_parent)) =
-            (fs::canonicalize(&root_path), fs::canonicalize(parent))
-        {
-            if !canon_parent.starts_with(&canon_root) {
-                return Err("禁止写入项目目录之外的路径".into());
-            }
-        }
-    }
+    let full_path = checked_project_output(&project_dir, &relative_path)?;
 
     fs::write(&full_path, &bytes)
         .map_err(|e| format!("写入素材文件失败: {}", e))?;
@@ -1273,19 +1307,7 @@ pub async fn project_write_text_file(
     if !root.is_dir() {
         return Err("项目目录不存在".into());
     }
-    let clean_rel = normalize_relative_path(&relative_path)?;
-    let full_path = root.join(&clean_rel);
-    if let Some(parent) = full_path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("无法创建父目录: {}", e))?;
-        if let (Ok(canon_root), Ok(canon_parent)) =
-            (fs::canonicalize(&root), fs::canonicalize(parent))
-        {
-            if !canon_parent.starts_with(&canon_root) {
-                return Err("禁止写入项目目录之外的路径".into());
-            }
-        }
-    }
+    let full_path = checked_project_output(&project_dir, &relative_path)?;
     fs::write(&full_path, content.as_bytes())
         .map_err(|e| format!("写入文件失败: {}", e))?;
     Ok(true)
@@ -1305,6 +1327,46 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("failed to create temp project dir");
         dir
+    }
+
+    #[tokio::test]
+    async fn figure_asset_check_requires_an_existing_nonempty_supported_project_file() {
+        let dir = create_temp_project_dir("figure_asset_check");
+        fs::create_dir_all(dir.join("figures")).unwrap();
+        fs::write(dir.join("figures/paper figure.pdf"), b"%PDF-1.7\n").unwrap();
+        fs::write(dir.join("figures/empty.png"), b"").unwrap();
+        fs::write(dir.join("figures/vector.svg"), b"<svg/>").unwrap();
+        let project = dir.to_string_lossy().to_string();
+        assert!(project_check_figure_asset(project.clone(), "figures/paper figure.pdf".into()).await.unwrap());
+        for path in ["figures/missing.png", "figures/empty.png", "figures/vector.svg", "../outside.png", "figures"] {
+            assert!(project_check_figure_asset(project.clone(), path.into()).await.is_err(), "{path}");
+        }
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn canvas_save_reports_failure_if_the_paper_figure_cannot_be_synchronized() {
+        let dir = create_temp_project_dir("figure_sync_failure");
+        fs::write(dir.join("figures"), b"not a directory").unwrap();
+        let result = project_save_canvas(
+            dir.to_string_lossy().into(), "figure.canvas.json".into(), "{}".into(),
+            Some("\\begin{tikzpicture}\\node {Source};\\end{tikzpicture}".into()),
+        ).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("图源同步失败"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn figure_asset_check_rejects_links_outside_the_project() {
+        let dir = create_temp_project_dir("figure_asset_link");
+        let outside = create_temp_project_dir("figure_asset_outside");
+        fs::write(outside.join("outside.pdf"), b"%PDF-1.7\n").unwrap();
+        std::os::unix::fs::symlink(outside.join("outside.pdf"), dir.join("linked.pdf")).unwrap();
+        assert!(project_check_figure_asset(dir.to_string_lossy().into(), "linked.pdf".into()).await.is_err());
+        let _ = fs::remove_dir_all(dir);
+        let _ = fs::remove_dir_all(outside);
     }
 
     #[tokio::test]

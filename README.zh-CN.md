@@ -65,6 +65,10 @@
 
 分隔线中提供源码 → PDF、PDF → 源码双向定位，也支持 `Ctrl/⌘ + 点击 PDF` 返回对应源码行。桌面端编译启用 `-synctex=1`，需要 TeX 安装目录内的 `synctex` 可执行文件；修改源码后须重新编译以更新映射。
 
+绘图与论文共用右侧**项目 Agent**，切换工作区不丢失对话。论文模式支持读取当前编辑器内容（含未保存修改）、提交多文件 Diff 修改集、审核后整组应用/撤回，以及读取真实编译诊断。桌面端可“应用并编译”，PDF 预览与 Agent 共用编译状态。可选择 **内置 Pi SDK** 使用长驻会话，也可继续使用 BYOA/ACP。自动修复循环与草稿编译沙盒尚未接入。详见 [MCP 服务指南](docs/mcp-guide.zh-CN.md#论文协作与审阅) 与 [Pi 接入说明](docs/pi-runtime.zh-CN.md)。
+
+素材卡片明确区分“加入画布”和“插入论文”。插图窗口支持选图、直接导入 PDF/PNG/JPEG、逐章节插入、唯一标签与重复插入检查；手填图注不会因更换素材或刷新而被清空，保存失败不会提示成功。详见 [图片与论文插入流程](docs/figure-insertion.zh-CN.md)。
+
 ### 5. Agentero 风格 BYOA (ACP v1) 与顶刊 5 点图件契约设置中心
 支持本机 `PATH` 与内置适配器双层探测（**Claude Code**、**OpenCode**、**Codex CLI**、**Gemini CLI**、**Cursor Agent**、**Kimi Code**），提供一键 `stdio` 握手延时测试，并可开启 **Nature Skills 常驻风格规范**与 **5 点图件契约（`% @figure-contract`）**。
 
@@ -104,7 +108,7 @@ flowchart TB
 
 - **无损 CST/AST 解析引擎**：位于 `src/core/parser/`，通过深度感知括号 `[]` 与花括号 `{}` 匹配解析 `\tikzset` 样式、`\node` 节点、正交/弧线/残差 `\draw` 连线以及 `\begin{axis}...\end{axis}` 实验图表，确保含分号的数学公式（如 `$p(x;\theta)$`）或含括号文本绝不误截断语句。
 - **官方 ACP v1 通信实现**：位于 `src-tauri/src/acp/mod.rs`，桌面端通过 `stdio` 启动本地已安装的 ACP 适配器，对初始化握手（`20s`）、会话创建（`20s`）、提示词生成（`180s`）及子进程退出均设有严格超时边界。
-- **当前版本边界**：当前版本 **v0.4.4** 完整支持可视化画布交互、独立论文工作区、论文模板与 4 套学术主题、本机 TeX Live 编译预览、基于 `stdio` 的 ACP v1 实时流式对话与代码补丁审阅，以及内置和外部 MCP 服务。原生文件与命令权限默认拒绝；可在 **设置 → Agent → 完整本机访问** 中明确启用跨文件夹读写和原生命令。MCP 工具单独授权，画布修改仍须审核。详见 [MCP 服务指南](docs/mcp-guide.zh-CN.md)。
+- **当前版本边界**：当前版本 **v0.5.0** 支持可视化画布交互、独立论文工作区、共享项目 Agent、多文件论文修改审阅、内置 Pi 长驻会话、ACP v1 流式对话、图片与 TikZ 插图及本机 TeX Live 预览。Pi 仅使用 AgenTikZ 内置工具；外部 MCP 与完整本机访问开关适用于 ACP。所有工具修改均需审核；草稿编译沙盒与全自动修复循环尚未实现。详见 [MCP 服务指南](docs/mcp-guide.zh-CN.md) 和 [Pi 接入说明](docs/pi-runtime.zh-CN.md)。
 
 ## 论文模板与学术主题
 
@@ -123,8 +127,8 @@ flowchart TB
 
 | 运行模式 | 适用场景 | 环境要求 |
 | --- | --- | --- |
-| **Tauri 桌面应用 (`tauri dev` / build)** | 完整功能体验：可视化画布 + 本地 ACP 智能体直连 + 本机 TeX Live 编译对比 | **Node.js >= 22.13.0**、**Rust (stable)**、WebView2 (Windows) / webkit2gtk (Linux) |
-| **Web 浏览器模式 (`npm run dev`)** | 快速体验可视化 TikZ/PGFPlots 画布、双向无损源码同步与多格式插图导出 | **Node.js >= 22.13.0** 与 npm |
+| **Tauri 桌面应用 (`tauri dev` / build)** | 完整功能体验：可视化画布 + 内置 Pi / 本地 ACP 智能体 + 本机 TeX Live 编译对比 | **Node.js >= 22.19.0**、**Rust (stable)**、WebView2 (Windows) / webkit2gtk (Linux) |
+| **Web 浏览器模式 (`npm run dev`)** | 快速体验可视化 TikZ/PGFPlots 画布、双向无损源码同步与多格式插图导出 | **Node.js >= 22.19.0** 与 npm |
 
 ### 1. 克隆仓库并安装依赖
 
@@ -187,7 +191,7 @@ Windows NSIS 安装包在覆盖安装成功后，会识别并清理旧版随包�
 
 ## BYOA 智能体接入与提示词指南
 
-AgenTikZ 通过标准输入输出（`stdio`）使用 ACP v1 协议与本机安装的智能体 CLI 通信。**AgenTikZ 在运行时不会隐式下载任何外部程序（不使用 `npx -y`），也不代管模型 API Key**——请先在本机安装并登录对应 CLI；Claude/Codex 可使用内置适配器，其他智能体需自行提供 ACP 支持。
+AgenTikZ 的 BYOA 模式通过标准输入输出（`stdio`）使用 ACP v1 协议与本机安装的智能体 CLI 通信。**运行时不会隐式下载外部程序（不使用 `npx -y`），ACP 模式复用 CLI 登录**——请先在本机安装并登录对应 CLI；Claude/Codex 可使用内置适配器，其他智能体需自行提供 ACP 支持。独立的内置 Pi 后端在设置中选择 provider、模型并保存 API Key；密钥进入系统凭据库，不写入前端设置，模型服务单独计费。
 
 ### 支持的本地 ACP 智能体列表
 

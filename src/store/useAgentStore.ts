@@ -9,11 +9,14 @@ import {
   TikzPatchProposal,
 } from '../types/acp';
 import { useWorkspaceStore } from './useWorkspaceStore';
-import { useProjectStore } from './useProjectStore';
+import { getPaperWorkspaceVersion, useProjectStore } from './useProjectStore';
 import { useMcpStore } from './useMcpStore';
 import { currentCanvasTarget, endMcpRequest, proposalConflict, registerMcpRequest } from '../core/mcp/context';
 import { buildAgentSkillAndLibraryContext } from '../core/agent/agent-knowledge';
 import { compileUserPromptWithStyleGuide } from '../core/agent/prompt-compiler';
+import { buildProjectAgentContext } from '../core/agent/project-context';
+import type { ProjectPatchProposal } from '../types/project-agent';
+import { usePiStore } from './usePiStore';
 import {
   computeTikzDiff,
   extractAgentDirectives,
@@ -38,6 +41,10 @@ export type LocalAgentSkillId =
   | 'diagnose_canvas';
 
 const DEFAULT_ACP_PROVIDERS: AcpAgentProvider[] = [
+  { id: 'pi', name: '内置 Pi · 项目 Agent', command: 'node', args: ['<bundled Pi SDK>'],
+    protocol: 'Pi SDK (AgenTikZ JSONL / stdio)', detected: false,
+    description: '应用内置 Pi SDK，长驻项目会话，仅开放 AgenTikZ 审阅工具；需单独配置模型 API Key。',
+    badgeColor: '#6366F1' },
   { id: 'claude-code', name: 'Claude Code (ACP)', command: 'claude-agent-acp', args: [],
     protocol: 'ACP (JSON-RPC 2.0 / stdio)', detected: false,
     description: '内置 claude-agent-acp 适配器（或优先使用 PATH 适配器），驱动本地 claude CLI', badgeColor: '#D97706' },
@@ -70,6 +77,7 @@ interface AgentStoreState {
   autoLayoutRepairEnabled: boolean;
   isStreaming: boolean;
   activeRequestId: string | null;
+  activeRequestBackend: 'pi' | 'acp' | null;
   sessions: AgentSession[];
   activeSessionId: string;
   setActiveAgentId: (id: AcpAgentId) => void;
@@ -86,6 +94,9 @@ interface AgentStoreState {
   runLocalAgentSkill: (skillId: LocalAgentSkillId) => void;
   applyPatchProposal: (messageId: string) => boolean;
   revertPatchProposal: (messageId: string) => void;
+  applyProjectProposal: (messageId: string) => boolean;
+  revertProjectProposal: (messageId: string) => boolean;
+  rejectProjectProposal: (messageId: string) => void;
 }
 
 const initialSettings = useSettingsStore.getState();
@@ -95,7 +106,7 @@ const initialSession: AgentSession = {
   messages: [{
     id: 'msg_welcome', role: 'system', agentId: initialSettings.defaultAgentId,
     timestamp: new Date().toTimeString().slice(0, 5),
-    content: '已挂载 AgenTikZ 智能绘图引擎（AST 语义解析 · 增量 Diff 补丁 · 防重叠几何排障 · 顶刊语义配色 · 组件库规范）。\n\n你可以直接用自然语言描述新架构或局部修改需求，或点击上方「Agent 快捷技能」一键自动修复画布重叠、无框公式与顶刊配色。',
+    content: '欢迎使用 AgenTikZ 项目助手。绘图和论文共用对话：可以精修配图、联动修改图注与正文，或分析编译诊断。\n\n所有画布与论文工具修改都先生成提案，审核后才应用。',
   }],
 };
 
@@ -112,6 +123,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
   autoLayoutRepairEnabled: true,
   isStreaming: false,
   activeRequestId: null,
+  activeRequestBackend: null,
   sessions: [initialSession],
   activeSessionId: initialSessionId,
 
@@ -132,10 +144,11 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
       attachSelectionContext: prefs.defaultAttachSelection,
       sessions: [{
         id, title: `会话 #${sessions.length + 1}`, agentId: activeAgentId, createdAt: '刚刚',
+        projectId: useProjectStore.getState().projectDir || 'temporary',
         messages: [{
           id: `msg_${id}`, role: 'system', agentId: activeAgentId,
           timestamp: new Date().toTimeString().slice(0, 5),
-          content: '新对话已创建。已注入组件库、顶刊配色规范与增量 Diff 协议。',
+          content: '项目对话已创建。绘图与论文可在同一对话中协作；修改提案需审核后应用。',
         }],
       }, ...sessions],
       activeSessionId: id,
@@ -178,6 +191,12 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
             : provider;
         }),
       }));
+      const pi = await usePiStore.getState().probe();
+      set((state) => ({ providers: state.providers.map((provider) => provider.id === 'pi' ? {
+        ...provider, detected: pi.ok, binaryAvailable: pi.ok,
+        version: pi.agentVersion, diagnostic: pi.message,
+        installHint: '需 Node.js 22.19+；开发环境请运行 npm run pi:stage。',
+      } : provider) }));
     } catch {
       set((state) => ({
         providers: state.providers.map((provider) => ({ ...provider, detected: false })),
@@ -209,7 +228,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
       const settings = useSettingsStore.getState();
       const proxyUrl = settings.proxyEnabled ? settings.proxyUrl : undefined;
       const userAgent = resolveEffectiveUserAgent(settings.userAgentPreset, settings.customUserAgent);
-      const res = await invoke<AcpHandshakeResult>('acp_test_agent', {
+      const res = agentId === 'pi' ? await usePiStore.getState().probe() : await invoke<AcpHandshakeResult>('acp_test_agent', {
         agentId,
         customCommand: get().customCommand,
         proxyUrl,
@@ -247,28 +266,37 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
     if (!requestId) return;
     endMcpRequest(requestId);
     const { invoke } = await import('@tauri-apps/api/core');
-    try { await invoke('acp_cancel_prompt', { requestId }); }
+    try { await invoke(get().activeRequestBackend === 'pi' ? 'pi_cancel_prompt' : 'acp_cancel_prompt', { requestId }); }
     catch (error) { useMcpStore.setState({ sessionStatus: String(error) }); }
   },
   sendPromptToAgent: async (promptText) => {
     if (!promptText.trim() || get().isStreaming) return;
+    const project = useProjectStore.getState();
+    const projectId = project.projectDir || 'temporary';
+    const previousSession = get().sessions.find((session) => session.id === get().activeSessionId);
+    if (previousSession?.projectId && previousSession.projectId !== projectId) get().createNewSession();
     const { activeAgentId, activeSessionId, attachSelectionContext, attachCanvasContext, customCommand, sessions } = get();
+    const paperMode = project.workbenchMode === 'paper';
     const workspace = useWorkspaceStore.getState();
     const activeThemeId = workspace.activeThemeId || 'neurips';
     const activeSession = sessions.find((session) => session.id === activeSessionId);
     const history = (activeSession?.messages || [])
       .filter((message) => message.role !== 'system')
-      .map(({ role, content }) => ({ role, content }));
+      .map(({ role, content, projectPatchProposal }) => ({ role,
+        content: projectPatchProposal
+          ? `${content}\n[Project proposal ${projectPatchProposal.id}: ${projectPatchProposal.status}; files: ${projectPatchProposal.files.map((file) => file.relativePath).join(', ')}]`
+          : content }));
     const userMessage: AgentChatMessage = {
       id: `user_${crypto.randomUUID()}`, role: 'user', agentId: activeAgentId,
       timestamp: new Date().toTimeString().slice(0, 5), content: promptText.trim(),
-      contextSelectionIds: attachSelectionContext ? [...workspace.selectedIds] : [],
-      includeFullCanvas: attachCanvasContext,
+      contextSelectionIds: !paperMode && attachSelectionContext ? [...workspace.selectedIds] : [],
+      includeFullCanvas: !paperMode && attachCanvasContext,
+      contextPaperPath: paperMode ? project.activePaperFilePath : undefined,
     };
     set((state) => ({
       isStreaming: true,
       sessions: state.sessions.map((session) => session.id === activeSessionId
-        ? { ...session, agentId: activeAgentId,
+        ? { ...session, agentId: activeAgentId, projectId,
             title: session.messages.length <= 1 ? promptText.trim().slice(0, 22) : session.title,
             messages: [...session.messages, userMessage] }
         : session),
@@ -278,9 +306,9 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
         throw new Error('本地 ACP 需要 Tauri 桌面应用；浏览器模式不能连接本地 Agent，不会生成模拟回复。');
       }
       const settings = useSettingsStore.getState();
-      const canvasTikz = attachCanvasContext ? workspace.tikzCode : '';
-      const selectedIds = attachSelectionContext ? [...workspace.selectedIds] : [];
-      const agentContext = buildAgentSkillAndLibraryContext(
+      const canvasTikz = !paperMode && attachCanvasContext ? workspace.tikzCode : '';
+      const selectedIds = !paperMode && attachSelectionContext ? [...workspace.selectedIds] : [];
+      const agentContext = buildProjectAgentContext() + (paperMode ? '' : '\n\n' + buildAgentSkillAndLibraryContext(
         activeThemeId,
         canvasTikz,
         selectedIds,
@@ -288,8 +316,8 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
           enforcePublicationStyleGuide: settings.enforcePublicationStyleGuide,
           requireFigureContract: settings.requireFigureContract,
         }
-      );
-      const compiledPrompt = compileUserPromptWithStyleGuide(
+      ));
+      const compiledPrompt = paperMode ? promptText : compileUserPromptWithStyleGuide(
         promptText,
         activeThemeId,
         {
@@ -307,13 +335,14 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
         history,
         agentContext,
         activeThemeId,
+        paperMode,
       );
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       set((state) => ({ sessions: state.sessions.map((session) => session.id === activeSessionId
         ? { ...session, messages: [...session.messages, {
             id: `error_${crypto.randomUUID()}`, role: 'system' as const, agentId: activeAgentId,
-            timestamp: new Date().toTimeString().slice(0, 5), content: `ACP 错误：${detail}`,
+            timestamp: new Date().toTimeString().slice(0, 5), content: `${activeAgentId === 'pi' ? 'Pi' : 'ACP'} 错误：${detail}`,
           }] }
         : session) }));
     } finally {
@@ -477,7 +506,64 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
       patchProposal: item.patchProposal ? { ...item.patchProposal, status: 'pending', baseRevision: useWorkspaceStore.getState().sourceRevision ?? 0 } : undefined,
     }));
   },
+  applyProjectProposal: (messageId) => changeProjectProposal(get().activeSessionId, messageId, false),
+  revertProjectProposal: (messageId) => changeProjectProposal(get().activeSessionId, messageId, true),
+  rejectProjectProposal: (messageId) => {
+    if (get().isStreaming) return;
+    updateAgentMessage(get().activeSessionId, messageId, (message) => ({
+      ...message, projectPatchProposal: message.projectPatchProposal?.status === 'pending'
+        ? { ...message.projectPatchProposal, status: 'rejected' } : message.projectPatchProposal,
+    }));
+  },
 }));
+
+let piRuntimeUsed = false;
+let piResetPending: Promise<void> = Promise.resolve();
+useProjectStore.subscribe((state, previous) => {
+  if (state.projectDir !== previous.projectDir && piRuntimeUsed &&
+      typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+    piResetPending = piResetPending.then(async () => {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('pi_reset_runtime');
+    }).catch((error) => { useMcpStore.setState({ sessionStatus: `Pi 重置失败：${String(error)}` }); });
+  }
+});
+
+export function projectProposalConflict(proposal: ProjectPatchProposal, reverting = false): string | undefined {
+  const project = useProjectStore.getState();
+  if ((project.projectDir || 'temporary') !== proposal.projectId) return '请先打开提案所属项目。';
+  const expectedRevision = reverting ? proposal.appliedRevision : proposal.baseRevision;
+  if (project.paperEditRevision !== expectedRevision || proposal.files.some((file) =>
+    project.paperFileContents[file.relativePath] !== (reverting ? file.after : file.before))) {
+    return '论文版本或文件内容已变化，请重新生成提案，避免覆盖后续编辑。';
+  }
+}
+
+function changeProjectProposal(sessionId: string, messageId: string, reverting: boolean): boolean {
+  if (useAgentStore.getState().isStreaming) return false;
+  const message = useAgentStore.getState().sessions.find((session) => session.id === sessionId)
+    ?.messages.find((item) => item.id === messageId);
+  const proposal = message?.projectPatchProposal;
+  if (!proposal || proposal.status !== (reverting ? 'applied' : 'pending')) return false;
+  const conflict = projectProposalConflict(proposal, reverting);
+  const project = useProjectStore.getState();
+  if (conflict || !project.applyPaperFileChanges(proposal.projectId,
+    reverting ? proposal.appliedRevision! : proposal.baseRevision,
+    proposal.files.map((file) => reverting
+      ? { relativePath: file.relativePath, before: file.after, after: file.before } : file))) {
+    updateAgentMessage(sessionId, messageId, (item) => ({
+      ...item, content: `${item.content}\n\n提案未${reverting ? '撤回' : '应用'}：${conflict || '目标文件已变化。'}`,
+    }));
+    return false;
+  }
+  const revision = useProjectStore.getState().paperEditRevision;
+  updateAgentMessage(sessionId, messageId, (item) => ({ ...item, projectPatchProposal: {
+    ...proposal, status: reverting ? 'pending' : 'applied',
+    baseRevision: reverting ? revision : proposal.baseRevision,
+    appliedRevision: reverting ? undefined : revision,
+  } }));
+  return true;
+}
 
 /** Updates only the originating conversation/message, even after switching tabs. */
 function updateAgentMessage(sessionId: string, messageId: string, update: (message: AgentChatMessage) => AgentChatMessage) {
@@ -560,20 +646,27 @@ async function sendViaRealAcp(
   history: Array<{ role: string; content: string }>,
   agentContext: string,
   activeThemeId: JournalThemeId,
+  paperMode = false,
 ): Promise<void> {
+  const target = currentCanvasTarget(activeSessionId);
+  const projectVersion = getPaperWorkspaceVersion();
+  const baseTikzCode = useWorkspaceStore.getState().tikzCode;
+  const baseRevision = useWorkspaceStore.getState().sourceRevision ?? 0;
   const { invoke } = await import('@tauri-apps/api/core');
   const { listen } = await import('@tauri-apps/api/event');
   const requestId = crypto.randomUUID();
   const messageId = `asst_${requestId}`;
-  const target = currentCanvasTarget(activeSessionId);
-  const baseTikzCode = useWorkspaceStore.getState().tikzCode;
-  const baseRevision = useWorkspaceStore.getState().sourceRevision ?? 0;
   let finished = false;
   let unlisten: (() => void) | undefined;
   let releaseMcp: (() => void) | undefined;
   try {
+    if (agentId === 'pi') await piResetPending;
     const { ensureMcpRuntime } = await import('../core/mcp/runtime');
     await ensureMcpRuntime();
+    if (getPaperWorkspaceVersion() !== projectVersion ||
+        (useProjectStore.getState().projectDir || 'temporary') !== target.projectId) {
+      throw new Error('项目已切换，请在目标项目重新发送请求。');
+    }
     releaseMcp = registerMcpRequest(requestId, { target, agentId, messageId });
     // Establish delivery before creating a placeholder or invoking the backend.
     unlisten = await listen<AcpStreamEvent>('acp:stream', ({ payload: event }) => {
@@ -627,9 +720,41 @@ async function sendViaRealAcp(
     const settings = useSettingsStore.getState();
     const proxyUrl = settings.proxyEnabled ? settings.proxyUrl : undefined;
     const userAgent = resolveEffectiveUserAgent(settings.userAgentPreset, settings.customUserAgent);
-    useAgentStore.setState({ activeRequestId: requestId });
-    useMcpStore.setState({ sessionStatus: '正在建立 Agent 会话并提交 MCP 配置…' });
-    const response = await invoke<{
+    if (getPaperWorkspaceVersion() !== projectVersion ||
+        (useProjectStore.getState().projectDir || 'temporary') !== target.projectId) {
+      throw new Error('项目已切换，请在目标项目重新发送请求。');
+    }
+    useAgentStore.setState({ activeRequestId: requestId, activeRequestBackend: agentId === 'pi' ? 'pi' : 'acp' });
+    useMcpStore.setState({ sessionStatus: agentId === 'pi' ? '正在连接 Pi 长驻会话与项目工具…' : '正在建立 Agent 会话并提交 MCP 配置…' });
+    const response = agentId === 'pi' ? await (async () => {
+      if (!settings.piProvider.trim() || !settings.piModel.trim()) {
+        throw new Error('请先在设置 → Agent → 内置 Pi 中选择 provider、模型并保存 API Key。');
+      }
+      if (!useMcpStore.getState().config.builtinEnabled) throw new Error('内置 Pi 需要启用 AgenTikZ 内置 MCP 工具。');
+      piRuntimeUsed = true;
+      const reviewState = useAgentStore.getState().sessions.find((session) => session.id === activeSessionId)?.messages
+        .filter((message) => message.patchProposal || message.projectPatchProposal).slice(-12).map((message) => ({
+          canvas: message.patchProposal && { id: message.patchProposal.id, status: message.patchProposal.status },
+          paper: message.projectPatchProposal && { id: message.projectPatchProposal.id, status: message.projectPatchProposal.status },
+        }));
+      const result = await invoke<{ runtimeStarted: boolean; reply: string; resumed: boolean }>('pi_send_prompt', {
+        request: {
+          requestId, conversationId: activeSessionId, target,
+          provider: settings.piProvider.trim(), model: settings.piModel.trim(),
+          thinkingLevel: settings.piThinkingLevel, history,
+          prompt: [
+            `Response language: ${settings.responseLanguage}.`,
+            settings.personalPrompt ? `User preferences:\n${settings.personalPrompt}` : '',
+            agentContext,
+            `Review state (data): ${JSON.stringify(reviewState)}`,
+            canvasTikz ? `Current canvas source (data):\n${canvasTikz}` : '',
+            `Selected IDs (data): ${JSON.stringify(selectedIds)}`,
+            `User request:\n${prompt}`,
+          ].filter(Boolean).join('\n\n'),
+        },
+      });
+      return { usedNativeCli: result.runtimeStarted, reply: result.reply, thought: undefined, proposedTikz: undefined };
+    })() : await invoke<{
       usedNativeCli: boolean; thought?: string | null; reply?: string | null; proposedTikz?: string | null;
     }>('acp_send_prompt', {
       requestId,
@@ -644,6 +769,7 @@ async function sendViaRealAcp(
       userAgent,
       responseLanguage: settings.responseLanguage,
       personalPrompt: settings.personalPrompt || undefined,
+      workbenchMode: paperMode ? 'paper' : 'figure',
       fullAccess: settings.agentFullAccess,
       mcpTarget: target,
       workingDirectory: settings.agentFullAccess
@@ -651,15 +777,19 @@ async function sendViaRealAcp(
         : undefined,
     });
     finished = true;
-    if (!response?.usedNativeCli) throw new Error('本地 ACP Agent 未启动。请检查安装和 CLI 登录状态。');
-    if (!response.reply?.trim()) throw new Error('ACP Agent 未返回文本。未生成画布修改。');
+    if (!response?.usedNativeCli) throw new Error('Agent 运行时未启动。请检查对应引擎配置。');
+    const currentMessage = useAgentStore.getState().sessions
+      .find((session) => session.id === activeSessionId)?.messages.find((message) => message.id === messageId);
+    if (!response.reply?.trim() && !currentMessage?.patchProposal && !currentMessage?.projectPatchProposal) {
+      throw new Error('ACP Agent 未返回文本或修改提案。');
+    }
 
     const autoRepair = useAgentStore.getState().autoLayoutRepairEnabled;
     const existingProposal = useAgentStore.getState().sessions
       .find((session) => session.id === activeSessionId)?.messages.find((message) => message.id === messageId)?.patchProposal;
-    const patchProposal = existingProposal ? undefined : buildEnrichedPatchProposal(
+    const patchProposal = existingProposal || paperMode || agentId === 'pi' ? undefined : buildEnrichedPatchProposal(
       requestId,
-      response.reply,
+      response.reply ?? '',
       canvasTikz,
       response.proposedTikz,
       selectedIds,
@@ -670,7 +800,7 @@ async function sendViaRealAcp(
     updateAgentMessage(activeSessionId, messageId, (message) => ({
       ...message,
       // The IPC response is authoritative, not an extra stream chunk.
-      content: response.reply!,
+      content: response.reply?.trim() ? response.reply : '修改提案已生成，请审核后应用。',
       thoughtProcess: response.thought ?? message.thoughtProcess,
       patchProposal: message.patchProposal ?? (patchProposal
         ? { ...patchProposal, targetCanvas: target, baseTikzCode, baseRevision }
@@ -681,12 +811,12 @@ async function sendViaRealAcp(
     // Keep real partial output; remove only a completely empty placeholder.
     useAgentStore.setState((state) => ({ sessions: state.sessions.map((session) => session.id === activeSessionId
       ? { ...session, messages: session.messages.filter((message) =>
-          message.id !== messageId || message.content || message.thoughtProcess || message.patchProposal || message.mcpToolCalls?.length) }
+          message.id !== messageId || message.content || message.thoughtProcess || message.patchProposal || message.projectPatchProposal || message.mcpToolCalls?.length) }
       : session) }));
     throw error;
   } finally {
     finished = true;
-    useAgentStore.setState({ activeRequestId: null });
+    useAgentStore.setState({ activeRequestId: null, activeRequestBackend: null });
     releaseMcp?.();
     unlisten?.();
   }

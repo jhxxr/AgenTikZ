@@ -637,7 +637,7 @@ export function computeTikzDiff(
 /**
  * Computes a clean, compact LCS line diff with 2 lines of context around changed hunks.
  */
-function computeCompactLineDiff(
+export function computeCompactLineDiff(
   oldText: string,
   newText: string
 ): TikzDiffLine[] {
@@ -649,11 +649,15 @@ function computeCompactLineDiff(
 
   // Guard against huge matrices
   if (n * m > 250000) {
-    return newLines.map((text, idx) => ({
+    return [...oldLines.map((text, idx) => ({
+      type: 'remove' as const,
+      text,
+      oldLine: idx + 1,
+    })), ...newLines.map((text, idx) => ({
       type: 'add' as const,
       text,
       newLine: idx + 1,
-    }));
+    }))];
   }
 
   const dp: number[][] = Array.from({ length: n + 1 }, () =>

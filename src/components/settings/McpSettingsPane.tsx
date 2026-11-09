@@ -148,7 +148,7 @@ export const McpSettingsPane: React.FC = () => {
         <ValueEditor label="请求头" rows={headers} onChange={setHeaders} />
       </>}
       <fieldset className="space-y-2"><legend className="mb-2 text-xs font-medium text-slate-700">适用 Agent（不勾选表示全部）</legend>
-        <div className="grid grid-cols-2 gap-2 text-xs text-slate-600">{providers.map((p) => <label key={p.id} className="flex items-center gap-1.5">
+        <div className="grid grid-cols-2 gap-2 text-xs text-slate-600">{providers.filter((p) => p.id !== 'pi').map((p) => <label key={p.id} className="flex items-center gap-1.5">
           <input type="checkbox" checked={editing.agentIds.includes(p.id)} onChange={(e) => setEditing({ ...editing,
             agentIds: e.target.checked ? [...editing.agentIds, p.id] : editing.agentIds.filter((id) => id !== p.id) })} />{p.name}</label>)}</div>
       </fieldset>
@@ -166,7 +166,7 @@ export const McpSettingsPane: React.FC = () => {
             </div>
             <p role={tests[server.id]?.phase === 'error' ? 'alert' : undefined}
               className={`mt-1 text-[11px] ${tests[server.id]?.phase === 'error' ? 'text-rose-600' : 'text-slate-500'}`}>{tests[server.id]?.message || '尚未测试'}</p>
-            <p className="mt-0.5 text-[11px] text-slate-400">{server.agentIds.length ? server.agentIds.map((id) => providers.find((p) => p.id === id)?.name || id).join('、') : '所有 Agent'}</p>
+            <p className="mt-0.5 text-[11px] text-slate-400">{server.agentIds.length ? server.agentIds.map((id) => providers.find((p) => p.id === id)?.name || id).join('、') : '所有 ACP Agent（不含内置 Pi）'}</p>
           </div>
           <SettingsToggle label={`启用 ${server.name}`} checked={server.enabled} disabled={saving}
             onChange={(enabled) => void save({ ...config, servers: config.servers.map((s) => s.id === server.id ? { ...s, enabled } : s) })} />

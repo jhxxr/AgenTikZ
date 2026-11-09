@@ -57,7 +57,7 @@ impl ServerHandler for CanvasBridge {
     fn get_info(&self) -> ServerConfig {
         let mut config = ServerConfig::new(ServerCapabilities::builder().enable_tools().build());
         config.server_info = Implementation::new("AgenTikZ", env!("CARGO_PKG_VERSION"));
-        config.instructions = Some("Use get_canvas_source before proposing edits. All proposals require user review; never claim they are applied.".into());
+        config.instructions = Some("Use get_project_context to discover project files and read_project_file before proposing manuscript changes. Use get_canvas_source before canvas edits. All proposals require user review; never claim they are applied or compiled.".into());
         config
     }
 

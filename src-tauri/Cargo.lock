@@ -68,7 +68,7 @@ dependencies = [
 
 [[package]]
 name = "agentikz"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "agent-client-protocol",
  "agentikz-mcp",
@@ -85,7 +85,7 @@ dependencies = [
 
 [[package]]
 name = "agentikz-mcp"
-version = "0.4.4"
+version = "0.5.0"
 dependencies = [
  "reqwest",
  "rmcp",

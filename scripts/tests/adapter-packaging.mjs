@@ -67,7 +67,7 @@ test("old node_modules layout is never accepted as a current bundle", (t) => {
   assert.throws(() => inventory(directory), /node_modules/);
 });
 
-test("Tauri resource allowlist matches the compact bundle layout", (t) => {
+test("Tauri resources preserve compact ACP bundles and explicitly include the separate Pi runtime", (t) => {
   const directory = temporary(t);
   const manifest = cachedBundle(directory);
   const config = JSON.parse(fs.readFileSync(
@@ -75,9 +75,22 @@ test("Tauri resource allowlist matches the compact bundle layout", (t) => {
   ));
   assert.deepEqual(
     [...config.bundle.resources].sort(),
-    ["manifest.json", ...Object.keys(manifest.files)].map((name) => `adapters/${name}`).sort(),
+    [...["manifest.json", ...Object.keys(manifest.files)].map((name) => `adapters/${name}`), "pi-runtime/"].sort(),
   );
   assert.deepEqual(config.bundle.externalBin, ["binaries/agentikz-mcp"]);
+});
+
+test("Pi dependencies are separately locked and staged before desktop development and builds", () => {
+  const root = fileURLToPath(new URL("../../", import.meta.url));
+  const source = JSON.parse(fs.readFileSync(path.join(root, "runtime/pi/package.json"), "utf8"));
+  const lock = JSON.parse(fs.readFileSync(path.join(root, "runtime/pi/package-lock.json"), "utf8"));
+  const config = JSON.parse(fs.readFileSync(path.join(root, "src-tauri/tauri.conf.json"), "utf8"));
+  for (const name of ["@earendil-works/pi-ai", "@earendil-works/pi-coding-agent"]) {
+    assert.equal(source.dependencies[name], "1.5.0");
+    assert.equal(lock.packages[`node_modules/${name}`].version, source.dependencies[name]);
+  }
+  assert.match(config.build.beforeDevCommand, /npm run pi:stage.*npm run dev/);
+  assert.match(config.build.beforeBuildCommand, /npm run pi:stage.*npm run build/);
 });
 
 test("inventory enforces native/dev file and byte limits", (t) => {

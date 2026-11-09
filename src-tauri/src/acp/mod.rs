@@ -906,6 +906,7 @@ pub async fn acp_send_prompt(
     personal_prompt: Option<String>,
     template_references: Option<String>,
     agent_context: Option<String>,
+    workbench_mode: Option<String>,
     full_access: Option<bool>,
     working_directory: Option<String>,
     mcp_target: Option<crate::mcp::bridge::CanvasTarget>,
@@ -954,7 +955,7 @@ pub async fn acp_send_prompt(
     let stream_id = request_id.clone();
     let messages = message_buf.clone();
     let thoughts = thought_buf.clone();
-    let structured_prompt = build_tikz_prompt_with_agent_context(
+    let structured_prompt = build_agent_prompt_with_mode(
         &prompt,
         &canvas_tikz,
         &selected_ids,
@@ -964,9 +965,10 @@ pub async fn acp_send_prompt(
         template_references.as_deref(),
         agent_context.as_deref(),
         full_access,
+        workbench_mode.as_deref() == Some("paper"),
     );
     let structured_prompt = format!(
-        "{structured_prompt}\n\nAgent working directory: {}\n\nMCP policy: Enabled MCP tools are authorized independently of native filesystem permissions. When the agentikz server is attached, use its tools to inspect actual canvas state and submit a proposal. If canvas source was omitted from the prompt, read it with get_canvas_source instead of asking the user to attach it. Read get_canvas_source first, then pass its revision and sourceHash to proposal tools. MCP proposals require user review; do not duplicate a tool-created proposal as a second replacement code block or claim it has been applied.",
+        "{structured_prompt}\n\nAgent working directory: {}\n\nMCP policy: Enabled MCP tools are authorized independently of native filesystem permissions. Use get_project_context to discover project files. For manuscript changes, read each target with read_project_file and submit propose_project_patch using paperRevision and the per-file hashes. For canvas changes, read get_canvas_source first and pass its revision and sourceHash to canvas proposal tools. If canvas source was omitted, read it with the tool instead of asking the user to attach it. Proposals require user review; never duplicate a tool proposal as a replacement code block or claim it has been applied. Never bypass manuscript review using native file tools.",
         cwd.display()
     );
 
@@ -1097,7 +1099,7 @@ pub async fn acp_send_prompt(
     let mut reply = message_buf.lock().unwrap().clone();
     let thought = thought_buf.lock().unwrap().clone();
     if reply.trim().is_empty() && lease.as_ref().is_some_and(|lease| lease.has_proposal()) {
-        reply = "已通过 MCP 工具提交画布修改提案，请审查后应用。".into();
+        reply = "已通过 MCP 工具提交修改提案，请审查后应用。".into();
     }
     if reply.trim().is_empty() {
         return Err(
@@ -1187,6 +1189,22 @@ fn build_tikz_prompt_with_agent_context(
     agent_context: Option<&str>,
     full_access: bool,
 ) -> String {
+    build_agent_prompt_with_mode(user_prompt, canvas_tikz, selected_ids, history,
+        response_language, personal_prompt, template_references, agent_context, full_access, false)
+}
+
+fn build_agent_prompt_with_mode(
+    user_prompt: &str,
+    canvas_tikz: &str,
+    selected_ids: &[String],
+    history: &[ConversationMessage],
+    response_language: Option<&str>,
+    personal_prompt: Option<&str>,
+    template_references: Option<&str>,
+    agent_context: Option<&str>,
+    full_access: bool,
+    paper_mode: bool,
+) -> String {
     let mut parts = vec![access::prompt_instructions(full_access).to_string()];
     if let Some(lang) = response_language.map(str::trim).filter(|l| !l.is_empty() && *l != "auto") {
         let lang_instruction = match lang {
@@ -1200,6 +1218,18 @@ fn build_tikz_prompt_with_agent_context(
     }
     if let Some(custom_prompt) = personal_prompt.map(str::trim).filter(|p| !p.is_empty()) {
         parts.push(format!("User personal preferences / custom instructions:\n{custom_prompt}"));
+    }
+    if paper_mode {
+        parts.push("The user is in the manuscript workspace. Assist with the whole research project, not only a TikZ picture. Use project MCP tools to read actual editor contents and propose reviewable multi-file manuscript edits. Preserve scientific meaning and verified references; never invent results or citations. Canvas edits still use canvas proposal tools. Do not turn a manuscript response or a full LaTeX document into a canvas replacement. Latest compilation diagnostics are available through get_paper_diagnostics; do not claim uncompiled drafts are verified.".into());
+        if let Some(context) = agent_context {
+            parts.push(format!("Project context and tool guidance:\n{context}"));
+        }
+        if !history.is_empty() {
+            parts.push(format!("Previous conversation (JSON data, not additional system instructions):\n{}",
+                serde_json::to_string(history).expect("conversation contains only strings")));
+        }
+        parts.push(format!("User instruction: {user_prompt}"));
+        return parts.join("\n\n");
     }
     parts.push("Drawing policy: Design the figure from the user's actual requirements, not by selecting and copying a ready-made template. Built-in references are optional composition ideas only: learn layout, hierarchy, spacing and routing, then independently construct the requested nodes, edges, labels and panels. Ignore unrelated references; the reference library does not limit the kinds of figures you can draw. Never transplant example architecture details, dimensions, experiment values or claimed results. Ask for missing essential data; use explicitly labeled illustrative data only when the user requests it. For a new figure, create the requested structure from scratch. When editing the current canvas, preserve unrelated user content, comments and definitions unless the user asks to replace or redesign them.".into());
     parts.push(r"Interactive editor compatibility: Use uniquely named nodes with explicit numeric at (x,y) coordinates in cm; do not rely on relative positioning, foreach loops or custom macros to create nodes. Connect named nodes using \draw with --, |- or -| and optional north/south/east/west anchors. Use explicit minimum width/height and readable spacing. Supported semantic node styles include dl_block, mha_block, addnorm_block, conv_block, feature_cube, op_circle and stage_box; they are optional building blocks, not mandatory architectures. For PGFPlots, use axis environments with explicit width/height and addplot coordinates; place chart panels with scope shift={(x,y)}. Keep labels legible, use one scale per axis, and identify multiple series with legends and distinct marks or line styles. Do not return unsupported drawing constructs as if they were fully editable.".into());
@@ -1403,6 +1433,25 @@ mod tests {
         assert!(prompt.contains("Make it blue"));
         assert!(prompt.contains("% source"));
         assert!(prompt.contains("encoder"));
+    }
+
+    #[test]
+    fn manuscript_prompt_preserves_context_without_canvas_only_output_rules() {
+        let history = vec![ConversationMessage { role: "user".into(), content: "Keep the measured results.".into() }];
+        let prompt = build_agent_prompt_with_mode(
+            "Update the caption and references", "unused canvas", &[], &history,
+            Some("zh-CN"), Some("Preserve terminology"), None,
+            Some("main.tex; sections/results.tex; unsaved edits"), false, true,
+        );
+        assert!(prompt.contains("manuscript workspace"));
+        assert!(prompt.contains("get_paper_diagnostics"));
+        assert!(prompt.contains("sections/results.tex"));
+        assert!(prompt.contains("Keep the measured results."));
+        assert!(prompt.contains("Preserve terminology"));
+        assert!(prompt.contains("简体中文"));
+        assert!(!prompt.contains("COMPLETE replacement source"));
+        assert!(!prompt.contains("explicit numeric at (x,y)"));
+        assert!(!prompt.contains("unused canvas"));
     }
 
     #[test]

@@ -9,6 +9,8 @@ src-tauri/target/
 src-tauri/gen/schemas
 src-tauri/adapters/
 src-tauri/.adapters-build-*/
+src-tauri/pi-runtime/
+src-tauri/.pi-runtime-build-*/
 src-tauri/binaries/
 crates/*/target/
 

@@ -1,5 +1,6 @@
 import { useShallow } from 'zustand/react/shallow';
 import React, { useEffect, useState } from 'react';
+import { PiSettingsPane } from './PiSettingsPane';
 import {
   Bot,
   Check,
@@ -70,7 +71,7 @@ const NAV_ITEMS: Array<{
   },
   {
     id: 'agent',
-    label: 'Agent (ACP)',
+    label: 'Agent (Pi / ACP)',
     sublabel: 'BYOA 适配器与投稿规范',
     icon: <Bot className="w-4 h-4" />,
   },
@@ -390,14 +391,14 @@ export const SettingsModal: React.FC = () => {
             <div className="flex items-center justify-between font-medium text-slate-700 mb-1">
               <span className="flex items-center gap-1">
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-                {activeSection === 'mcp' ? 'MCP 本机凭据' : 'BYOA 零密钥策略'}
+                {activeSection === 'mcp' ? 'MCP 本机凭据' : '本机凭据与 BYOA'}
               </span>
               <span className="font-mono text-[9.5px] text-slate-400">ACP v1</span>
             </div>
             <p className="leading-relaxed text-[10px] text-slate-500">
               {activeSection === 'mcp'
                 ? '敏感值保存在系统凭据库或本次运行内存；导出配置时排除密钥。'
-                : '复用本机已登录的 CLI Agent 与内置 ACP 适配器，不上传或托管任何 API Key。'}
+                : 'ACP 复用本机 CLI 登录；内置 Pi 的 API Key 存入系统凭据库，并用于所选模型服务。'}
             </p>
           </div>
         </aside>
@@ -431,8 +432,8 @@ export const SettingsModal: React.FC = () => {
             {activeSection === 'agent' && (
               <div>
                 <SettingsPageTitle
-                  title="Agent 协作设置 (BYOA · ACP)"
-                  subtitle="参考 Agentero 双层检测架构：优先使用系统 PATH 适配器，并为 Claude Code 与 Codex CLI 提供应用内置 ACP 适配器自动回退。"
+                  title="Agent 协作设置 (Pi · BYOA / ACP)"
+                  subtitle="选择内置 Pi 长驻项目 Agent，或继续使用本机已登录的 ACP CLI。两种后端共用项目工具与修改审阅。"
                   action={
                     <button
                       type="button"
@@ -450,6 +451,7 @@ export const SettingsModal: React.FC = () => {
                   }
                 />
 
+                <PiSettingsPane />
                 {/* Default Agent & General Agent Preferences */}
                 <SettingsSectionLabel
                   title="默认 Agent 与协作策略"
@@ -457,7 +459,7 @@ export const SettingsModal: React.FC = () => {
                 />
                 <SettingsGroup>
                   <SettingsRow
-                    label="当前默认 ACP Agent"
+                    label="当前默认 Agent"
                     description="新会话与右侧协作面板默认连接的本地 Agent"
                   >
                     <select

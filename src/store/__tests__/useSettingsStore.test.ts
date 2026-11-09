@@ -17,6 +17,23 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('agent access preferences', () => {
+  it('persists non-secret Pi model preferences without accepting a key into settings storage', async () => {
+    const { useSettingsStore } = await import('../useSettingsStore');
+    useSettingsStore.getState().updateSettings({
+      defaultAgentId: 'pi', piProvider: 'anthropic', piModel: 'fixture', piThinkingLevel: 'high',
+      ...({ piApiKey: 'secret-fixture-do-not-persist' } as Record<string, string>),
+    });
+    const saved = JSON.parse(storage.get(STORAGE_KEY)!);
+    expect(saved).toMatchObject({ defaultAgentId: 'pi', piModel: 'fixture', piThinkingLevel: 'high' });
+    expect(saved).not.toHaveProperty('piApiKey');
+    expect(storage.get(STORAGE_KEY)).not.toContain('secret-fixture');
+    vi.resetModules();
+    const { useSettingsStore: reloaded } = await import('../useSettingsStore');
+    expect(reloaded.getState()).toMatchObject({ defaultAgentId: 'pi', piModel: 'fixture', piThinkingLevel: 'high' });
+    reloaded.getState().resetSettings();
+    expect(reloaded.getState()).toMatchObject({ defaultAgentId: 'claude-code', piModel: '', piThinkingLevel: 'medium' });
+  });
+
   it('migrates existing settings with access disabled', async () => {
     storage.set(STORAGE_KEY, JSON.stringify({ responseLanguage: 'en' }));
     const { useSettingsStore } = await import('../useSettingsStore');

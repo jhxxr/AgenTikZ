@@ -45,6 +45,8 @@
 
 Instead of locking you into a proprietary cloud model or asking for raw API keys, AgenTikZ adopts **Bring Your Own Agent (BYOA)** over the official [Agent Client Protocol (ACP)](https://agentclientprotocol.com) (`stdio`). Connect your locally installed **Claude Code**, **Codex CLI**, **OpenCode**, **Gemini CLI**, **Cursor Agent**, or **Kimi Code** directly to the canvas, attach `@canvas` and `@selection` context, and review proposed LaTeX replacements before applying them.
 
+An optional **embedded Pi SDK backend** now shares the same project tools and proposal review workflow. Select it under **Settings → Agent**, load the pinned model catalog and store a provider API key in the OS credential store. Pi retains tool history in a long-lived process, without requiring Pi CLI. Node.js 22.19+ is still user-provided; model usage is billed by the selected provider. Pi currently exposes only AgenTikZ tools, not native shell/file tools or third-party MCP servers. Cancellation, project switches, runtime resets and restarts discard runtime history; the visible chat is replayed on recovery. See [Pi runtime notes](docs/pi-runtime.zh-CN.md).
+
 ## Interface & Workflow Tour
 
 ### 1. Visual Studio, Lossless AST Code Sync & BYOA Agent Diff Review
@@ -108,7 +110,7 @@ flowchart TB
 
 - **Lossless CST/AST Engine**: Located in `src/core/parser/`, the parser resolves `\tikzset` style definitions, `\node` statements, orthogonal/curved/residual `\draw` edges, and `\begin{axis}...\end{axis}` PGFPlots environments using depth-aware bracket `[]` and brace `{}` matching so math expressions like `$p(x;\theta)$` never truncate statement boundaries.
 - **Official ACP v1 Transport**: Located in `src-tauri/src/acp/mod.rs`, the desktop backend launches locally installed ACP adapters over `stdio` with bounded initialization (`20s`), session creation (`20s`), prompt execution (`180s`), and transport shutdown timeouts.
-- **Release Scope**: Current release **v0.4.4** provides full visual editing, a dedicated paper workspace, paper starters, 4 venue themes, local TeX Live preview, `stdio`-based ACP v1 prompt/stream integration, and built-in/external MCP services. Local tool permissions are denied by default; **Settings → Agent → 完整本机访问 (Full local access)** enables cross-folder file access and native agent commands.
+- **Release Scope**: **v0.5.0** adds a shared project assistant, reviewable multi-file manuscript edits, an embedded Pi SDK with long-lived sessions, and safer image/TikZ insertion alongside the existing canvas, paper workspace, TeX preview and ACP integration. Pi exposes AgenTikZ tools only; external MCP and full-local-access settings apply to ACP. Draft compilation sandboxes and fully automatic repair loops are not yet implemented.
 
 ## Paper Templates & Themes
 
@@ -127,8 +129,8 @@ Blank, Nature, NeurIPS, CVPR, IEEE, and arXiv writing starters are retained. The
 
 | Mode | Best For | Requirements |
 | --- | --- | --- |
-| **Desktop App (`tauri dev` / build)** | Full experience: Visual Canvas + Local ACP Agents + Local TeX Live compilation | **Node.js >= 22.13.0**, **Rust (stable)**, WebView2 (Windows) / webkit2gtk (Linux) |
-| **Web Studio (`npm run dev`)** | Instant browser trial of the visual TikZ/PGFPlots canvas, lossless code sync, and exports | **Node.js >= 22.13.0** and npm |
+| **Desktop App (`tauri dev` / build)** | Full experience: Visual Canvas + Embedded Pi / Local ACP Agents + Local TeX Live compilation | **Node.js >= 22.19.0**, **Rust (stable)**, WebView2 (Windows) / webkit2gtk (Linux) |
+| **Web Studio (`npm run dev`)** | Instant browser trial of the visual TikZ/PGFPlots canvas, lossless code sync, and exports | **Node.js >= 22.19.0** and npm |
 
 ### 1. Clone & Install Dependencies
 

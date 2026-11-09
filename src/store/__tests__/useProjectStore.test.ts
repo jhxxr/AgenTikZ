@@ -78,6 +78,9 @@ describe('useProjectStore', () => {
       prompt: vi.fn(),
     });
 
+    // Detach the previous workspace before restoring its drawing/theme. Otherwise
+    // the real subscriptions can start background writes against the next IPC mock.
+    useProjectStore.setState({ projectDir: null });
     useWorkspaceStore.getState().applyCanvasDocumentState({
       tikzCode: CODE_A,
       activeThemeId: 'neurips',
@@ -161,6 +164,35 @@ describe('useProjectStore', () => {
   });
 
   describe('project-scoped paper persistence', () => {
+    it('cancels an old canvas debounce before it can save into the next project', async () => {
+      enableTauriRuntime();
+      useProjectStore.setState({ projectDir: 'E:/Papers/QueuedCanvasA' });
+      useProjectStore.getState().markCanvasDirty();
+      useProjectStore.setState({ projectDir: 'E:/Papers/QueuedCanvasB' });
+      await vi.advanceTimersByTimeAsync(600);
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it('synchronizes saved canvas source into the paper cache without discarding an unsaved paper buffer', async () => {
+      enableTauriRuntime();
+      useProjectStore.setState({ projectDir: 'E:/Papers/CanvasSync' });
+      const path = 'figures/fig1-architecture.tikz';
+      useProjectStore.setState({ saveStatus: 'dirty', autoSyncTikz: true });
+      mockInvoke.mockImplementation(async () => ({ fileName: 'fig1-architecture.canvas.json', updatedAt: 1000 }));
+      const beforeRevision = useProjectStore.getState().paperEditRevision;
+      expect(await useProjectStore.getState().saveActiveCanvasNow()).toBe(true);
+      expect(useProjectStore.getState().paperFileContents[path]).toBe(CODE_A);
+      expect(useProjectStore.getState().paperEditRevision).toBeGreaterThan(beforeRevision);
+      useProjectStore.setState({
+        paperFileContents: { [path]: 'Unsaved hand edit' },
+        paperDirtyFiles: { [path]: true },
+        saveStatus: 'dirty',
+      });
+      expect(await useProjectStore.getState().saveActiveCanvasNow()).toBe(true);
+      expect(useProjectStore.getState().paperFileContents[path]).toBe('Unsaved hand edit');
+      expect(useProjectStore.getState().paperDirtyFiles[path]).toBe(true);
+    });
+
     function setupPaper(content = 'first version') {
       enableTauriRuntime();
       useProjectStore.setState({ projectDir: 'E:/Papers/PaperA' });
@@ -447,6 +479,7 @@ describe('useProjectStore', () => {
 
     it('keeps paper navigation and insertion independent of canvas visibility', async () => {
       await useProjectStore.getState().initPaperWorkspace('E:/Papers/FocusedPaper', 'arxiv');
+      useWorkspaceStore.getState().setTikzCode(CODE_A);
       await useProjectStore.getState().openPaperFile('sections/method.tex');
       expect(useProjectStore.getState().workbenchMode).toBe('paper');
       expect((await useProjectStore.getState().quickInsertActiveFigureIntoPaper()).ok).toBe(true);

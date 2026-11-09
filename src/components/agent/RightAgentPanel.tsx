@@ -3,13 +3,16 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useAgentStore } from '../../store/useAgentStore';
 import { useWorkspaceStore } from '../../store/useWorkspaceStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
-import { useProjectStore } from '../../store/useProjectStore';
+import { getPaperWorkspaceVersion, useProjectStore } from '../../store/useProjectStore';
 import { JOURNAL_THEMES } from '../../core/themes/journal-presets';
 import { PUBLICATION_WORKFLOW_TEMPLATES } from '../../core/agent/figure-contract';
 import { parseTikzDocument } from '../../core/parser/parser';
 import { generateScientificIllustration } from '../../core/agent/illustration-prompt';
 import { AcpAgentId } from '../../types/acp';
 import { currentCanvasTarget, sameCanvas } from '../../core/mcp/context';
+import { ProjectPatchCard } from './ProjectPatchCard';
+import { usePaperBuildStore } from '../../store/usePaperBuildStore';
+import { useMcpStore } from '../../store/useMcpStore';
 import {
   Bot,
   Check,
@@ -106,7 +109,14 @@ export const RightAgentPanel: React.FC = () => {
   })));
   const settings = useSettingsStore();
   const { openSettings } = settings;
-  const { projectDir, registerGeneratedAsset } = useProjectStore(useShallow((s) => ({ projectDir: s.projectDir, registerGeneratedAsset: s.registerGeneratedAsset })));
+  const { projectDir, registerGeneratedAsset, workbenchMode, activePaperFilePath, paperDirtyFiles } = useProjectStore(useShallow((s) => ({
+    projectDir: s.projectDir, registerGeneratedAsset: s.registerGeneratedAsset,
+    workbenchMode: s.workbenchMode, activePaperFilePath: s.activePaperFilePath, paperDirtyFiles: s.paperDirtyFiles,
+  })));
+  const paperMode = workbenchMode === 'paper';
+  const runtimeStatus = useMcpStore((s) => s.sessionStatus);
+  const buildMessage = usePaperBuildStore((s) => s.projectId === projectDir
+    ? (s.status === 'running' ? '正在编译论文…' : s.result?.message) : undefined);
 
   const [inputText, setInputText] = useState('');
   const [showHistoryDropdown, setShowHistoryDropdown] = useState(false);
@@ -176,6 +186,7 @@ export const RightAgentPanel: React.FC = () => {
     const directives = parseTikzDocument(tikzSource).imageDirectives || [];
     if (directives.length === 0 || generatingImgMsgId === msgId) return;
     const imageTarget = currentCanvasTarget(activeSessionId);
+    const imageProjectVersion = getPaperWorkspaceVersion();
     const proposalTarget = activeSession?.messages.find((message) => message.id === msgId)?.patchProposal?.targetCanvas;
     if (proposalTarget && !sameCanvas(proposalTarget)) {
       setImgGenStatusByMsgId((prev) => ({ ...prev, [msgId]: '请先切回提案所属的画布。' }));
@@ -183,7 +194,8 @@ export const RightAgentPanel: React.FC = () => {
     }
     let expectedSource = useWorkspaceStore.getState().tikzCode;
     const checkImageTarget = () => {
-      if (!sameCanvas(imageTarget) || useWorkspaceStore.getState().tikzCode !== expectedSource) {
+      if (getPaperWorkspaceVersion() !== imageProjectVersion || !sameCanvas(imageTarget) ||
+          useWorkspaceStore.getState().tikzCode !== expectedSource) {
         throw new Error('画布或源码已变化，已停止将生成结果写入画布。');
       }
     };
@@ -215,7 +227,8 @@ export const RightAgentPanel: React.FC = () => {
           checkImageTarget();
           const savedRel = await registerGeneratedAsset(
             res.savedRelativePath || targetRel,
-            res.dataUrl
+            res.dataUrl,
+            projectDir,
           );
           checkImageTarget();
           useWorkspaceStore
@@ -279,7 +292,7 @@ export const RightAgentPanel: React.FC = () => {
           style={{ writingMode: 'vertical-rl' }}
           title="展开 AI 绘图助手面板"
         >
-          AI 绘图助手
+          AI 项目助手
         </button>
 
         <div className="flex flex-col items-center gap-1.5">
@@ -310,13 +323,13 @@ export const RightAgentPanel: React.FC = () => {
               <Bot className="w-3 h-3" />
             </div>
             <span className="text-xs font-semibold text-slate-900">
-              Agent 协作
+              项目 Agent
             </span>
             <span
               className="text-[9.5px] px-1.5 py-0.2 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 font-medium"
-              title={`已自动注入 ${activeTheme.name} 常驻投稿规范`}
+              title={paperMode ? '论文上下文与多文件审阅' : `已自动注入 ${activeTheme.name} 常驻投稿规范`}
             >
-              🛡️ {activeTheme.venueBadge}规范
+              {paperMode ? '论文协作' : `🛡️ ${activeTheme.venueBadge}规范`}
             </span>
           </div>
 
@@ -401,7 +414,7 @@ export const RightAgentPanel: React.FC = () => {
             <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
           </div>
 
-          <button
+          {!paperMode && activeAgentId !== 'pi' && <button
             onClick={() => setAutoLayoutRepairEnabled(!autoLayoutRepairEnabled)}
             className={`px-2 py-1 rounded-md text-[10px] font-medium border flex items-center gap-1 shrink-0 transition-colors cursor-pointer ${
               autoLayoutRepairEnabled
@@ -412,7 +425,7 @@ export const RightAgentPanel: React.FC = () => {
           >
             <Cpu className="w-3 h-3" />
             <span>{autoLayoutRepairEnabled ? '自愈 ON' : '自愈 OFF'}</span>
-          </button>
+          </button>}
 
           <button
             onClick={() => setShowAgentConfig(!showAgentConfig)}
@@ -426,17 +439,20 @@ export const RightAgentPanel: React.FC = () => {
         <button
           type="button"
           onClick={() => openSettings('agent')}
-          title={settings.agentFullAccess
+          title={activeAgentId === 'pi' ? '内置 Pi 仅使用 AgenTikZ 项目工具；点击配置模型与密钥。' : settings.agentFullAccess
             ? `工作目录：${settings.agentWorkingDirectory.trim() || projectDir || '应用工作目录'}`
             : '打开设置可开启跨文件夹访问和命令执行'}
           className={`text-[10.5px] cursor-pointer ${settings.agentFullAccess ? 'text-amber-700' : 'text-slate-500'}`}
         >
-          {settings.agentFullAccess ? '完整本机访问已开启' : '受限模式 · 配置本机访问'}
+          {activeAgentId === 'pi' ? 'Pi · 长驻会话 · 仅项目工具 · 配置模型' : settings.agentFullAccess ? '完整本机访问已开启' : '受限模式 · 配置本机访问'}
         </button>
         <button type="button" onClick={() => openSettings('mcp')}
           className="inline-flex items-center gap-1 text-[10.5px] text-blue-600 hover:text-blue-700 cursor-pointer">
           <Plug className="h-3 w-3" />MCP 服务
         </button>
+        {activeAgentId === 'pi' && runtimeStatus && (
+          <p className="text-[10px] text-slate-500 break-words" role="status">{runtimeStatus}</p>
+        )}
 
         {/* Collapsible ACP Command Inspector (Agentero style BYOA transparency) */}
         {showAgentConfig && (
@@ -462,7 +478,7 @@ export const RightAgentPanel: React.FC = () => {
               </div>
             )}
             <p className="text-[10px] text-slate-500 leading-snug">
-              {activeProvider.detected
+              {activeAgentId === 'pi' ? (activeProvider.detected ? 'Pi SDK 已就绪；模型密钥与实际请求需单独验证。' : '请在设置中检测 Pi 运行时并配置模型。') : activeProvider.detected
                 ? `已就绪${activeProvider.version ? ` (${activeProvider.version})` : ''} — 发送时建立 ACP 会话`
                 : '未检测到本地 Agent CLI 或 ACP 适配器，请先安装并登录对应 CLI'}
             </p>
@@ -515,11 +531,16 @@ export const RightAgentPanel: React.FC = () => {
               {/* Context Pills attached to user message */}
               {msg.role === 'user' &&
                 ((msg.contextSelectionIds && msg.contextSelectionIds.length > 0) ||
-                  msg.includeFullCanvas) && (
+                  msg.includeFullCanvas || msg.contextPaperPath) && (
                   <div className="flex flex-wrap gap-1 mb-1 justify-end">
                     {msg.includeFullCanvas && (
                       <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-mono">
                         @canvas
+                      </span>
+                    )}
+                    {msg.contextPaperPath && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 break-all">
+                        @论文({msg.contextPaperPath})
                       </span>
                     )}
                     {msg.contextSelectionIds?.map((id) => (
@@ -591,6 +612,7 @@ export const RightAgentPanel: React.FC = () => {
 
                 {/* Message Text */}
                 <div className="whitespace-pre-wrap">{msg.content}</div>
+                {msg.projectPatchProposal && <ProjectPatchCard messageId={msg.id} proposal={msg.projectPatchProposal} />}
 
                 {/* TikZ Code Patch Proposal Card with Diff & Semantic Change Preview */}
                 {patch && (
@@ -861,7 +883,7 @@ export const RightAgentPanel: React.FC = () => {
         {isStreaming && (
           <div className="flex items-center gap-2 text-xs text-slate-500 bg-white/80 border border-slate-200/70 rounded-2xl px-3 py-2 w-fit animate-shimmer">
             <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse-dot" />
-            <span>{activeProvider.name} 正在通过 ACP 生成结构化 TikZ...</span>
+            <span>{activeProvider.name} 正在处理项目任务…</span>
           </div>
         )}
 
@@ -871,7 +893,24 @@ export const RightAgentPanel: React.FC = () => {
       {/* 3. Progressive-Disclosure Workflow Bar + Context & Chat Input Area */}
       <div className="border-t border-slate-200/80 bg-white/75 p-2.5 space-y-2 relative">
         {/* Single Compact Workflow & Skill Row + Popover */}
-        <div className="flex items-center justify-between gap-1.5">
+        {paperMode && (
+          <div className="space-y-1.5">
+            <div className="flex flex-wrap gap-1">
+              {[
+                ['润色当前章节', '请先读取当前论文章节，在保留科学含义、数值和引用的前提下润色，生成待审核的论文修改集。'],
+                ['同步图注与正文', '请读取当前项目的配图和相关论文章节，检查图注、label 与正文引用是否一致，将有依据的修正合并为一个待审核修改集。不要编造结论。'],
+                ['分析编译诊断', '请读取最近的论文编译诊断，先确认是否过期，再定位相关源码；如需修改，请生成待审核修改集，不要声称已修复或已编译。'],
+              ].map(([label, prompt]) => (
+                <button type="button" key={label} disabled={isStreaming} onClick={() => setInputText(prompt)}
+                  className="text-[10.5px] px-2 py-1 rounded-full border border-indigo-200 text-indigo-700 bg-indigo-50 disabled:opacity-40">
+                  {label}
+                </button>
+              ))}
+            </div>
+            {buildMessage && <p className="text-[10px] text-slate-600" role="status">{buildMessage}</p>}
+          </div>
+        )}
+        {!paperMode && <div className="flex items-center justify-between gap-1.5">
           <div className="flex items-center gap-1 overflow-x-auto no-scrollbar">
             <button
               type="button"
@@ -918,10 +957,10 @@ export const RightAgentPanel: React.FC = () => {
             <span>更多技能</span>
             <ChevronDown className="w-3 h-3" />
           </button>
-        </div>
+        </div>}
 
         {/* Popover Menu for Full Skills, Publication Templates & Quick Prompts */}
-        {showWorkflowMenu && (
+        {!paperMode && showWorkflowMenu && (
           <div
             ref={workflowMenuRef}
             className="absolute bottom-full left-2 right-2 mb-1.5 bg-white rounded-xl border border-slate-200 shadow-xl p-2.5 z-30 space-y-2.5 max-h-72 overflow-y-auto"
@@ -1020,7 +1059,11 @@ export const RightAgentPanel: React.FC = () => {
 
         {/* Compact Context Pills Row (@canvas & @selection & active theme & optional reference template) */}
         <div className="flex items-center justify-between gap-1.5 flex-wrap">
-          <div className="flex items-center gap-1 flex-wrap">
+          {paperMode ? (
+            <span className="text-[10px] text-indigo-700 break-all" title="自动附加当前论文上下文，工具读取包含未保存内容">
+              @论文({activePaperFilePath || '未打开'}){paperDirtyFiles[activePaperFilePath] ? ' · 含未保存编辑' : ''} · @项目
+            </span>
+          ) : <div className="flex items-center gap-1 flex-wrap">
             <button
               onClick={() => setAttachCanvasContext(!attachCanvasContext)}
               className={`px-1.5 py-0.5 rounded text-[10px] font-mono border flex items-center gap-1 cursor-pointer ${
@@ -1054,7 +1097,7 @@ export const RightAgentPanel: React.FC = () => {
             >
               @{activeThemeId}
             </span>
-          </div>
+          </div>}
 
 
         </div>
@@ -1071,12 +1114,12 @@ export const RightAgentPanel: React.FC = () => {
                 handleSend();
               }
             }}
-            placeholder="描述架构或局部修改需求（如：把注意力模块改为橙色、拉开垂直间距、添加残差跳线）..."
+            placeholder={paperMode ? '描述论文任务：润色章节、同步图注与引用、分析编译错误…' : '描述架构或局部修改需求（如：调整配色、间距或残差跳线）…'}
             className="w-full px-3 pt-2 pb-7 text-xs text-slate-800 bg-transparent resize-none focus:outline-none"
           />
           <div className="absolute bottom-1.5 left-2.5 right-2 flex items-center justify-between">
             <span className="text-[10px] text-slate-400">
-              增量 Diff · 契约自愈 · 透明插图联动
+              {paperMode ? '项目上下文 · 多文件 Diff · 审阅后应用' : '增量 Diff · 契约自愈 · 透明插图联动'}
             </span>
             <button
               onClick={isStreaming ? () => void cancelPrompt() : handleSend}

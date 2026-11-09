@@ -85,4 +85,8 @@ jobs:
           npm run test:mcp
 
       - name: Run Tauri Rust backend unit tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        # Tauri embeds the staged runtime as an application resource.
+        run: |
+          npm run pi:stage
+          npm run test:pi
+          cargo test --manifest-path src-tauri/Cargo.toml

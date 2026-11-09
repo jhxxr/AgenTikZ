@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { useProjectStore, type PaperFileItem } from '../../store/useProjectStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
+import { usePaperBuildStore } from '../../store/usePaperBuildStore';
 import { syncTexBackward, syncTexForward, type PdfPoint, type SourceLocation } from '../../core/paper/synctex';
 import type { PaperPdfPreviewHandle } from './PaperPdfPreview';
 import './PaperWorkspaceView.css';
@@ -106,12 +107,10 @@ export const PaperWorkspaceView: React.FC = () => {
   })));
   const editorRef = useRef<EditorView | null>(null);
   const splitRef = useRef<HTMLDivElement | null>(null);
-  const compilationId = useRef(0);
   const navigationId = useRef(0);
   const pdfRef = useRef<PaperPdfPreviewHandle | null>(null);
   const editorPath = useRef('');
   const [pdfReady, setPdfReady] = useState(false);
-  const [compiledRevision, setCompiledRevision] = useState(-1);
   const [syncBusy, setSyncBusy] = useState(false);
   const [syncNotice, setSyncNotice] = useState<{ error: boolean; message: string } | null>(null);
   const [sourceTarget, setSourceTarget] = useState<SourceLocation | null>(null);
@@ -124,14 +123,33 @@ export const PaperWorkspaceView: React.FC = () => {
   const [newFilePath, setNewFilePath] = useState('');
   const [showNewFile, setShowNewFile] = useState(false);
   const [fileError, setFileError] = useState('');
-  const [isCompiling, setIsCompiling] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
   const [cursor, setCursor] = useState({ line: 1, column: 1 });
-  const [compileResult, setCompileResult] = useState<{
-    ok: boolean; pdfPath?: string; buildId?: number; message: string; logExcerpt?: string;
-  } | null>(null);
+  const { compileResult, compiledRevision, isCompiling, runBuild } = usePaperBuildStore(useShallow((s) => ({
+    compileResult: s.projectId === projectDir ? s.result : null,
+    compiledRevision: s.projectId === projectDir ? s.compiledRevision : -1,
+    isCompiling: s.projectId === projectDir && s.status === 'running',
+    runBuild: s.run,
+  })));
 
   const source = paperFileContents[activePaperFilePath] ?? '';
+  const insertion = useProjectStore((s) => s.paperInsertionLocation);
+  useEffect(() => {
+    if (!insertion || insertion.projectId !== projectDir) return;
+    if (insertion.path !== activePaperFilePath) {
+      useProjectStore.getState().clearPaperInsertionLocation();
+      return;
+    }
+    const frame = requestAnimationFrame(() => {
+      const view = editorRef.current;
+      if (!view || editorPath.current !== insertion.path || view.state.doc.toString() !== source) return;
+      const offset = Math.min(insertion.offset, view.state.doc.length);
+      view.dispatch({ selection: { anchor: offset }, effects: EditorView.scrollIntoView(offset, { y: 'center' }) });
+      view.focus();
+      useProjectStore.getState().clearPaperInsertionLocation();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [insertion, projectDir, activePaperFilePath, source]);
   const files = useMemo(() => paperFiles.filter((file) =>
     !file.relativePath.startsWith('agentikzfile/') && /\.(tex|bib|sty|cls|tikz)$/i.test(file.relativePath)
   ), [paperFiles]);
@@ -142,17 +160,20 @@ export const PaperWorkspaceView: React.FC = () => {
   const dirty = Object.values(paperDirtyFiles).some(Boolean);
 
   useEffect(() => {
-    compilationId.current += 1;
-    setCompileResult(null);
-    setIsCompiling(false);
     setShowLogs(false);
     setOpenTabs([]);
     setFileError('');
     setShowNewFile(false);
     setPdfReady(false); setSyncNotice(null); setSourceTarget(null);
     navigationId.current += 1; setSyncBusy(false);
-    return () => { compilationId.current += 1; navigationId.current += 1; };
+    return () => { navigationId.current += 1; };
   }, [projectDir]);
+
+  useEffect(() => {
+    setPdfReady(false);
+    setShowLogs(Boolean(compileResult && !compileResult.ok));
+    navigationId.current += 1; setSyncBusy(false); setSyncNotice(null);
+  }, [compileResult]);
 
   useEffect(() => {
     setOpenTabs((paths) => paths.includes(activePaperFilePath) ? paths : [...paths, activePaperFilePath]);
@@ -272,39 +293,9 @@ export const PaperWorkspaceView: React.FC = () => {
 
   const compilePaper = async () => {
     if (isCompiling) return;
-    const request = ++compilationId.current;
     navigationId.current += 1; setSyncBusy(false); setSyncNotice(null);
-    setIsCompiling(true);
     if (viewMode === 'source') setViewMode('both');
-    try {
-      // A paper build must not compile or reopen the drawing canvas.
-      if (!await useProjectStore.getState().saveAllDirtyPaperFiles()) throw new Error('文件保存失败，已停止编译');
-      if (request !== compilationId.current) return;
-      if (!projectDir || !('__TAURI_INTERNALS__' in window)) {
-        setCompileResult({ ok: false, message: '当前为浏览器预览，未执行 TeX 编译。请在桌面端打开此项目并配置 TeX Live。' });
-        return;
-      }
-      const mainTexFile = files.find((file) => file.relativePath === 'main.tex')?.relativePath
-        || files.find((file) => file.category === 'main')?.relativePath
-        || (activePaperFilePath.endsWith('.tex') ? activePaperFilePath : files.find((file) => file.relativePath.endsWith('.tex'))?.relativePath);
-      if (!mainTexFile) throw new Error('未找到可编译的 .tex 主文件');
-      const revision = useProjectStore.getState().paperEditRevision;
-      const { invoke } = await import('@tauri-apps/api/core');
-      const result = await invoke<{ ok: boolean; pdfPath?: string; message: string; logExcerpt?: string }>('tex_compile_paper', {
-        projectDir, mainTexFile, texEngine, texLiveBinDir: texLiveBinDir || undefined,
-      });
-      if (request !== compilationId.current) return;
-      setPdfReady(false);
-      setCompiledRevision(revision);
-      setCompileResult({ ...result, buildId: request });
-      setShowLogs(!result.ok);
-    } catch (error) {
-      if (request !== compilationId.current) return;
-      setCompileResult({ ok: false, message: String(error) });
-      setShowLogs(true);
-    } finally {
-      if (request === compilationId.current) setIsCompiling(false);
-    }
+    await runBuild();
   };
 
   return (

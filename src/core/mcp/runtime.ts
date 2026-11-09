@@ -10,6 +10,7 @@ import { getMcpRequest, sameCanvas, sourceHash } from './context';
 import type { McpToolRequest } from '../../types/mcp';
 import type { JournalThemeId } from '../../types/theme';
 import type { TikzPatchProposal } from '../../types/acp';
+import { executeProjectTool, isProjectTool } from './project-tools';
 
 class ToolError extends Error {
   constructor(public code: string, message: string) { super(message); }
@@ -53,6 +54,7 @@ export async function executeMcpTool(event: McpToolRequest): Promise<unknown> {
         context.target.projectId !== event.target.projectId || context.target.canvasId !== event.target.canvasId) {
       fail('target_mismatch', '工具请求与原始画布不一致。');
     }
+    if (isProjectTool(event.toolName)) return executeProjectTool(event, context);
     validateArguments(event.toolName, event.arguments);
     const args = event.arguments;
     const independent = event.toolName === 'get_component_library' || (event.toolName === 'get_theme_palette' && args.themeId);
@@ -145,7 +147,11 @@ export function ensureMcpRuntime(): Promise<void> {
     const { invoke } = await import('@tauri-apps/api/core');
     await listen<McpToolRequest>('mcp:call', async ({ payload: event }) => {
       const context = getMcpRequest(event.requestId);
-      if (!context) return;
+      if (!context) {
+        await invoke('mcp_tool_result', { requestId: event.requestId, toolRequestId: event.toolRequestId,
+          result: { error: { code: 'request_ended', message: '项目请求已结束，请重新发起任务。' } } }).catch(() => {});
+        return;
+      }
       const started = performance.now();
       const update = (status: 'running' | 'completed' | 'failed') => {
         if (!context.messageId) return;
@@ -153,7 +159,7 @@ export function ensureMcpRuntime(): Promise<void> {
           ? { ...s, messages: s.messages.map((message) => message.id === context.messageId ? {
               ...message, mcpToolCalls: [
                 ...(message.mcpToolCalls || []).filter((call) => call.callId !== event.toolRequestId),
-                { callId: event.toolRequestId, toolName: `mcp__agentikz__${event.toolName}`, argsSummary: '内置画布工具',
+                { callId: event.toolRequestId, toolName: `mcp__agentikz__${event.toolName}`, argsSummary: isProjectTool(event.toolName) ? '内置论文工具' : '内置画布工具',
                   status, source: 'mcp' as const, durationMs: status === 'running' ? undefined : Math.round(performance.now() - started) },
               ],
             } : message) } : s) }));

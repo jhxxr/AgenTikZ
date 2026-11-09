@@ -6,7 +6,9 @@ import {
   useProjectStore,
   AGENTIKZ_FOLDER_NAME,
   ProjectAssetItem,
+  getPaperWorkspaceVersion,
 } from '../../store/useProjectStore';
+import { canInsertGraphic } from '../../core/paper/figure-insertion';
 import { generateScientificIllustration } from '../../core/agent/illustration-prompt';
 import { PRIMITIVE_LIBRARY } from '../../core/tikz/primitives';
 import {
@@ -14,7 +16,7 @@ import {
   TikzCodePanel,
 } from '../editor/TikzCodePanel';
 import {
-  Blocks, Code2, Layers, BarChart3, Plus, Sparkles, FileCode2, FolderKanban, FolderOpen, FileText, Images, RefreshCw, Upload, Search, ExternalLink, Copy, Trash2, Wand2, PanelLeftClose, PanelLeftOpen,
+  Blocks, BookOpenText, Code2, Layers, BarChart3, Plus, Sparkles, FileCode2, FolderKanban, FolderOpen, FileText, Images, RefreshCw, Upload, Search, ExternalLink, Copy, Trash2, Wand2, PanelLeftClose, PanelLeftOpen,
 } from 'lucide-react';
 
 const MAX_AUTO_THUMBNAIL_BYTES = 8 * 1024 * 1024; // 8 MB
@@ -23,7 +25,9 @@ const AssetThumbnailCard: React.FC<{
   asset: ProjectAssetItem;
   dataUrl?: string;
   onInsert: (relPath: string) => void;
-}> = React.memo(({ asset, dataUrl, onInsert }) => {
+  onInsertPaper: (relPath: string) => void;
+  paperEnabled: boolean;
+}> = React.memo(({ asset, dataUrl, onInsert, onInsertPaper, paperEnabled }) => {
   const cardRef = useRef<HTMLDivElement | null>(null);
   const hasDataUrl = Boolean(dataUrl);
 
@@ -64,19 +68,22 @@ const AssetThumbnailCard: React.FC<{
   return (
     <div
       ref={cardRef}
-      draggable
+      draggable={asset.ext !== 'pdf'}
       onDragStart={(e) => {
+        if (asset.ext === 'pdf') { e.preventDefault(); return; }
         e.dataTransfer.setData(
           'application/x-agentikz-asset',
           asset.relativePath
         );
         e.dataTransfer.effectAllowed = 'copy';
       }}
-      onClick={() => onInsert(asset.relativePath)}
-      title={`点击或拖拽至画布: ${asset.relativePath}`}
-      className="group rounded-xl border border-slate-200/90 bg-white hover:border-indigo-400 hover:shadow-xs overflow-hidden flex flex-col transition-all cursor-pointer"
+      className="group rounded-xl border border-slate-200/90 bg-white hover:border-indigo-400 hover:shadow-xs overflow-hidden flex flex-col transition-all"
     >
-      <div className="h-20 bg-slate-50 border-b border-slate-100 flex items-center justify-center p-1.5 relative overflow-hidden">
+      <button type="button" aria-label={`${asset.ext === 'pdf' ? '将 PDF 插入论文' : '将图片加入画布'}：${asset.fileName}`}
+        onClick={() => asset.ext === 'pdf' ? onInsertPaper(asset.relativePath) : onInsert(asset.relativePath)}
+        disabled={asset.ext === 'pdf' && !paperEnabled}
+        title={asset.ext === 'pdf' ? 'PDF 使用论文插图，不创建无法预览的画布占位图' : `点击或拖拽加入画布：${asset.relativePath}`}
+        className="h-20 bg-slate-50 border-b border-slate-100 flex items-center justify-center p-1.5 relative overflow-hidden disabled:opacity-50">
         {dataUrl ? (
           <img
             src={dataUrl}
@@ -96,17 +103,29 @@ const AssetThumbnailCard: React.FC<{
         </span>
         <div className="absolute inset-0 bg-indigo-900/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
           <span className="px-2 py-1 rounded-md bg-white text-indigo-700 text-[10px] font-bold shadow-xs flex items-center gap-1">
-            <Plus className="w-3 h-3" />
-            加入画布
+            {asset.ext === 'pdf' ? <BookOpenText className="w-3 h-3" /> : <Plus className="w-3 h-3" />}
+            {asset.ext === 'pdf' ? '插入论文' : '加入画布'}
           </span>
         </div>
-      </div>
+      </button>
       <div className="p-2">
         <div className="text-[11px] font-semibold text-slate-800 truncate">
           {asset.fileName}
         </div>
         <div className="text-[9.5px] font-mono text-slate-400 truncate mt-0.5">
           {asset.relativePath}
+        </div>
+        <div className="mt-2 flex flex-wrap gap-1">
+          {asset.ext !== 'pdf' && <button type="button" onClick={() => onInsert(asset.relativePath)}
+            className="flex items-center gap-0.5 rounded bg-slate-100 px-1.5 py-1 text-[10px] text-slate-700 hover:bg-slate-200">
+            <Plus size={11} />画布
+          </button>}
+          <button type="button" disabled={!paperEnabled || !canInsertGraphic(asset.relativePath)}
+            title={!paperEnabled ? '请先新建或打开论文' : !canInsertGraphic(asset.relativePath) ? 'SVG/WebP 请先转换为 PDF、PNG 或 JPEG' : '选择目标章节，将这张图片插入论文'}
+            onClick={() => onInsertPaper(asset.relativePath)}
+            className="flex items-center gap-0.5 rounded bg-indigo-50 px-1.5 py-1 text-[10px] text-indigo-700 hover:bg-indigo-100 disabled:opacity-40">
+            <BookOpenText size={11} />插入论文…
+          </button>
         </div>
       </div>
     </div>
@@ -161,6 +180,7 @@ export const LeftTabbedSidebar: React.FC = () => {
     registerLocalBrowserAssetFiles,
     registerGeneratedAsset,
     revealInFileManager,
+    setInsertFigureModalOpen,
   } = useProjectStore(useShallow((s) => ({
     projectDir: s.projectDir,
     projectName: s.projectName,
@@ -185,6 +205,7 @@ export const LeftTabbedSidebar: React.FC = () => {
     registerLocalBrowserAssetFiles: s.registerLocalBrowserAssetFiles,
     registerGeneratedAsset: s.registerGeneratedAsset,
     revealInFileManager: s.revealInFileManager,
+    setInsertFigureModalOpen: s.setInsertFigureModalOpen,
   })));
 
   const [assetFolderFilter, setAssetFolderFilter] = useState<string>('all');
@@ -195,6 +216,10 @@ export const LeftTabbedSidebar: React.FC = () => {
   const [aiAspect, setAiAspect] = useState<'1:1' | '4:3' | '16:9'>('1:1');
   const [isGeneratingAi, setIsGeneratingAi] = useState<boolean>(false);
   const [aiMessage, setAiMessage] = useState<string | null>(null);
+  const [assetMessage, setAssetMessage] = useState<string | null>(null);
+  const paperEnabled = Boolean(projectDir && paperFiles.some((file) => /\.tex$/i.test(file.relativePath)));
+  const handleInsertPaper = useCallback((relativePath: string) =>
+    setInsertFigureModalOpen(true, { mode: 'external_graphic', relativePath }), [setInsertFigureModalOpen]);
 
   const handleInsertAsset = useCallback(
     (relPath: string) => {
@@ -609,14 +634,16 @@ export const LeftTabbedSidebar: React.FC = () => {
                     accept="image/png,image/jpeg,image/svg+xml,image/webp"
                     multiple
                     className="hidden"
-                    onChange={(e) => {
-                      if (e.target.files) {
-                        void registerLocalBrowserAssetFiles(
-                          e.target.files,
-                          'figures/assets'
-                        );
-                        e.target.value = '';
-                      }
+                    onChange={async (e) => {
+                      const files = Array.from(e.target.files || []); e.target.value = '';
+                      if (!files.length) return;
+                      const version = getPaperWorkspaceVersion();
+                      try {
+                        const imported = await registerLocalBrowserAssetFiles(files, 'figures/assets');
+                        if (version === getPaperWorkspaceVersion()) setAssetMessage(imported.length
+                          ? `已导入 ${imported.length} 张素材，请选择加入画布或插入论文。`
+                          : useProjectStore.getState().errorMessage || '没有导入可用图片。');
+                      } catch (error) { if (version === getPaperWorkspaceVersion()) setAssetMessage(String(error)); }
                     }}
                   />
                   <input
@@ -626,16 +653,15 @@ export const LeftTabbedSidebar: React.FC = () => {
                     multiple
                     className="hidden"
                     onChange={async (e) => {
-                      if (e.target.files) {
-                        const imported = await registerLocalBrowserAssetFiles(
-                          e.target.files,
-                          'figures/external'
-                        );
-                        e.target.value = '';
-                        if (imported.length > 0 && imported[0].ext !== 'pdf') {
-                          addImageAssetToCanvas(imported[0].relativePath);
-                        }
-                      }
+                      const files = Array.from(e.target.files || []); e.target.value = '';
+                      if (!files.length) return;
+                      const version = getPaperWorkspaceVersion();
+                      try {
+                        const imported = await registerLocalBrowserAssetFiles(files, 'figures/external');
+                        if (version === getPaperWorkspaceVersion()) setAssetMessage(imported.length
+                          ? `已导入 ${imported.length} 张外部图，未自动修改画布。可点击“插入论文”。`
+                          : useProjectStore.getState().errorMessage || '没有导入可用图片。');
+                      } catch (error) { if (version === getPaperWorkspaceVersion()) setAssetMessage(String(error)); }
                     }}
                   />
                   <button
@@ -674,6 +700,7 @@ export const LeftTabbedSidebar: React.FC = () => {
                   </button>
                 </div>
               </div>
+              {assetMessage && <p className="mb-2 text-[10px] text-slate-600" role="status">{assetMessage}</p>}
 
               {/* Collapsible AI Cutout Illustration Generator */}
               {showAiGenerator && (
@@ -717,6 +744,8 @@ export const LeftTabbedSidebar: React.FC = () => {
                         if (!aiPrompt.trim() || isGeneratingAi) return;
                         setIsGeneratingAi(true);
                         setAiMessage('正在生成并执行边缘泛洪去背 + Alpha 紧致裁切...');
+                        const version = getPaperWorkspaceVersion();
+                        const canvasFile = useProjectStore.getState().activeCanvasFileName;
                         try {
                           const slug = aiPrompt
                             .trim()
@@ -724,7 +753,7 @@ export const LeftTabbedSidebar: React.FC = () => {
                             .replace(/[^a-z0-9]+/g, '_')
                             .replace(/^_|_$/g, '')
                             .slice(0, 24) || 'cutout';
-                          const targetRel = `figures/assets/ai/${slug}_${Date.now().toString().slice(-4)}.png`;
+                          const targetRel = `figures/assets/ai/${slug}_${crypto.randomUUID().slice(0, 8)}.png`;
                           const res = await generateScientificIllustration({
                             provider: settings.imageGenProvider,
                             apiKey: settings.imageGenApiKey,
@@ -741,18 +770,23 @@ export const LeftTabbedSidebar: React.FC = () => {
                               ? settings.proxyUrl
                               : undefined,
                           });
+                          if (getPaperWorkspaceVersion() !== version) return;
                           if (!res.ok || !res.dataUrl) {
                             setAiMessage(`❌ 失败: ${res.error || '未知错误'}`);
                           } else {
                             const savedRel = await registerGeneratedAsset(
                               res.savedRelativePath || targetRel,
-                              res.dataUrl
+                              res.dataUrl,
+                              projectDir,
                             );
-                            addImageAssetToCanvas(savedRel);
-                            setAiMessage(`✅ 已生成并插入画布: ${savedRel}`);
+                            if (getPaperWorkspaceVersion() !== version) return;
+                            if (useProjectStore.getState().activeCanvasFileName === canvasFile) {
+                              addImageAssetToCanvas(savedRel);
+                              setAiMessage(`✅ 已生成并加入画布${projectDir ? '' : '（临时未保存）'}: ${savedRel}`);
+                            } else setAiMessage(`✅ 已保存到素材库；画布已切换，未自动插入: ${savedRel}`);
                           }
                         } catch (err) {
-                          setAiMessage(`❌ 错误: ${String(err)}`);
+                          if (getPaperWorkspaceVersion() === version) setAiMessage(`❌ 错误: ${String(err)}`);
                         } finally {
                           setIsGeneratingAi(false);
                         }
@@ -838,6 +872,8 @@ export const LeftTabbedSidebar: React.FC = () => {
                         asset={asset}
                         dataUrl={assetDataUrls[asset.relativePath]}
                         onInsert={handleInsertAsset}
+                        onInsertPaper={handleInsertPaper}
+                        paperEnabled={paperEnabled}
                       />
                     ))}
                   </div>

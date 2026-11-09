@@ -23,7 +23,11 @@ async function fixture(t) {
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify(call.toolName === 'get_canvas_source'
       ? { source: '\\begin{tikzpicture}\\end{tikzpicture}', revision: 7, sourceHash: 'fixture' }
-      : { error: { code: 'source_changed', message: 'Canvas changed' } }));
+      : call.toolName === 'get_project_context'
+      ? { projectId: 'fixture-project', workbenchMode: 'paper', paperRevision: 9 }
+      : call.toolName === 'read_project_file'
+      ? { relativePath: call.arguments.relativePath, source: 'Unsaved manuscript', sourceHash: 'paper-fixture', paperRevision: 9 }
+      : { error: { code: 'source_changed', message: 'Source changed' } }));
   });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
@@ -79,12 +83,20 @@ for (const version of ['2024-11-05', '2025-11-25']) {
     assert.equal(initialized.result.protocolVersion, version);
     client.notify('notifications/initialized');
     const listed = await client.request('tools/list');
-    assert.equal(listed.result.tools.length, 9);
+    assert.equal(listed.result.tools.length, 13);
     assert.ok(listed.result.tools.some((tool) => tool.name === 'propose_tikz_patch'));
+    for (const name of ['get_project_context', 'read_project_file', 'propose_project_patch', 'get_paper_diagnostics']) {
+      assert.ok(listed.result.tools.some((tool) => tool.name === name));
+    }
     const source = await client.request('tools/call', { name: 'get_canvas_source', arguments: {} });
     assert.equal(source.result.isError, false);
     assert.equal(JSON.parse(source.result.content[0].text).revision, 7);
     assert.equal(client.calls[0].toolName, 'get_canvas_source');
+    const project = await client.request('tools/call', { name: 'get_project_context', arguments: {} });
+    assert.equal(JSON.parse(project.result.content[0].text).workbenchMode, 'paper');
+    const paper = await client.request('tools/call', { name: 'read_project_file', arguments: { relativePath: 'sections/results.tex' } });
+    assert.equal(JSON.parse(paper.result.content[0].text).source, 'Unsaved manuscript');
+    assert.equal(client.calls.at(-1).arguments.relativePath, 'sections/results.tex');
     const proposal = await client.request('tools/call', { name: 'propose_tikz_patch', arguments: { baseRevision: 1 } });
     assert.equal(proposal.result.isError, true);
     assert.equal(JSON.parse(proposal.result.content[0].text).error.code, 'source_changed');

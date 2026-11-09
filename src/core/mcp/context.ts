@@ -7,6 +7,7 @@ export interface McpRequestContext {
   target: CanvasTarget;
   agentId?: AcpAgentId;
   messageId?: string;
+  paperReads?: Map<string, { revision: number; sourceHash: string; source: string }>;
 }
 
 const requests = new Map<string, McpRequestContext>();
@@ -28,7 +29,10 @@ export function sameCanvas(target: Pick<CanvasTarget, 'projectId' | 'canvasId'>)
 export function registerMcpRequest(requestId: string, context: McpRequestContext): () => void {
   if (requests.has(requestId)) throw new Error('Duplicate MCP request');
   requests.set(requestId, context);
-  return () => requests.delete(requestId);
+  const unsubscribe = useProjectStore.subscribe((state, previous) => {
+    if (state.projectDir !== previous.projectDir) requests.delete(requestId);
+  });
+  return () => { unsubscribe(); requests.delete(requestId); };
 }
 
 export function getMcpRequest(requestId: string): McpRequestContext | undefined {

@@ -294,6 +294,10 @@ pub fn sidecar_path(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 impl BridgeLease {
+    pub(crate) fn runtime_connection(&self) -> Value {
+        json!({ "endpoint": self.endpoint, "token": self.context.token })
+    }
+
     pub fn has_proposal(&self) -> bool {
         self.context.proposal_created.load(Ordering::SeqCst)
     }
@@ -458,7 +462,8 @@ mod tests {
         let tools = agentikz_mcp::probe_builtin(&executable, &env)
             .await
             .unwrap();
-        assert_eq!(tools.len(), 9);
+        assert_eq!(tools.len(), 13);
+        assert!(tools.iter().any(|tool| tool.name == "propose_project_patch"));
         assert!(tools
             .iter()
             .any(|tool| tool.name == "propose_surgical_diff"));

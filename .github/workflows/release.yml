@@ -248,6 +248,12 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout release notes from the exact verified commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+          persist-credentials: false
+
       - name: Download all verified release artifacts
         uses: actions/download-artifact@v4
         with:
@@ -283,7 +289,26 @@ jobs:
               -f sha="${EXPECTED_COMMIT}"
           fi
 
-          flags=(--target "$EXPECTED_COMMIT" --generate-notes)
+          # Never attach binaries from a different commit to an existing tag.
+          tag_type="$(gh api "repos/${GH_REPO}/git/ref/tags/${RELEASE_TAG}" --jq '.object.type')"
+          tag_sha="$(gh api "repos/${GH_REPO}/git/ref/tags/${RELEASE_TAG}" --jq '.object.sha')"
+          while [ "$tag_type" = "tag" ]; do
+            tag_object="$(gh api "repos/${GH_REPO}/git/tags/${tag_sha}")"
+            tag_type="$(jq -r '.object.type' <<< "$tag_object")"
+            tag_sha="$(jq -r '.object.sha' <<< "$tag_object")"
+          done
+          if [ "$tag_type" != "commit" ] || [ "$tag_sha" != "$EXPECTED_COMMIT" ]; then
+            echo "::error::Release tag does not point to the verified build commit."
+            exit 1
+          fi
+
+          flags=(--target "$EXPECTED_COMMIT")
+          notes_file="../docs/releases/${RELEASE_TAG}.md"
+          if [ -f "$notes_file" ]; then
+            flags+=(--notes-file "$notes_file")
+          else
+            flags+=(--generate-notes)
+          fi
           if [ "$PRERELEASE" = "true" ]; then
             flags+=(--prerelease)
           fi
@@ -297,5 +322,8 @@ jobs:
             gh release create "$RELEASE_TAG" --draft --title "AgenTikZ ${RELEASE_TAG}" "${flags[@]}"
           fi
 
+          if [ -f "$notes_file" ]; then
+            gh release edit "$RELEASE_TAG" --notes-file "$notes_file"
+          fi
           gh release upload "$RELEASE_TAG" ./* --clobber
           gh release edit "$RELEASE_TAG" --draft=false --prerelease="$PRERELEASE"

@@ -1,6 +1,7 @@
 pub mod acp;
 pub mod image_gen;
 pub mod mcp;
+pub mod pi;
 pub mod project;
 pub mod tex {
     pub mod compiler;
@@ -20,6 +21,13 @@ pub fn run() {
             acp::acp_send_prompt,
             acp::acp_cancel_prompt,
             acp::sys_probe_environment,
+            pi::pi_probe,
+            pi::pi_send_prompt,
+            pi::pi_cancel_prompt,
+            pi::pi_reset_runtime,
+            pi::pi_save_api_key,
+            pi::pi_delete_api_key,
+            pi::pi_has_api_key,
             mcp::mcp_get_manifest,
             mcp::mcp_get_config,
             mcp::mcp_save_config,
@@ -41,6 +49,7 @@ pub fn run() {
             project::project_rename_canvas,
             project::project_delete_canvas,
             project::project_scan_assets,
+            project::project_check_figure_asset,
             project::project_read_asset_data_url,
             project::project_import_asset,
             project::project_export_file,
@@ -54,6 +63,7 @@ pub fn run() {
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 mcp::bridge::revoke_window(window.label());
                 acp::cancel_window(window.label());
+                pi::close_window(window.label());
             }
         })
         .run(tauri::generate_context!())

@@ -1,6 +1,8 @@
 import type { CanvasTarget } from './mcp';
+import type { ProjectPatchProposal } from './project-agent';
 
 export type AcpAgentId =
+  | 'pi'
   | 'claude-code'
   | 'codex-cli'
   | 'opencode'
@@ -16,7 +18,7 @@ export interface AcpAgentProvider {
   name: string;
   command: string;
   args: string[];
-  protocol: 'ACP (JSON-RPC 2.0 / stdio)';
+  protocol: 'ACP (JSON-RPC 2.0 / stdio)' | 'Pi SDK (AgenTikZ JSONL / stdio)';
   detected: boolean;
   version?: string;
   binaryAvailable?: boolean;
@@ -113,6 +115,8 @@ export interface AgentChatMessage {
   contextSelectionIds?: string[];
   includeFullCanvas?: boolean;
   patchProposal?: TikzPatchProposal;
+  projectPatchProposal?: ProjectPatchProposal;
+  contextPaperPath?: string;
   mcpToolCalls?: Array<{
     callId?: string;
     source?: 'mcp' | 'agent' | 'local';
@@ -129,4 +133,5 @@ export interface AgentSession {
   agentId: AcpAgentId;
   createdAt: string;
   messages: AgentChatMessage[];
+  projectId?: string;
 }

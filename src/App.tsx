@@ -81,7 +81,7 @@ export const App: React.FC = () => {
           )}
         </main>
 
-        {workbenchMode === 'figure' && <RightAgentPanel />}
+        <RightAgentPanel />
       </div>
 
       <SettingsModal />

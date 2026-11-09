@@ -1,5 +1,6 @@
 import { JournalThemeId } from '../../types/theme';
 import { JOURNAL_THEMES } from '../themes/journal-presets';
+import { normalizeFigurePath } from '../paper/figure-insertion';
 
 export type ImageGenProviderId = 'openai' | 'gemini' | 'openrouter';
 
@@ -352,34 +353,23 @@ export async function postProcessCutoutDataUrl(
   alphaTrimmed: boolean;
 }> {
   if (typeof document === 'undefined') {
-    return {
-      dataUrl: rawDataUrl,
-      widthPx: 512,
-      heightPx: 512,
-      whiteBgRemoved: false,
-      alphaTrimmed: false,
-    };
+    throw new Error('当前环境不能解码和处理图片，未生成假定尺寸的 PNG。');
   }
 
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.onload = () => {
-      const w = img.naturalWidth || img.width || 512;
-      const h = img.naturalHeight || img.height || 512;
+      try {
+      const w = img.naturalWidth || img.width;
+      const h = img.naturalHeight || img.height;
+      if (!w || !h) throw new Error('图片没有有效尺寸，无法保存。');
       const canvas = document.createElement('canvas');
       canvas.width = w;
       canvas.height = h;
       const ctx = canvas.getContext('2d');
       if (!ctx) {
-        resolve({
-          dataUrl: rawDataUrl,
-          widthPx: w,
-          heightPx: h,
-          whiteBgRemoved: false,
-          alphaTrimmed: false,
-        });
-        return;
+        throw new Error('图片处理画布不可用，未保存未处理图片。');
       }
 
       ctx.drawImage(img, 0, 0);
@@ -412,6 +402,7 @@ export async function postProcessCutoutDataUrl(
         outCanvas.width = finalW;
         outCanvas.height = finalH;
         const outCtx = outCanvas.getContext('2d');
+        if (!outCtx) throw new Error('图片裁切画布不可用，未保存不完整的处理结果。');
         if (outCtx) {
           outCtx.drawImage(
             canvas,
@@ -442,15 +433,10 @@ export async function postProcessCutoutDataUrl(
         whiteBgRemoved,
         alphaTrimmed,
       });
+      } catch (error) { reject(error); }
     };
     img.onerror = () => {
-      resolve({
-        dataUrl: rawDataUrl,
-        widthPx: 512,
-        heightPx: 512,
-        whiteBgRemoved: false,
-        alphaTrimmed: false,
-      });
+      reject(new Error('生成结果无法解码为图片，未保存或插入占位图。'));
     };
     img.src = rawDataUrl;
   });
@@ -480,7 +466,11 @@ export async function generateScientificIllustration(
   const activeThemeId: JournalThemeId =
     req.activeThemeId || req.themeId || 'neurips';
   const userPrompt = (req.userPrompt || req.subjectPrompt || '').trim();
-  const nodeId = req.nodeId || 'ai_cutout';
+  const requestedPath = req.targetRelativePath ? normalizeFigurePath(req.targetRelativePath) : undefined;
+  if (requestedPath && (!requestedPath.startsWith('figures/assets/ai/') || !/\.png$/i.test(requestedPath))) {
+    throw new Error('生成图片请保存在 figures/assets/ai/ 内，并使用 PNG 文件名。');
+  }
+  const nodeId = req.nodeId || requestedPath?.split('/').pop()!.replace(/\.png$/i, '') || `ai_cutout_${crypto.randomUUID().slice(0, 8)}`;
   const projectDir = req.projectDir || undefined;
   const normalizedAspect: '1:1' | '4:3' | '16:9' =
     req.aspectRatio === '16:9'
@@ -542,7 +532,7 @@ export async function generateScientificIllustration(
       .replace(/_+/g, '_')
       .replace(/^_|_$/g, '') || 'ai_cutout';
   let relativePath =
-    req.targetRelativePath ||
+    requestedPath ||
     `figures/assets/ai/${cleanSlug}_${Date.now().toString(36)}.png`;
 
   if (isTauri && projectDir) {
@@ -552,6 +542,7 @@ export async function generateScientificIllustration(
       {
         projectDir,
         nodeId: cleanSlug,
+        targetRelativePath: relativePath,
         dataUrl: processed.dataUrl,
         prompt: userPrompt,
         compiledPrompt,

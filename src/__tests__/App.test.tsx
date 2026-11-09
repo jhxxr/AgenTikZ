@@ -27,7 +27,7 @@ vi.mock('../components/inspector/PropertyPanel', () => ({
   FloatingSelectionBar: () => <div>drawing-selection</div>,
   PropertyPanel: () => <div>drawing-inspector</div>,
 }));
-vi.mock('../components/agent/RightAgentPanel', () => ({ RightAgentPanel: () => <aside>drawing-agent</aside> }));
+vi.mock('../components/agent/RightAgentPanel', () => ({ RightAgentPanel: () => <aside>project-agent</aside> }));
 vi.mock('../components/project/CanvasTabsBar', () => ({ CanvasTabsBar: () => <div>drawing-tabs</div> }));
 vi.mock('../components/paper/PaperWorkspaceView', () => ({ PaperWorkspaceView: () => <section>paper-editor-and-pdf</section> }));
 vi.mock('../components/settings/SettingsModal', () => ({ SettingsModal: () => null }));
@@ -37,11 +37,12 @@ vi.mock('../components/paper/InsertFigureModal', () => ({ InsertFigureModal: () 
 describe('exclusive workspaces', () => {
   beforeEach(() => useProjectStore.setState({ workbenchMode: 'figure' }));
 
-  it('unmounts every drawing surface and its assistant while writing a paper', () => {
+  it('unmounts drawing surfaces but preserves the shared project assistant while writing', () => {
     useProjectStore.setState({ workbenchMode: 'paper' });
     const html = renderToStaticMarkup(<App />);
     expect(html).toContain('paper-editor-and-pdf');
-    for (const feature of ['canvas', 'selection', 'inspector', 'library', 'agent', 'tabs']) {
+    expect(html).toContain('project-agent');
+    for (const feature of ['canvas', 'selection', 'inspector', 'library', 'tabs']) {
       expect(html).not.toContain(`drawing-${feature}`);
     }
   });
@@ -50,6 +51,7 @@ describe('exclusive workspaces', () => {
     const html = renderToStaticMarkup(<App />);
     expect(html).toContain('drawing-canvas');
     expect(html).toContain('drawing-inspector');
+    expect(html).toContain('project-agent');
     expect(html).not.toContain('paper-editor-and-pdf');
   });
 });

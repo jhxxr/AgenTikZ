@@ -7,6 +7,7 @@
 
 import { JournalThemeId } from '../../types/theme';
 import { JOURNAL_THEMES } from '../themes/journal-presets';
+import { figurePathArgument, validateFigureOptions } from './figure-insertion';
 
 export type PaperVenueTemplateId =
   | 'blank'
@@ -250,20 +251,18 @@ export interface InsertFigureSnippetOptions {
 export function buildFigureLaTeXSnippet(
   opts: InsertFigureSnippetOptions
 ): string {
+  validateFigureOptions(opts);
   const effectiveSpan = opts.span || opts.columnSpan || 'single_column';
   const env = effectiveSpan === 'double_column' ? 'figure*' : 'figure';
   const placement = opts.placement || 't';
   const baseWidthCmd =
     effectiveSpan === 'double_column' ? '\\textwidth' : '\\columnwidth';
   const ratioStr =
-    opts.widthRatio !== undefined ? String(opts.widthRatio) : '';
+    opts.widthRatio !== undefined ? String(Number(opts.widthRatio)) : '';
   const ratio =
     ratioStr && ratioStr !== '1' && ratioStr !== '1.0' ? ratioStr : '';
   const widthExpr = `${ratio}${baseWidthCmd}`;
-  const cleanRel = (opts.relativePath || opts.figureRelPath || 'figures/fig1.tikz').replace(
-    /\\/g,
-    '/'
-  );
+  const cleanRel = figurePathArgument(opts.relativePath || opts.figureRelPath || '');
 
   const bodyLine =
     opts.mode === 'tikz_package'
@@ -274,8 +273,8 @@ export function buildFigureLaTeXSnippet(
     `\\begin{${env}}[${placement}]`,
     '  \\centering',
     bodyLine,
-    `  \\caption{${opts.caption || 'Overview of the proposed method.'}}`,
-    `  \\label{${opts.label || 'fig:overview'}}`,
+    `  \\caption{${opts.caption}}`,
+    `  \\label{${opts.label || 'fig:figure'}}`,
     `\\end{${env}}`,
   ].join('\n');
 }

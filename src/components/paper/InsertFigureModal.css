@@ -18,6 +18,7 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  max-height: 94vh;
 }
 
 .ifm-header {
@@ -64,11 +65,14 @@
 }
 
 .ifm-body {
+  border: 0;
+  margin: 0;
+  min-width: 0;
   padding: 18px 20px;
   display: flex;
   flex-direction: column;
   gap: 14px;
-  max-height: 75vh;
+  min-height: 0;
   overflow-y: auto;
 }
 
@@ -82,7 +86,13 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-width: 0;
 }
+.ifm-source-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ifm-source-row > select { flex: 1; min-width: 0; }
+.ifm-source-row > button { flex-shrink: 0; }
+.ifm-modal button:disabled { opacity: .45; cursor: default; }
+.ifm-modal :focus-visible { outline: 2px solid #6366f1; outline-offset: 2px; }
 
 .ifm-label {
   font-size: 12px;
@@ -184,6 +194,8 @@
   font-size: 12px;
   font-weight: 600;
 }
+.ifm-status.is-error { color: #9a3412; background: #fff7ed; border-color: #fed7aa; }
+.ifm-create-paper { display: block; margin-top: 6px; text-decoration: underline; }
 
 .ifm-footer {
   display: flex;
@@ -221,4 +233,9 @@
 
 .ifm-btn.primary:hover {
   background: #4338ca;
+}
+@media (max-width: 640px) {
+  .ifm-grid { grid-template-columns: 1fr; }
+  .ifm-preview-header { flex-wrap: wrap; gap: 8px; }
+  .ifm-footer { flex-wrap: wrap; padding: 12px; }
 }
