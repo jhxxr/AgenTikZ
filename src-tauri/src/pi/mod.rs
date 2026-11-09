@@ -46,6 +46,10 @@ pub struct PiPrompt {
     prompt: String,
     #[serde(default)]
     history: Vec<crate::acp::ConversationMessage>,
+    #[serde(default)]
+    images: Vec<crate::agent_image::AgentImage>,
+    #[serde(default)]
+    reference_images: Vec<crate::agent_image::AgentImage>,
     target: crate::mcp::bridge::CanvasTarget,
 }
 
@@ -243,7 +247,7 @@ impl Worker {
 
     async fn write(&mut self, record: &Value) -> Result<(), String> {
         let mut bytes = serde_json::to_vec(record).map_err(|_| "Pi 请求编码失败。")?;
-        if bytes.len() > 4 * 1024 * 1024 {
+        if bytes.len() > 16 * 1024 * 1024 {
             return Err("Pi 请求过大，请新建会话或缩小上下文。".into());
         }
         bytes.push(b'\n');
@@ -358,6 +362,8 @@ pub async fn pi_send_prompt(
     request: PiPrompt,
 ) -> Result<PiResponse, String> {
     validate_provider(&request.provider)?;
+    crate::agent_image::validate_images(&request.images)?;
+    crate::agent_image::validate_images(&request.reference_images)?;
     if request.request_id.is_empty()
         || request.request_id.len() > 128
         || request.model.is_empty()
@@ -406,6 +412,8 @@ pub async fn pi_send_prompt(
         "type":"prompt", "requestId":request.request_id, "conversationId":request.conversation_id,
         "projectId":request.target.project_id, "provider":request.provider, "model":request.model,
         "apiKey":api_key, "prompt":request.prompt, "history":request.history, "thinkingLevel":request.thinking_level,
+        "images":request.images,
+        "referenceImages":request.reference_images,
         "tools":crate::mcp::builtin_tools(), "bridge":lease.runtime_connection()
     });
     let slot = {

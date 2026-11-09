@@ -14,6 +14,7 @@ import {
 } from '../parser/patcher';
 import { JOURNAL_THEMES } from '../themes/journal-presets';
 import { CANONICAL_ACADEMIC_TERMS } from './style-guides';
+import { readDiagramDesignIntent } from './diagram-design-policy';
 
 export interface LayoutIssue {
   id: string;
@@ -200,6 +201,7 @@ export function analyzeTikzLayout(
       ? parseTikzDocument(docOrSource, activeThemeId)
       : docOrSource;
   const issues: LayoutIssue[] = [];
+  const designIntent = readDiagramDesignIntent(doc.fullSource);
   let overlapCount = 0;
   let tightEdgeCount = 0;
   let containerIssueCount = 0;
@@ -330,7 +332,8 @@ export function analyzeTikzLayout(
   }
 
   // 5. Check unstyled / plain white functional blocks
-  const unstyled = regularNodes.filter(isPlainOrUncolored);
+  const unstyled = designIntent?.preserveColors || designIntent?.mode === 'reproduction'
+    ? [] : regularNodes.filter(isPlainOrUncolored);
   if (unstyled.length > 0) {
     unstyledNodeCount = unstyled.length;
     issues.push({
@@ -345,7 +348,7 @@ export function analyzeTikzLayout(
 
   // 6. Check Single-Meaning Dashed Rule (Nature Skills: dashed for containers OR edges, not both)
   const dashedEdges = doc.edges.filter((e) => e.dashed && !e.dotted);
-  if (containers.length > 0 && dashedEdges.length > 0) {
+  if (designIntent?.mode !== 'reproduction' && containers.length > 0 && dashedEdges.length > 0) {
     issues.push({
       id: 'dashed_conflict',
       severity: 'info',
@@ -497,10 +500,11 @@ export function autoRepairTikzLayout(
     upgradeComponents?: boolean;
   } = {}
 ): AutoRepairResult {
+  const intent = readDiagramDesignIntent(source);
   const {
     fixOverlaps = true,
     fixContainers = true,
-    applyThemeColors = true,
+    applyThemeColors = !(intent?.preserveColors || intent?.mode === 'reproduction'),
     upgradeComponents = true,
   } = options;
 
@@ -509,7 +513,8 @@ export function autoRepairTikzLayout(
   const docBefore = parseTikzDocument(currentSource, activeThemeId);
   const reportBefore = analyzeTikzLayout(docBefore, activeThemeId);
 
-  if (docBefore.nodes.length === 0 && docBefore.charts.length === 0) {
+  if (intent?.mode === 'reproduction' || intent?.preserveGeometry ||
+      (docBefore.nodes.length === 0 && docBefore.charts.length === 0)) {
     return {
       repairedCode: currentSource,
       repairedTikz: currentSource,

@@ -23,6 +23,14 @@ pub fn builtin_tools() -> Vec<ToolSpec> {
         });
     };
     add("get_canvas_source", "Read the target canvas source, identity, revision, sourceHash and active theme. Read this before proposing changes.", json!({}), vec![]);
+    add("get_diagram_design_skill", "Read the built-in user-provided tikz-diagram-reproduction skill. Choose design for composition/shape/color rules, reproduction for fidelity guidance, or swsa/gnn/mae/riemannian for paged original macro templates. Use macroIndex to jump to needed definitions. Learn visual patterns; do not copy unrelated architectures or full document preambles.", json!({
+        "topic": {"type": "string", "enum": ["design", "reproduction", "swsa", "gnn", "mae", "riemannian"]},
+        "startLine": {"type": "integer", "minimum": 1},
+        "lineCount": {"type": "integer", "minimum": 1, "maximum": 160}
+    }), vec![]);
+    add("render_canvas_preview", "Compile the current canvas or pending proposal with real TeX and return a PNG image plus layout diagnostics. Does not apply edits. Inspect the image before refining the pending proposal. At most 3 distinct renders per request; identical previews are cached. Compilation is not visual verification. Requires local TeX and a vision-capable model.", json!({
+        "proposalId": {"type": "string", "minLength": 1}
+    }), vec![]);
     add("get_canvas_ast", "Parse the target canvas and return nodes, edges, charts and source spans with revision and sourceHash.", json!({}), vec![]);
     add(
         "get_selected_elements",

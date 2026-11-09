@@ -170,6 +170,7 @@ async fn call(
         context: context.clone(),
         id: id.clone(),
     };
+    let response_timeout = if call.tool_name == "render_canvas_preview" { 145 } else { 25 };
     if (context.dispatch)(ToolRequest {
         request_id: context.request_id.clone(),
         tool_request_id: id,
@@ -181,7 +182,7 @@ async fn call(
     {
         return Err(StatusCode::SERVICE_UNAVAILABLE);
     }
-    match tokio::time::timeout(Duration::from_secs(25), receiver).await {
+    match tokio::time::timeout(Duration::from_secs(response_timeout), receiver).await {
         Ok(Ok(value)) if context.active.load(Ordering::SeqCst) => Ok(Json(value)),
         _ => Ok(Json(
             json!({"error":{"code":"frontend_unavailable","message":"画布请求已结束或响应超时。"}}),
@@ -462,7 +463,7 @@ mod tests {
         let tools = agentikz_mcp::probe_builtin(&executable, &env)
             .await
             .unwrap();
-        assert_eq!(tools.len(), 13);
+        assert_eq!(tools.len(), 15);
         assert!(tools.iter().any(|tool| tool.name == "propose_project_patch"));
         assert!(tools
             .iter()

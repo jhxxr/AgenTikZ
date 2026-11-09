@@ -503,7 +503,7 @@ export function generateAgentikzMacrosSty(
     '  uncertainty_note/.code={}',
     '}',
     '\\usepgfplotslibrary{statistics}',
-    '\\usetikzlibrary{arrows.meta,positioning,calc,fit,backgrounds,shapes.geometric}',
+    '\\usetikzlibrary{arrows.meta,positioning,calc,fit,backgrounds,shadings,shapes.geometric}',
     '',
     '% --- All Publication Theme Color Tokens ---',
     allThemeColors,

@@ -103,12 +103,22 @@ export interface TikzPatchProposal {
   baseRevision?: number;
   baseSourceHash?: string;
   baseTikzCode?: string;
+  renderPreview?: { dataUrl: string; sourceHash: string };
+}
+
+export interface AgentImageAttachment {
+  id: string;
+  name: string;
+  mimeType: 'image/png' | 'image/jpeg' | 'image/webp';
+  /** Raw base64, never a file path or a URL fetched by the model. */
+  data: string;
 }
 
 export interface AgentChatMessage {
   id: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
+  images?: AgentImageAttachment[];
   thoughtProcess?: string;
   timestamp: string;
   agentId: AcpAgentId;

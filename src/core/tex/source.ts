@@ -1,3 +1,5 @@
+import { readDiagramDesignIntent } from '../agent/diagram-design-policy';
+
 /** Mask TeX comments without changing offsets into the editable source. */
 export function maskLatexComments(source: string): string {
   return source.replace(/(\\(?:\\|%)|%[^\r\n]*)/g, (token) =>
@@ -49,6 +51,14 @@ export function normalizeLatexDocument(source: string): string {
 export function getExactPreviewReasons(source: string): string[] {
   const code = maskLatexComments(source);
   const reasons: string[] = [];
+  if (readDiagramDesignIntent(source)?.mode === 'reproduction') {
+    reasons.push('参考图保真预览');
+  }
+  // The editable canvas has canonical blocks/cuboids/operator circles, not arbitrary PGF shapes.
+  if (/(?:\[|[,{\s])(?:diamond|ellipse|trapezium|cylinder|regular polygon)\s*(?=[,}\]])/.test(code) ||
+      /(?:\[|[,{\s])shape\s*=/.test(code)) {
+    reasons.push('自定义节点形状');
+  }
   if (/\\(?:newcommand|renewcommand|providecommand|def|gdef|edef)\b/.test(code)) {
     reasons.push('自定义 TeX 宏');
   }
@@ -64,6 +74,9 @@ export function getExactPreviewReasons(source: string): string[] {
   }
   if (/\\node\s*\[[^\]]*\brotate\s*=/.test(code)) {
     reasons.push('文字旋转');
+  }
+  if (/\\node\s*\[[^\]]*\btext\s*=/.test(code)) {
+    reasons.push('自定义文字颜色');
   }
   if (/\bat\s*\(\s*\{/.test(code)) {
     reasons.push('坐标表达式');

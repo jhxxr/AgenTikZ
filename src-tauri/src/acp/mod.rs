@@ -5,7 +5,7 @@
 mod access;
 
 use agent_client_protocol::v1::schema::{
-    ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest, ReadTextFileRequest,
+    ContentBlock, ImageContent, InitializeRequest, NewSessionRequest, PromptRequest, ReadTextFileRequest,
     ReadTextFileResponse, RequestPermissionOutcome,
     RequestPermissionRequest, RequestPermissionResponse, SessionNotification, SessionUpdate,
     SetSessionModeRequest, StopReason, TextContent, ToolCallStatus, WriteTextFileRequest,
@@ -900,6 +900,7 @@ pub async fn acp_send_prompt(
     selected_ids: Vec<String>,
     custom_command: Option<String>,
     history: Option<Vec<ConversationMessage>>,
+    images: Option<Vec<crate::agent_image::AgentImage>>,
     proxy_url: Option<String>,
     user_agent: Option<String>,
     response_language: Option<String>,
@@ -911,6 +912,8 @@ pub async fn acp_send_prompt(
     working_directory: Option<String>,
     mcp_target: Option<crate::mcp::bridge::CanvasTarget>,
 ) -> Result<AcpPromptResponse, String> {
+    let images = images.unwrap_or_default();
+    crate::agent_image::validate_images(&images)?;
     let (cancel, mut cancelled) = tokio::sync::watch::channel(false);
     {
         let mut running = RUNNING_PROMPTS.lock().map_err(|_| "Agent 状态不可用。")?;
@@ -1044,6 +1047,9 @@ pub async fn acp_send_prompt(
             if init.protocol_version != ProtocolVersion::V1 {
                 return Err(protocol_error("Agent does not support ACP v1"));
             }
+            if !images.is_empty() && !init.agent_capabilities.prompt_capabilities.image {
+                return Err(protocol_error("当前 ACP Agent 未声明图片输入能力。请切换支持图片的 Agent，或新建不含图片的会话。"));
+            }
             let (mut mcp_servers, skipped) = crate::mcp::select_servers(
                 prepared_servers, init.agent_capabilities.mcp_capabilities.http,
             ).map_err(|error| protocol_error(&error))?;
@@ -1067,10 +1073,19 @@ pub async fn acp_send_prompt(
                     .send_request(SetSessionModeRequest::new(session.session_id.clone(), mode_id)).block_task()).await
                     .map_err(|_| protocol_error("ACP access mode selection timed out after 30 seconds"))??;
             }
-            let response = timeout(Duration::from_secs(180), connection
-                .send_request(PromptRequest::new(session.session_id,
-                    vec![ContentBlock::Text(TextContent::new(structured_prompt))])).block_task()).await
-                .map_err(|_| protocol_error("ACP prompt timed out after 180 seconds"))??;
+            let mut content = vec![ContentBlock::Text(TextContent::new(structured_prompt))];
+            if !init.agent_capabilities.prompt_capabilities.image {
+                content.push(ContentBlock::Text(TextContent::new(
+                    "This Agent did not advertise image input capability. Skip render_canvas_preview, use textual layout diagnostics, and explicitly state that visual review was unavailable."
+                )));
+            }
+            for image in images {
+                content.push(ContentBlock::Text(TextContent::new(format!("Reference image name (data): {}", image.name))));
+                content.push(ContentBlock::Image(ImageContent::new(image.data, image.mime_type)));
+            }
+            let response = timeout(Duration::from_secs(600), connection
+                .send_request(PromptRequest::new(session.session_id, content)).block_task()).await
+                .map_err(|_| protocol_error("ACP prompt timed out after 600 seconds"))??;
             if response.stop_reason != StopReason::EndTurn {
                 return Err(protocol_error(&format!("ACP turn did not complete: {:?}", response.stop_reason)));
             }
@@ -1079,7 +1094,7 @@ pub async fn acp_send_prompt(
     // Also bound transport shutdown. Dropping the SDK connection terminates its child.
     let run_result = tokio::select! {
         _ = cancelled.changed() => Err("Agent 请求已取消。".to_string()),
-        result = timeout(Duration::from_secs(280), session) =>
+        result = timeout(Duration::from_secs(660), session) =>
             result.map_err(|_| "ACP connection timed out".to_string())
                 .and_then(|result| result.map_err(|e| format!("ACP request failed: {e}"))),
     };
@@ -1231,8 +1246,8 @@ fn build_agent_prompt_with_mode(
         parts.push(format!("User instruction: {user_prompt}"));
         return parts.join("\n\n");
     }
-    parts.push("Drawing policy: Design the figure from the user's actual requirements, not by selecting and copying a ready-made template. Built-in references are optional composition ideas only: learn layout, hierarchy, spacing and routing, then independently construct the requested nodes, edges, labels and panels. Ignore unrelated references; the reference library does not limit the kinds of figures you can draw. Never transplant example architecture details, dimensions, experiment values or claimed results. Ask for missing essential data; use explicitly labeled illustrative data only when the user requests it. For a new figure, create the requested structure from scratch. When editing the current canvas, preserve unrelated user content, comments and definitions unless the user asks to replace or redesign them.".into());
-    parts.push(r"Interactive editor compatibility: Use uniquely named nodes with explicit numeric at (x,y) coordinates in cm; do not rely on relative positioning, foreach loops or custom macros to create nodes. Connect named nodes using \draw with --, |- or -| and optional north/south/east/west anchors. Use explicit minimum width/height and readable spacing. Supported semantic node styles include dl_block, mha_block, addnorm_block, conv_block, feature_cube, op_circle and stage_box; they are optional building blocks, not mandatory architectures. For PGFPlots, use axis environments with explicit width/height and addplot coordinates; place chart panels with scope shift={(x,y)}. Keep labels legible, use one scale per axis, and identify multiple series with legends and distinct marks or line styles. Do not return unsupported drawing constructs as if they were fully editable.".into());
+    parts.push("Drawing policy: Design the figure from the user's actual requirements. Follow the built-in tikz-diagram-reproduction skill: plan hierarchy, meaningful data-state shapes, semantic colors and arrow grammar before code. Use get_diagram_design_skill for relevant detailed references. Built-in references are optional composition ideas only: learn layout, hierarchy, spacing and routing, then independently construct the requested nodes, edges, labels and panels. Ignore unrelated references; the reference library does not limit the kinds of figures you can draw. Never transplant example architecture details, dimensions, experiment values or claimed results. For reference reproduction, preserve observed topology, proportions, colors and shapes; do not silently redesign or recolor. Ask for missing essential data; use explicitly labeled illustrative data only when the user requests it. For a new figure, create the requested structure from scratch. When editing the current canvas, preserve unrelated user content, comments and definitions unless the user asks to replace or redesign them.".into());
+    parts.push(r"Interactive editor compatibility: For ordinary editable diagrams use uniquely named nodes with explicit numeric at (x,y) coordinates in cm; do not hide those nodes in loops/macros. Connect named nodes using \draw with --, |- or -| and optional north/south/east/west anchors. Use explicit minimum width/height and readable spacing. Supported semantic node styles include dl_block, mha_block, addnorm_block, conv_block, feature_cube, op_circle and stage_box; they are optional building blocks, not mandatory architectures. Faithful complex reproductions may use self-contained paths/macros and require exact TeX preview; explain that those portions are not individually draggable. Keep needed local color/macro definitions in the figure fragment; never submit a copied document preamble. For PGFPlots, use axis environments with explicit width/height and addplot coordinates; place chart panels with scope shift={(x,y)}. Keep labels legible, use one scale per axis, and identify multiple series with legends and distinct marks or line styles. Do not return unsupported drawing constructs as if they were fully editable.".into());
     if let Some(ctx) = agent_context.map(str::trim).filter(|c| !c.is_empty()) {
         parts.push(format!(
             "AgenTikZ Component Library, Theme Palette, Layout Engineering & Live AST Diagnostics:\n{ctx}"

@@ -1,10 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { executeMcpTool } from '../runtime';
 import { currentCanvasTarget, registerMcpRequest, sourceHash } from '../context';
 import { useAgentStore } from '../../../store/useAgentStore';
 import { useWorkspaceStore } from '../../../store/useWorkspaceStore';
 import { useProjectStore } from '../../../store/useProjectStore';
 import type { McpToolRequest } from '../../../types/mcp';
+import { renderAgentPreview } from '../../agent/visual-review';
+import { getMcpRequest } from '../context';
+
+vi.mock('../../agent/visual-review', () => ({ renderAgentPreview: vi.fn() }));
 
 const original = '\\begin{tikzpicture}\n\\node[dl_block] (a) at (0,0) {Original};\n\\end{tikzpicture}';
 const replacement = original.replace('Original', 'Changed');
@@ -12,6 +16,9 @@ let release: () => void;
 let target: McpToolRequest['target'];
 
 beforeEach(() => {
+  vi.mocked(renderAgentPreview).mockReset().mockResolvedValue({
+    image: { data: 'cGl4ZWxz', mimeType: 'image/png' }, message: 'Compiled fixture',
+  });
   useWorkspaceStore.setState(useWorkspaceStore.getInitialState());
   useWorkspaceStore.getState().setTikzCode(original);
   useProjectStore.setState({ projectDir: null, activeCanvasFileName: 'figure-a.canvas.json' });
@@ -33,6 +40,88 @@ async function base() {
 }
 
 describe('actual canvas MCP handlers', () => {
+  it('provides scoped skill pages independently of the selected canvas, validates arguments and honors request expiry', async () => {
+    useProjectStore.setState({ activeCanvasFileName: 'figure-b.canvas.json' });
+    const page = await call('get_diagram_design_skill', { topic: 'mae', lineCount: 20 });
+    expect(page.skill).toBe('tikz-diagram-reproduction');
+    expect(page.macroIndex.some((item: any) => item.name === 'TokenStrip')).toBe(true);
+    expect(await call('get_diagram_design_skill', { topic: '../../private' })).toMatchObject({ error: { code: 'invalid_arguments' } });
+    expect(await call('get_diagram_design_skill', { path: 'private' })).toMatchObject({ error: { code: 'invalid_arguments' } });
+    release();
+    expect(await call('get_diagram_design_skill')).toMatchObject({ error: { code: 'request_ended' } });
+  });
+
+  it('records reproduction intent on tool proposals and keeps reference geometry unchanged during layout repair', async () => {
+    getMcpRequest('request')!.diagramMode = 'reproduction';
+    const proposal = await call('propose_tikz_patch', { ...await base(), newTikzCode: replacement });
+    expect(proposal.applied).toBe(false);
+    const pending = useAgentStore.getState().sessions[0].messages[0].patchProposal!;
+    expect(pending.newTikzCode).toContain('"preserveGeometry":true');
+    expect(pending.newTikzCode).toContain(replacement);
+    expect(useWorkspaceStore.getState().tikzCode).toBe(original);
+    await call('propose_layout_repair', await base());
+    const repaired = useAgentStore.getState().sessions[0].messages[0].patchProposal!;
+    expect(repaired.newTikzCode).toContain(original);
+    expect(repaired.autoRepairs).toEqual([]);
+  });
+
+  it('renders the exact pending draft, returns pixels, caches identical previews and never applies changes', async () => {
+    const proposal = await call('propose_tikz_patch', { ...await base(), newTikzCode: replacement });
+    const result = await call('render_canvas_preview', { proposalId: proposal.proposalId });
+    expect(result).toMatchObject({ image: { mimeType: 'image/png', data: 'cGl4ZWxz' }, applied: false,
+      previewSourceHash: await sourceHash(replacement), rendersRemaining: 2, cached: false });
+    expect(renderAgentPreview).toHaveBeenCalledWith(replacement, useWorkspaceStore.getState().activeThemeId, expect.any(Object));
+    expect(useWorkspaceStore.getState().tikzCode).toBe(original);
+    expect(useAgentStore.getState().sessions[0].messages[0].patchProposal?.renderPreview?.dataUrl).toBe('data:image/png;base64,cGl4ZWxz');
+    expect(await call('render_canvas_preview', { proposalId: proposal.proposalId })).toMatchObject({ cached: true, rendersRemaining: 2 });
+    expect(renderAgentPreview).toHaveBeenCalledTimes(1);
+    await call('propose_tikz_patch', { ...await base(), newTikzCode: replacement + '\n% refine' });
+    expect(useAgentStore.getState().sessions[0].messages[0].patchProposal?.renderPreview).toBeUndefined();
+    await call('render_canvas_preview', { proposalId: proposal.proposalId });
+    expect(renderAgentPreview).toHaveBeenCalledTimes(2);
+  });
+
+  it('bounds distinct renders and caches real compile failures without inventing an image', async () => {
+    vi.mocked(renderAgentPreview).mockRejectedValue(new Error('Missing latex'));
+    for (let i = 0; i < 3; i++) {
+      const proposal = await call('propose_tikz_patch', { ...await base(), newTikzCode: replacement + `\n% ${i}` });
+      for (let repeat = 0; repeat < 2; repeat++) {
+        expect(await call('render_canvas_preview', { proposalId: proposal.proposalId }))
+          .toMatchObject({ error: { code: 'preview_failed', message: 'Missing latex' } });
+      }
+    }
+    expect(renderAgentPreview).toHaveBeenCalledTimes(3);
+    const final = await call('propose_tikz_patch', { ...await base(), newTikzCode: replacement + '\n% fourth' });
+    expect(await call('render_canvas_preview', { proposalId: final.proposalId }))
+      .toMatchObject({ error: { code: 'preview_budget_exceeded' } });
+    expect(useAgentStore.getState().sessions[0].messages[0].patchProposal?.renderPreview).toBeUndefined();
+  });
+
+  it.each(['canvas', 'proposal', 'cancel'])('discards a render when %s changes while compiling', async (change) => {
+    let finish!: (value: any) => void;
+    vi.mocked(renderAgentPreview).mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    const proposal = await call('propose_tikz_patch', { ...await base(), newTikzCode: replacement });
+    const running = call('render_canvas_preview', { proposalId: proposal.proposalId });
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    if (change === 'canvas') useWorkspaceStore.getState().setTikzCode(original + '\n% user edit');
+    if (change === 'proposal') await call('propose_tikz_patch', { ...await base(), newTikzCode: replacement + '\n% newer' });
+    if (change === 'cancel') release();
+    finish({ image: { data: 'cGl4ZWxz', mimeType: 'image/png' }, message: 'Old render' });
+    expect(await running).toMatchObject({ error: { code: 'source_changed' } });
+    expect(useAgentStore.getState().sessions[0].messages[0].patchProposal?.renderPreview).toBeUndefined();
+  });
+
+  it('honors preview opt-out, validates proposal identity and rejects outdated drafts before compiling', async () => {
+    getMcpRequest('request')!.visualReviewEnabled = false;
+    expect(await call('render_canvas_preview')).toMatchObject({ error: { code: 'preview_disabled' } });
+    getMcpRequest('request')!.visualReviewEnabled = true;
+    expect(await call('render_canvas_preview', { proposalId: 'missing' })).toMatchObject({ error: { code: 'proposal_not_found' } });
+    const proposal = await call('propose_tikz_patch', { ...await base(), newTikzCode: replacement });
+    useWorkspaceStore.getState().setTikzCode(original + '\n% changed');
+    expect(await call('render_canvas_preview', { proposalId: proposal.proposalId })).toMatchObject({ error: { code: 'source_changed' } });
+    expect(renderAgentPreview).not.toHaveBeenCalled();
+  });
+
   it('reads live source, AST, selection and diagnostics', async () => {
     const current = await call('get_canvas_source');
     expect(current.source).toBe(original);

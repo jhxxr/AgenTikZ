@@ -13,6 +13,8 @@ import { currentCanvasTarget, sameCanvas } from '../../core/mcp/context';
 import { ProjectPatchCard } from './ProjectPatchCard';
 import { usePaperBuildStore } from '../../store/usePaperBuildStore';
 import { useMcpStore } from '../../store/useMcpStore';
+import { AgentComposer } from './AgentComposer';
+import { imageDataUrl } from '../../core/agent/image-attachments';
 import {
   Bot,
   Check,
@@ -32,10 +34,8 @@ import {
   Plug,
   RotateCcw,
   ScanSearch,
-  Send,
   Settings,
   Sparkles,
-  Square,
   Terminal,
   Wand2,
   Wrench,
@@ -50,6 +50,8 @@ export const RightAgentPanel: React.FC = () => {
     attachCanvasContext,
     attachSelectionContext,
     autoLayoutRepairEnabled,
+    visualReviewEnabled,
+    setVisualReviewEnabled,
     isStreaming,
     activeRequestId,
     cancelPrompt,
@@ -74,6 +76,8 @@ export const RightAgentPanel: React.FC = () => {
     attachCanvasContext: s.attachCanvasContext,
     attachSelectionContext: s.attachSelectionContext,
     autoLayoutRepairEnabled: s.autoLayoutRepairEnabled,
+    visualReviewEnabled: s.visualReviewEnabled,
+    setVisualReviewEnabled: s.setVisualReviewEnabled,
     isStreaming: s.isStreaming,
     activeRequestId: s.activeRequestId,
     cancelPrompt: s.cancelPrompt,
@@ -171,13 +175,6 @@ export const RightAgentPanel: React.FC = () => {
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [activeSession?.messages.length, isStreaming]);
-
-  const handleSend = async () => {
-    if (!inputText.trim() || isStreaming) return;
-    const text = inputText;
-    setInputText('');
-    await sendPromptToAgent(text);
-  };
 
   const executeAgentImageDirectives = async (
     msgId: string,
@@ -529,6 +526,10 @@ export const RightAgentPanel: React.FC = () => {
               </div>
 
               {/* Context Pills attached to user message */}
+              {!!msg.images?.length && <div className="flex flex-wrap gap-2 mb-2 justify-end">
+                {msg.images.map((image) => <img key={image.id} src={imageDataUrl(image)} alt={image.name}
+                  title={image.name} className="max-w-full w-40 max-h-48 object-contain rounded-lg border border-slate-200 bg-white" />)}
+              </div>}
               {msg.role === 'user' &&
                 ((msg.contextSelectionIds && msg.contextSelectionIds.length > 0) ||
                   msg.includeFullCanvas || msg.contextPaperPath) && (
@@ -777,6 +778,17 @@ export const RightAgentPanel: React.FC = () => {
                       )}
 
                       {/* @agent-image Hybrid Vector + AI Cutout Directives */}
+                      {patch.renderPreview && <details className="rounded-lg border border-blue-100 bg-blue-50/50 p-2">
+                        <summary className="text-[10.5px] text-blue-700 cursor-pointer">真实 TeX 预览 · 仍需审核</summary>
+                        <img src={patch.renderPreview.dataUrl} alt="待审核提案的真实 TeX 渲染"
+                          className="mt-2 w-full object-contain rounded bg-white" />
+                        <p className="mt-1 text-[10px] text-slate-500">AI 的视觉检查结论见回复；编译成功不代表排版无误。</p>
+                      </details>}
+                      {!patch.renderPreview && visualReviewEnabled && (
+                        <p className="text-[10px] text-slate-500">
+                          尚无真实 TeX 预览；布局评分仅来自源码检查。
+                        </p>
+                      )}
                       {(() => {
                         const directives =
                           parseTikzDocument(patch.newTikzCode)
@@ -1097,40 +1109,26 @@ export const RightAgentPanel: React.FC = () => {
             >
               @{activeThemeId}
             </span>
+            <span className="px-1.5 py-0.5 rounded text-[10px] bg-violet-50 text-violet-700 border border-violet-200"
+              title="内置 tikz-diagram-reproduction：构图分层、算子语义配色、数据形态、四类论文参考；支持按图复刻">
+              绘图 Skill
+            </span>
+            <button type="button" onClick={() => setVisualReviewEnabled(!visualReviewEnabled)}
+              disabled={isStreaming} aria-pressed={visualReviewEnabled}
+              title="让 Agent 渲染待审提案并查看图片后修正；每轮最多 3 次，需要本地 TeX 和支持视觉的模型"
+              className={`px-1.5 py-0.5 rounded text-[10px] border disabled:opacity-40 ${visualReviewEnabled
+                ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'text-slate-400 border-slate-200'}`}>
+              视觉复核{visualReviewEnabled ? ' 开' : ' 关'}
+            </button>
           </div>}
 
 
         </div>
 
         {/* Multi-line Prompt Input Box */}
-        <div className="relative bg-white border border-slate-200/80 rounded-2xl focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-100/60 shadow-sm transition-all">
-          <textarea
-            rows={2}
-            value={inputText}
-            onChange={(e) => setInputText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                handleSend();
-              }
-            }}
-            placeholder={paperMode ? '描述论文任务：润色章节、同步图注与引用、分析编译错误…' : '描述架构或局部修改需求（如：调整配色、间距或残差跳线）…'}
-            className="w-full px-3 pt-2 pb-7 text-xs text-slate-800 bg-transparent resize-none focus:outline-none"
-          />
-          <div className="absolute bottom-1.5 left-2.5 right-2 flex items-center justify-between">
-            <span className="text-[10px] text-slate-400">
-              {paperMode ? '项目上下文 · 多文件 Diff · 审阅后应用' : '增量 Diff · 契约自愈 · 透明插图联动'}
-            </span>
-            <button
-              onClick={isStreaming ? () => void cancelPrompt() : handleSend}
-              disabled={isStreaming ? !activeRequestId : !inputText.trim()}
-              className="px-2.5 py-1 rounded-xl bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-500 hover:to-blue-600 disabled:from-slate-200 disabled:to-slate-200 text-white text-[11px] font-medium flex items-center gap-1 transition-all cursor-pointer shadow-sm"
-            >
-              <span>{isStreaming ? '停止' : '发送'}</span>
-              {isStreaming ? <Square className="w-3 h-3" /> : <Send className="w-3 h-3" />}
-            </button>
-          </div>
-        </div>
+        <AgentComposer key={`${projectDir || 'temporary'}:${activeSessionId}`} text={inputText} onTextChange={setInputText}
+          onSend={sendPromptToAgent} onCancel={cancelPrompt} isStreaming={isStreaming}
+          canCancel={!!activeRequestId} paperMode={paperMode} />
       </div>
     </aside>
   );

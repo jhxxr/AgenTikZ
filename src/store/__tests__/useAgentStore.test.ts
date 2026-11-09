@@ -77,6 +77,40 @@ afterEach(() => {
 });
 
 describe('real ACP frontend contract', () => {
+  it('injects the user drawing skill and reproduction intent without silently recoloring fallback source', async () => {
+    const store = await freshStore();
+    bridge.canvasCode = '\\begin{tikzpicture}\\node[fill=white] (a) at (0,0) {resnet};\\end{tikzpicture}';
+    bridge.invoke.mockResolvedValue({ usedNativeCli: true, reply: `\`\`\`tikz\n${bridge.canvasCode}\n\`\`\`` });
+    await store.getState().sendPromptToAgent('请复刻这张图，保留原配色');
+    const args = bridge.invoke.mock.calls.at(-1)![1];
+    expect(args.agentContext).toContain('BUILT-IN DRAWING SKILL: tikz-diagram-reproduction');
+    expect(args.agentContext).toContain('Task mode: reproduction');
+    expect(args.prompt).toContain('保留原图的配色');
+    const proposal = store.getState().sessions[0].messages.at(-1)?.patchProposal;
+    expect(proposal?.newTikzCode).toContain('fill=white');
+    expect(proposal?.newTikzCode).toContain('{resnet}');
+    expect(proposal?.newTikzCode).toContain('"preserveGeometry":true');
+    expect(proposal?.autoRepairs).toBeUndefined();
+  });
+
+  it('sends image-only messages as pixels and replays bounded image references on stateless ACP followups', async () => {
+    const store = await freshStore();
+    const image = { id: 'ref', name: 'diagram.png', mimeType: 'image/png' as const, data: 'cGl4ZWxz' };
+    await store.getState().sendPromptToAgent('', [image]);
+    expect(bridge.invoke).toHaveBeenCalledWith('acp_send_prompt', expect.objectContaining({
+      images: [image], agentContext: expect.stringContaining('BOUNDED VISUAL REVIEW'),
+    }));
+    expect(store.getState().sessions[0].messages[0].images).toEqual([image]);
+    expect(store.getState().sessions[0].messages[0].content).toContain('所附图片');
+    await store.getState().sendPromptToAgent('Follow the reference');
+    const args = bridge.invoke.mock.calls.at(-1)![1];
+    expect(args.images).toEqual([image]);
+    expect(JSON.stringify(args.history)).not.toContain(image.data);
+    store.getState().setVisualReviewEnabled(false);
+    await store.getState().sendPromptToAgent('Text diagnostics only');
+    expect(bridge.invoke.mock.calls.at(-1)![1].agentContext).not.toContain('BOUNDED VISUAL REVIEW');
+  });
+
   it('routes Pi to its own long-lived backend without forwarding secrets or native access flags', async () => {
     const store = await freshStore();
     const { useSettingsStore } = await import('../useSettingsStore');

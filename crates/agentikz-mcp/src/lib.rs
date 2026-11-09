@@ -42,7 +42,7 @@ impl CanvasBridge {
         let client = reqwest::Client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
-            .timeout(Duration::from_secs(35))
+            .timeout(Duration::from_secs(155))
             .build()
             .map_err(|e| e.to_string())?;
         Ok(Self {
@@ -57,7 +57,7 @@ impl ServerHandler for CanvasBridge {
     fn get_info(&self) -> ServerConfig {
         let mut config = ServerConfig::new(ServerCapabilities::builder().enable_tools().build());
         config.server_info = Implementation::new("AgenTikZ", env!("CARGO_PKG_VERSION"));
-        config.instructions = Some("Use get_project_context to discover project files and read_project_file before proposing manuscript changes. Use get_canvas_source before canvas edits. All proposals require user review; never claim they are applied or compiled.".into());
+        config.instructions = Some("Use get_project_context to discover project files and read_project_file before proposing manuscript changes. Use get_canvas_source before canvas edits. Use render_canvas_preview to compile an exact figure draft and inspect its image before refining. All proposals require user review; previewing does not apply edits or validate manuscript builds.".into());
         config
     }
 
@@ -101,12 +101,23 @@ impl ServerHandler for CanvasBridge {
             .json()
             .await
             .map_err(|_| ErrorData::internal_error("Invalid canvas bridge response", None))?;
-        if body.get("error").is_some() {
-            Ok(CallToolResult::structured_error(body).into())
-        } else {
-            Ok(CallToolResult::structured(body).into())
+        Ok(bridge_tool_result(body).into())
+    }
+}
+
+/// Pixels must be an MCP image content block, not a base64 string inside JSON text.
+pub fn bridge_tool_result(mut body: Value) -> CallToolResult {
+    let image = body.as_object_mut().and_then(|object| object.remove("image"));
+    if body.get("error").is_some() {
+        return CallToolResult::structured_error(body);
+    }
+    let mut result = CallToolResult::structured(body);
+    if let Some(image) = image {
+        if let (Some(data), Some("image/png")) = (image["data"].as_str(), image["mimeType"].as_str()) {
+            result.content.push(ContentBlock::image(data, "image/png"));
         }
     }
+    result
 }
 
 pub async fn run_stdio() -> Result<(), String> {

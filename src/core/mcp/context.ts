@@ -2,12 +2,17 @@ import { useProjectStore } from '../../store/useProjectStore';
 import { useWorkspaceStore } from '../../store/useWorkspaceStore';
 import type { AcpAgentId, TikzPatchProposal } from '../../types/acp';
 import type { CanvasTarget } from '../../types/mcp';
+import type { DiagramDesignMode } from '../agent/diagram-design-policy';
 
 export interface McpRequestContext {
   target: CanvasTarget;
   agentId?: AcpAgentId;
   messageId?: string;
   paperReads?: Map<string, { revision: number; sourceHash: string; source: string }>;
+  visualReviewEnabled?: boolean;
+  diagramMode?: DiagramDesignMode;
+  previewAttempts?: number;
+  previewCache?: Map<string, Promise<{ image: { data: string; mimeType: 'image/png' }; message: string }>>;
 }
 
 const requests = new Map<string, McpRequestContext>();

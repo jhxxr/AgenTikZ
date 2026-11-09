@@ -19,7 +19,7 @@ let shuttingDown = false;
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => {
   input += chunk;
-  if (input.length > 4 * 1024 * 1024) { engine.dispose(); process.exit(2); }
+  if (input.length > 16 * 1024 * 1024) { engine.dispose(); process.exit(2); }
   // Only LF frames records. Unicode line/paragraph separators are legitimate JSON data.
   let newline;
   while ((newline = input.indexOf('\n')) >= 0) {

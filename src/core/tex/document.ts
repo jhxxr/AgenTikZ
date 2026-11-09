@@ -58,7 +58,7 @@ export function buildStandaloneLatexDocument(
     '  legend/.code={}',
     '}',
     '\\usepgfplotslibrary{statistics}',
-    '\\usetikzlibrary{arrows.meta,positioning,calc,fit,backgrounds,shapes.geometric}',
+    '\\usetikzlibrary{arrows.meta,positioning,calc,fit,backgrounds,shadings,shapes.geometric}',
     '',
     `% --- Publication Theme Color Palette (${theme.venueBadge}) ---`,
     allPreambleColors,

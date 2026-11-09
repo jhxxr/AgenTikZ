@@ -45,6 +45,10 @@
 
 在 AI 协同方面，AgenTikZ 采用 **自带智能体（BYOA, Bring Your Own Agent）** 架构，基于官方 [Agent Client Protocol (ACP)](https://agentclientprotocol.com)（`stdio`）直接连接你本机已安装并登录的 **Claude Code**、**Codex CLI**、**OpenCode**、**Gemini CLI**、**Cursor Agent** 或 **Kimi Code**。无需在软件内配置模型 API Key，无需经过第三方云端中继；支持一键附加 `@canvas` 与 `@选中` 图元上下文，所有 AI 生成的 TikZ 代码均需人工预览确认后才会应用到画布。
 
+**图片参考与视觉复核**：Agent 输入框支持 Ctrl+V 粘贴截图、缩略图预览与移除，也可仅发送图片。Pi 和 ACP 接收原生图片块；`render_canvas_preview` 可返回待审配图的真实 TeX 渲染，让支持视觉的 Agent 看图后修正。每轮最多 3 次不同输入的渲染，相同输入复用结果，最终仍由用户审核。需要本地 TeX Live、dvisvgm 和支持图片的模型；布局评分或编译成功不等于完成视觉检查。
+
+**内置论文绘图 skill**：`tikz-diagram-reproduction` 先规划构图分层、数据形态、语义配色与箭头语法，再生成代码。四组论文参考（SWSA、多流 GNN、掩码自编码器、黎曼/时序流程）通过 `get_diagram_design_skill` 按需分页读取，不逐轮注入整套模板。复刻图保护原有颜色与布局，复杂形状和宏使用真实 TeX 预览。详见 [v0.6.0 发布说明](docs/releases/v0.6.0.md)。
+
 ## 界面与核心工作流预览
 
 ### 1. 可视化工作室全景：无损 AST 源码同步与 BYOA 智能体增量 Diff 审阅
@@ -53,7 +57,7 @@
 ![可视化工作室全景：无损 AST 源码同步与 BYOA 智能体增量 Diff 审阅](docs/screenshots/studio-overview.png)
 
 ### 2. 基础绘图组件与 3D 特征张量检查器
-绘图从空白画布开始，可通过工具栏或基础组件添加节点、3D 特征立方体和 PGFPlots 图表。整图模板库、模板切换与 AI 模板引用已移除；已有绘图文件仍可正常打开和编辑。
+绘图从空白画布开始，可通过工具栏或基础组件添加节点、3D 特征立方体和 PGFPlots 图表。整图模板库与模板切换保持移除；Agent 可按需读取内置绘图 skill 的参考片段，学习视觉表达后构建用户实际的方法。已有绘图文件仍可正常打开和编辑。
 
 ### 3. Nature (NPG) 多面板科研实验图表、项目目录管理与 AI 透明抠图生成器
 左侧统一管理论文手稿（`main.tex`、`sections/*.tex`）、科研配图（`figures/*.tikz`）与 AI 透明抠图科研插图生成器；中间画布呈现符合 **Nature (NPG)** 规范的双联实验图（误差带收敛折线图 + 跨领域消融柱状图），右侧面板支持交互式编辑 `\addplot` 数据序列、误差棒与图例布局。
@@ -65,7 +69,7 @@
 
 分隔线中提供源码 → PDF、PDF → 源码双向定位，也支持 `Ctrl/⌘ + 点击 PDF` 返回对应源码行。桌面端编译启用 `-synctex=1`，需要 TeX 安装目录内的 `synctex` 可执行文件；修改源码后须重新编译以更新映射。
 
-绘图与论文共用右侧**项目 Agent**，切换工作区不丢失对话。论文模式支持读取当前编辑器内容（含未保存修改）、提交多文件 Diff 修改集、审核后整组应用/撤回，以及读取真实编译诊断。桌面端可“应用并编译”，PDF 预览与 Agent 共用编译状态。可选择 **内置 Pi SDK** 使用长驻会话，也可继续使用 BYOA/ACP。自动修复循环与草稿编译沙盒尚未接入。详见 [MCP 服务指南](docs/mcp-guide.zh-CN.md#论文协作与审阅) 与 [Pi 接入说明](docs/pi-runtime.zh-CN.md)。
+绘图与论文共用右侧**项目 Agent**，切换工作区不丢失对话。论文模式支持读取当前编辑器内容（含未保存修改）、提交多文件 Diff 修改集、审核后整组应用/撤回，以及读取真实编译诊断。桌面端可“应用并编译”，PDF 预览与 Agent 共用编译状态。可选择 **内置 Pi SDK** 使用长驻会话，也可继续使用 BYOA/ACP。配图已提供有次数限制的渲染与视觉复核；整篇论文的草稿编译沙盒与自动修复循环尚未接入。详见 [MCP 服务指南](docs/mcp-guide.zh-CN.md#论文协作与审阅) 与 [Pi 接入说明](docs/pi-runtime.zh-CN.md)。
 
 素材卡片明确区分“加入画布”和“插入论文”。插图窗口支持选图、直接导入 PDF/PNG/JPEG、逐章节插入、唯一标签与重复插入检查；手填图注不会因更换素材或刷新而被清空，保存失败不会提示成功。详见 [图片与论文插入流程](docs/figure-insertion.zh-CN.md)。
 

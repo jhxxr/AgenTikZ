@@ -9,10 +9,12 @@
 import { JournalThemeId } from '../../types/theme';
 import { JOURNAL_THEMES } from '../themes/journal-presets';
 import { buildAgentStyleGuideBlock } from './style-guides';
+import { buildDiagramDesignContext, resolveDiagramDesignMode, type DiagramDesignMode } from './diagram-design-policy';
 
 export interface PromptCompilerOptions {
   enforcePublicationStyleGuide?: boolean;
   requireFigureContract?: boolean;
+  diagramMode?: DiagramDesignMode;
 }
 
 /**
@@ -33,14 +35,23 @@ export function buildPublicationStyleSystemPrompt(
   if (!enforceStyle) {
     return '';
   }
+  if (options.diagramMode === 'reproduction') {
+    return [
+      '=== REFERENCE REPRODUCTION: PRESERVE OBSERVED DESIGN ===',
+      'The reference image/user instructions determine palette, proportions, shapes and arrow grammar. Journal styling is a fallback, not permission to redesign or recolor.',
+      'Use local \\definecolor declarations for sampled reference colors. Preserve existing labels, masks, module topology and line meanings. Do not invent missing details or claim unperformed pixel measurements.',
+      'Keep a self-contained figure fragment and follow the built-in drawing skill, review tools and exact visual preview.',
+    ].join('\n');
+  }
 
   const lines: string[] = [
-    '=== PUBLICATION-GRADE STYLE GUIDE & NATURE SKILLS CONSTRAINTS (MANDATORY) ===',
+    '=== PUBLICATION-GRADE STYLE DEFAULTS (TASK-SPECIFIC DRAWING SKILL TAKES PRIORITY) ===',
+    'The built-in tikz-diagram-reproduction skill may use a defined operator-semantic palette. Journal-only color restrictions below are defaults; enforce them strictly only when the user explicitly requests that journal/monochrome style. Do not overwrite intentional reference or functional colors.',
     buildAgentStyleGuideBlock(themeId, requireContract),
     '',
     `Structured Theme Metadata (${theme.name} [${theme.id}]):`,
     `- Target Column Widths: Single-Column = ${theme.columnWidthMm.single}mm (${(theme.columnWidthMm.single / 10).toFixed(2)}cm), Double-Column = ${theme.columnWidthMm.double}mm (${(theme.columnWidthMm.double / 10).toFixed(2)}cm)`,
-    `- Salience Color Hierarchy (1 Neutral + 1 Signal + 1 Hero Accent):`,
+    `- Default Salience Color Hierarchy (neutral context + signal + 1–2 emphasized contributions; a semantic functional palette is also allowed):`,
     `  * Neutral Structural Baseline: fill=${theme.colorRoles.neutral.fill}, stroke=${theme.colorRoles.neutral.stroke}`,
     `  * Primary Signal (Main Pathway): fill=${theme.colorRoles.signal.fill}, stroke=${theme.colorRoles.signal.stroke}`,
     `  * Secondary Signal (Parallel / Contrast): fill=${theme.colorRoles.secondary.fill}, stroke=${theme.colorRoles.secondary.stroke}`,
@@ -80,10 +91,15 @@ export function compileUserPromptWithStyleGuide(
       : 'neurips';
   const theme = JOURNAL_THEMES[themeId];
   const requireContract = options.requireFigureContract ?? true;
+  const mode = options.diagramMode ?? resolveDiagramDesignMode(userPrompt);
+  if (mode === 'reproduction') {
+    return `[参考图复刻 · tikz-diagram-reproduction]\n保留原图的配色、形状、比例、模块关系与线型含义；用局部颜色定义，不自动套用期刊配色。只有实际工具测量过才能声称像素精确，完成后渲染同一份待审源码并查看图片。\n\n${userPrompt.trim()}`;
+  }
 
   const header = [
     `[常驻顶刊绘图规范 · 当前主题: ${theme.name} (${theme.venueBadge})]`,
-    `- 颜色与显著性控制：仅使用当前主题已定义的颜色 token（Neutral=${theme.colorRoles.neutral.fill}, Signal=${theme.colorRoles.signal.fill}, Hero=${theme.colorRoles.hero.fill}），全图最多 1–2 个核心创新模块使用 Hero 强调色，禁止彩虹色或自定义 RGB。`,
+    `- 构图与图形选择：先用内置 tikz-diagram-reproduction skill 选择总览/细节层级、数据状态图形和语义配色；不要只画同形矩形串联。`,
+    `- 颜色与显著性控制：主题默认 Neutral=${theme.colorRoles.neutral.fill}, Signal=${theme.colorRoles.signal.fill}, Hero=${theme.colorRoles.hero.fill}；也可使用 skill 的算子语义色板，通过局部 \\definecolor 定义。一种角色始终同色，仅突出 1–2 个真实贡献；用户明确指定期刊/黑白规范时优先遵守。`,
     `- 线宽与线型语义：默认线宽 ${theme.defaultLineWidth}，箭头 ${theme.arrowTip}；若图中有 stage_box 容器，虚线 dashed 仅用于容器边界，辅助/反馈/残差旁路一律使用 dotted。`,
     `- 版式与字号底线：单栏 ${theme.columnWidthMm.single}mm / 双栏 ${theme.columnWidthMm.double}mm，最小字号 \\scriptsize（严禁 \\tiny），术语大小写严格规范（如 XGBoost, DeepSeek, ResNet, ViT）。`,
     requireContract
@@ -106,6 +122,7 @@ export function compileAgentPrompt(params: {
   const sys = buildPublicationStyleSystemPrompt(params.themeId, {
     enforcePublicationStyleGuide: params.enforcePublicationStyle ?? true,
     requireFigureContract: params.requireFigureContract ?? true,
+    diagramMode: resolveDiagramDesignMode(params.userPrompt),
   });
-  return `${sys}\n\n${params.userPrompt.trim()}`;
+  return `${buildDiagramDesignContext(params.userPrompt, params.themeId, resolveDiagramDesignMode(params.userPrompt))}\n\n${sys}\n\n${params.userPrompt.trim()}`;
 }

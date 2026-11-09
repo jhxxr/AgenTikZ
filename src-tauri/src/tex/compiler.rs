@@ -314,6 +314,7 @@ pub async fn tex_compile_preview(
                 dvisvgm_cmd
                     .args([
                         "--no-fonts",
+                        "--embed-bitmaps",
                         "--bbox=min",
                         intermediate_file,
                         "-o",

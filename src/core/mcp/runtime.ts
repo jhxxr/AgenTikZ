@@ -11,6 +11,11 @@ import type { McpToolRequest } from '../../types/mcp';
 import type { JournalThemeId } from '../../types/theme';
 import type { TikzPatchProposal } from '../../types/acp';
 import { executeProjectTool, isProjectTool } from './project-tools';
+import { useProjectStore } from '../../store/useProjectStore';
+import { useSettingsStore } from '../../store/useSettingsStore';
+import { renderAgentPreview } from '../agent/visual-review';
+import { imageDataUrl } from '../agent/image-attachments';
+import { preserveReproductionIntent } from '../agent/diagram-design-policy';
 
 class ToolError extends Error {
   constructor(public code: string, message: string) { super(message); }
@@ -22,7 +27,9 @@ const stringArg = (args: Record<string, unknown>, key: string): string =>
 const allowedKeys: Record<string, string[]> = {
   get_canvas_source: [], get_canvas_ast: [], get_selected_elements: [],
   get_component_library: ['category'], get_theme_palette: ['themeId'],
+  get_diagram_design_skill: ['topic', 'startLine', 'lineCount'],
   inspect_layout_diagnostics: ['proposalId', 'themeId'],
+  render_canvas_preview: ['proposalId'],
   propose_tikz_patch: ['baseRevision', 'baseSourceHash', 'summary', 'rationale', 'newTikzCode'],
   propose_surgical_diff: ['baseRevision', 'baseSourceHash', 'summary', 'rationale', 'patches'],
   propose_layout_repair: ['baseRevision', 'baseSourceHash', 'summary', 'rationale', 'themeId'],
@@ -57,6 +64,12 @@ export async function executeMcpTool(event: McpToolRequest): Promise<unknown> {
     if (isProjectTool(event.toolName)) return executeProjectTool(event, context);
     validateArguments(event.toolName, event.arguments);
     const args = event.arguments;
+    if (event.toolName === 'get_diagram_design_skill') {
+      const { readDiagramSkillPage } = await import('../agent/diagram-skill-library');
+      if (getMcpRequest(event.requestId) !== context) fail('request_ended', 'MCP 请求已结束。');
+      try { return readDiagramSkillPage(args); }
+      catch (error) { fail('invalid_arguments', error instanceof Error ? error.message : String(error)); }
+    }
     const independent = event.toolName === 'get_component_library' || (event.toolName === 'get_theme_palette' && args.themeId);
     if (!independent && !sameCanvas(context.target)) fail('target_inactive', '请切回原画布后继续调用工具。');
     const workspace = useWorkspaceStore.getState();
@@ -81,6 +94,54 @@ export async function executeMcpTool(event: McpToolRequest): Promise<unknown> {
     };
     const session = useAgentStore.getState().sessions.find((s) => s.id === context.target.conversationId);
     const currentProposal = session?.messages.find((message) => message.id === context.messageId)?.patchProposal;
+    if (event.toolName === 'render_canvas_preview') {
+      if (context.visualReviewEnabled === false) fail('preview_disabled', '本轮已关闭视觉复核。');
+      if (args.proposalId && (args.proposalId !== currentProposal?.id || currentProposal.status !== 'pending')) {
+        fail('proposal_not_found', '待应用提案不存在。');
+      }
+      if (args.proposalId && (currentProposal!.baseRevision !== revision || currentProposal!.baseTikzCode !== source)) {
+        fail('source_changed', '画布已变化，请重新生成提案后渲染。');
+      }
+      const previewSource = args.proposalId ? currentProposal!.newTikzCode : source;
+      const previewSourceHash = await sourceHash(previewSource);
+      const { texEngine, texLiveBinDir } = useSettingsStore.getState();
+      const { projectDir } = useProjectStore.getState();
+      const key = JSON.stringify([previewSourceHash, themeId, texEngine, texLiveBinDir, projectDir]);
+      const cache = context.previewCache ??= new Map();
+      const cached = cache.has(key);
+      if (!cached) {
+        if ((context.previewAttempts ?? 0) >= 3) fail('preview_budget_exceeded', '本轮已达 3 次渲染上限，请总结待审提案和剩余问题。');
+        context.previewAttempts = (context.previewAttempts ?? 0) + 1;
+        cache.set(key, renderAgentPreview(previewSource, themeId, { texEngine, texLiveBinDir, projectDir }));
+      }
+      // Capture failures before checking identity: an ended request must not publish even an old diagnostic.
+      let preview: Awaited<ReturnType<typeof renderAgentPreview>> | undefined;
+      let renderError: unknown;
+      try { preview = await cache.get(key)!; } catch (error) { renderError = error; }
+      const live = useWorkspaceStore.getState();
+      const liveSettings = useSettingsStore.getState();
+      const liveProposal = useAgentStore.getState().sessions.find((s) => s.id === context.target.conversationId)
+        ?.messages.find((message) => message.id === context.messageId)?.patchProposal;
+      if (getMcpRequest(event.requestId) !== context || !useMcpStore.getState().config.builtinEnabled ||
+          !sameCanvas(context.target) || live.sourceRevision !== revision || live.tikzCode !== source ||
+          (live.activeThemeId ?? 'neurips') !== themeId || liveSettings.texEngine !== texEngine ||
+          liveSettings.texLiveBinDir !== texLiveBinDir ||
+          (args.proposalId && (liveProposal !== currentProposal || liveProposal?.status !== 'pending'))) {
+        fail('source_changed', '渲染期间画布、提案或请求已变化，结果已丢弃。');
+      }
+      if (!preview) fail('preview_failed', renderError instanceof Error ? renderError.message : String(renderError));
+      const rendered = preview!;
+      if (args.proposalId) {
+        useAgentStore.setState((state) => ({ sessions: state.sessions.map((s) => s.id === context.target.conversationId
+          ? { ...s, messages: s.messages.map((message) => message.id === context.messageId
+            ? { ...message, patchProposal: { ...currentProposal!, renderPreview: {
+              dataUrl: imageDataUrl(rendered.image), sourceHash: previewSourceHash,
+            } } } : message) } : s) }));
+      }
+      return { ...version, previewSourceHash, proposalId: args.proposalId, applied: false, cached,
+        rendersRemaining: 3 - (context.previewAttempts ?? 0), renderer: 'tex', message: rendered.message,
+        report: analyzeTikzLayout(previewSource, themeId), image: rendered.image };
+    }
     if (event.toolName === 'inspect_layout_diagnostics') {
       if (args.proposalId && args.proposalId !== currentProposal?.id) fail('proposal_not_found', '待应用提案不存在。');
       return { ...version, report: analyzeTikzLayout(args.proposalId ? currentProposal!.newTikzCode : source, themeId) };
@@ -106,10 +167,11 @@ export async function executeMcpTool(event: McpToolRequest): Promise<unknown> {
         nextSource = nextSource.replace(search, () => replacement);
       }
     } else {
-      const repair = autoRepairTikzLayout(source, themeId);
+      const repair = autoRepairTikzLayout(context.diagramMode === 'reproduction' ? preserveReproductionIntent(source) : source, themeId);
       nextSource = repair.tikzCode;
       repairs = repair.repairs;
     }
+    if (context.diagramMode === 'reproduction') nextSource = preserveReproductionIntent(nextSource);
     if (nextSource.length > 2 * 1024 * 1024 || nextSource.split('\\begin{tikzpicture}').length !== 2
         || nextSource.split('\\end{tikzpicture}').length !== 2 || nextSource.includes('\\documentclass')) {
       fail('invalid_source', '提案必须是完整的单个 tikzpicture，且不包含独立文档导言区。');

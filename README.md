@@ -47,6 +47,10 @@ Instead of locking you into a proprietary cloud model or asking for raw API keys
 
 An optional **embedded Pi SDK backend** now shares the same project tools and proposal review workflow. Select it under **Settings → Agent**, load the pinned model catalog and store a provider API key in the OS credential store. Pi retains tool history in a long-lived process, without requiring Pi CLI. Node.js 22.19+ is still user-provided; model usage is billed by the selected provider. Pi currently exposes only AgenTikZ tools, not native shell/file tools or third-party MCP servers. Cancellation, project switches, runtime resets and restarts discard runtime history; the visible chat is replayed on recovery. See [Pi runtime notes](docs/pi-runtime.zh-CN.md).
 
+**Image references and visual review:** paste screenshots into Agent chat, inspect removable thumbnails, or send an image without text. Pi and ACP receive actual image blocks. The `render_canvas_preview` tool returns a real TeX rendering of a pending figure proposal so a vision-capable agent can inspect and refine it before human review. Each request allows up to three distinct renders and caches identical inputs. Local TeX Live and dvisvgm are required; a successful compile or layout score is not visual verification.
+
+**Built-in scientific drawing skill:** `tikz-diagram-reproduction` guides composition, data-state shapes, semantic colors and faithful reference reproduction. Its four reference families (SWSA, multi-stream GNN, masked autoencoders, and Riemannian/temporal pipelines) are available through paged `get_diagram_design_skill` calls. Complete templates are not injected into every prompt. Reference colors/layouts are protected from automatic repair, and complex shapes/macros use exact TeX preview. See [v0.6.0 release notes](docs/releases/v0.6.0.md).
+
 ## Interface & Workflow Tour
 
 ### 1. Visual Studio, Lossless AST Code Sync & BYOA Agent Diff Review
@@ -55,7 +59,7 @@ Real-time bidirectional synchronization between the CodeMirror 6 TikZ editor (le
 ![Visual Studio, Lossless AST Code Sync & BYOA Agent Diff Review](docs/screenshots/studio-overview.png)
 
 ### 2. Drawing Primitives & 3D Feature Inspector
-Start from a blank canvas and add nodes, 3D feature volumes, and PGFPlots charts using the toolbar or primitives. The full-figure template gallery, template loader, and AI template-reference injection have been removed. Existing drawings remain editable.
+Start from a blank canvas and add nodes, 3D feature volumes, and PGFPlots charts using the toolbar or primitives. The full-figure template gallery and template loader remain removed. Agents can consult the built-in drawing skill's paged references for relevant visual patterns while constructing the user's actual method. Existing drawings remain editable.
 
 ### 3. Nature (NPG) Multi-Panel Scientific Charts, Project Assets & AI Cutout Generator
 Manage manuscript files (`main.tex`, `sections/*.tex`), multi-canvas figures (`figures/*.tikz`), and transparent AI scientific illustrations on the left, while editing multi-panel PGFPlots error-band curves, ablation bar charts, and data series tables on the right.

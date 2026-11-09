@@ -28,7 +28,7 @@ export const AGENT_STYLE_GUIDES: Record<JournalThemeId, string> = {
 
 ### 强制投稿级规范（必须严格遵守）：
 1. **颜色 Token 与唯一焦点原则（Salience Budget: 1 Neutral + 1 Signal + 1 Hero Accent）**：
-   - 仅允许使用当前主题已定义的颜色 token（\`npg_blue\`、\`npg_red\`、\`npg_teal\`、\`npg_sky\`、\`npg_sand\`、\`npg_dark\`），严禁自己发明野生颜色（如原生的 \`red\`, \`green\`, \`yellow\`）。
+   - 默认使用当前主题颜色 token（\`npg_blue\`、\`npg_red\`、\`npg_teal\`、\`npg_sky\`、\`npg_sand\`、\`npg_dark\`）。内置绘图 skill 的功能语义色板、参考图配色和用户指定色板可通过局部 \`\\definecolor\` 定义；不要随意逐框换色。
    - **焦点克制**：高饱和度强调色 \`npg_red\`（fill=\`npg_red!14\`, draw=\`npg_red!85!black\`）**仅留给本文提出的核心创新模块（Ours / Hero Module，建议添加选项 \`role=hero\`）**；主干信号通路用 \`npg_blue\` 或 \`npg_teal\`（\`role=signal\`）；常规层、已有方法与 Baseline 模块一律使用克制中性灰 \`npg_dark!10\`（\`role=neutral\`）。
 2. **线宽、箭头与虚线单一语义铁律**：
    - 默认线宽 \`0.55pt\`（主干路径可加粗至 \`0.75pt\`），箭头统一用 \`-Latex\`，圆角克制（\`rounded corners=1.5pt\`）。
@@ -44,10 +44,10 @@ export const AGENT_STYLE_GUIDES: Record<JournalThemeId, string> = {
    - 坐标轴标签必须带物理量与单位（如 \`Latency (ms)\`, \`Accuracy (%)\`）；若含误差棒/误差带，必须在图注或子标题中显式注明是 \`SD\`、\`SE\` 还是 \`95% CI\`。
    - 避免彩虹色、投影阴影（drop shadow）、3D 柱状图与红绿对比。
 6. **物理尺寸与零碰撞排版**：
-   - 按 Nature 单栏 \`89mm (8.9cm)\` 或双栏 \`183mm (18.3cm)\` 紧凑规划坐标；垂直相邻节点中心步进 \`Δy >= 1.5cm\`，水平步进 \`Δx >= 3.6cm\`，确保文字与连线零重叠。
+   - 按 Nature 单栏 \`89mm (8.9cm)\` 或双栏 \`183mm (18.3cm)\` 规划坐标；间距依实际图形尺寸和路由空间计算，普通层块可从垂直 \`1.5cm\`、水平 \`3.6cm\` 起步，不能把此数值强加给紧凑图标或参考图。
 
 ### 输出前 6 项强制自检（Pre-output Self-Check）：
-1. [ ] 是否 100% 使用了 NPG 颜色 token，且 \`npg_red\` 仅用于核心创新模块（Ours）？
+1. [ ] 是否保持了用户指定/参考图/功能角色的配色一致性，且高显著性仅留给真实贡献？
 2. [ ] 是否消除了网格线、阴影等一切冗余装饰？
 3. [ ] \`dashed\` 是否仅用于分组框，反馈/辅助流是否已改用 \`dotted\` 或正交实线？
 4. [ ] 多面板是否有清晰的 Hero Panel + 从属证据分工，且标签为 \`\\textbf{a, b, c}\`？
@@ -60,7 +60,7 @@ export const AGENT_STYLE_GUIDES: Record<JournalThemeId, string> = {
 
 ### 强制投稿级规范（必须严格遵守）：
 1. **颜色 Token 与焦点克制（Salience Budget: 1 Neutral + 1 Signal + 1 Hero Accent）**：
-   - 使用当前主题已定义的颜色 token（\`nips_blue\`、\`nips_amber\`、\`nips_sage\`、\`nips_purple\`、\`nips_rose\`、\`nips_slate\`），不要发明新颜色。
+   - 默认使用主题 token（\`nips_blue\`、\`nips_amber\`、\`nips_sage\`、\`nips_purple\`、\`nips_rose\`、\`nips_slate\`）；内置绘图 skill 的算子语义色板或用户指定颜色可用局部 \`\\definecolor\`，同类算子保持同色。
    - **焦点唯一性**：暖杏强调色 \`nips_amber\`（\`mha_block\`, \`role=hero\`）优先留给本文核心创新模块（Ours / Novel Attention / Routing）；主干网络层用 \`nips_blue\`（\`dl_block\`, \`role=signal\`）；归一化/残差辅助层用 \`nips_sage\` 或中性色 \`nips_slate!12\`（\`role=neutral\`），整图高饱和色不超过 2~3 种。
 2. **线宽、箭头与虚线单一语义铁律**：
    - 默认线宽 \`0.7pt\`，箭头 \`-Stealth\`，圆角 \`2.5pt\`。
@@ -73,7 +73,7 @@ export const AGENT_STYLE_GUIDES: Record<JournalThemeId, string> = {
    - 单栏目标宽度约 \`14.0cm\`（NeurIPS 文本宽），最小字号不低于 \`\\scriptsize\`，文字与箭头严禁重叠。
 
 ### 输出前自检：
-1. [ ] 是否仅使用 \`nips_*\` 颜色 token 且突出唯一核心创新模块？
+1. [ ] 是否使用了一套连贯的主题/功能语义色板，且只突出真实核心创新？
 2. [ ] 容器框（\`dashed\`）与反馈流（\`dotted\`）线型是否严格区分？
 3. [ ] 公式节点是否已加 \`draw=none, fill=none\`？
 4. [ ] 是否保留了所有已有注释、\`\\tikzset\` 与 Node ID？
@@ -84,7 +84,7 @@ export const AGENT_STYLE_GUIDES: Record<JournalThemeId, string> = {
 
 ### 强制投稿级规范（必须严格遵守）：
 1. **颜色 Token 与多尺度视觉层级**：
-   - 仅使用当前主题已定义的颜色 token（\`cvpr_navy\`、\`cvpr_coral\`、\`cvpr_teal\`、\`cvpr_indigo\`、\`cvpr_gold\`、\`cvpr_gray\`）。
+   - 默认使用主题 token（\`cvpr_navy\`、\`cvpr_coral\`、\`cvpr_teal\`、\`cvpr_indigo\`、\`cvpr_gold\`、\`cvpr_gray\`）；可按内置绘图 skill 使用局部定义的功能语义色或参考色，保持分支和数据身份跨层一致。
    - **焦点突出**：高辨识度 \`cvpr_coral\` 或 \`cvpr_gold\`（\`role=hero\`）仅用于本文提出的创新融合/注意力模块（Ours）；Backbone 特征金字塔统一用 \`cvpr_navy\` / \`cvpr_teal\`；已有组件与容器框用 \`cvpr_gray\`。
 2. **3D 特征体积与正交跳线规范**：
    - 视觉多尺度特征图优先使用 \`feature_cube\`（\`subtype=cuboid, depth=0.55cm, channels={C×H×W}\`），清晰体现分辨率逐级下采样/上采样过程。
@@ -100,7 +100,7 @@ export const AGENT_STYLE_GUIDES: Record<JournalThemeId, string> = {
 
 ### 强制投稿级规范（必须严格遵守）：
 1. **颜色 Token 与黑白印刷兼容性（Monochrome-Safe）**：
-   - 仅使用当前主题已定义的颜色 token（\`ieee_blue\`、\`ieee_amber\`、\`ieee_teal\`、\`ieee_silver\`、\`ieee_midgray\`、\`ieee_ink\`）。
+   - 默认使用主题 token（\`ieee_blue\`、\`ieee_amber\`、\`ieee_teal\`、\`ieee_silver\`、\`ieee_midgray\`、\`ieee_ink\`）；用户明确要求黑白投稿时严格遵守明度/线型规则，参考图复刻或功能语义色板则按任务处理。
    - **焦点克制**：核心创新模块（Ours, \`role=hero\`）使用 \`ieee_amber\` 或深框 \`ieee_blue\`；常规工程模块使用 \`ieee_silver\`（\`black!6\`）或白底黑框 \`ieee_ink\`，确保黑白打印时依靠明度与线型即可清晰区分。
 2. **线宽、直角工程风与线型语义**：
    - 线宽默认 \`0.65pt\`，箭头 \`-Stealth\`，微圆角 \`1.0pt\`。
@@ -135,6 +135,7 @@ export function buildPublicationStylePrefix(
   const guide = AGENT_STYLE_GUIDES[themeId] || AGENT_STYLE_GUIDES.nature;
   const sections: string[] = [
     '====================================================================',
+    '适用顺序：用户要求与参考图证据 > 内置 tikz-diagram-reproduction 绘图 skill > 以下期刊默认规范。仅在用户明确要求严格期刊/黑白风格时，把对应颜色限制作为硬约束；不得为套色而破坏参考图或跨层数据身份。',
     guide,
   ];
 

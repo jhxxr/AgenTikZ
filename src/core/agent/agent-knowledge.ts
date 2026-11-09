@@ -11,6 +11,7 @@ import { JOURNAL_THEMES } from '../themes/journal-presets';
 import { parseTikzDocument } from '../parser/parser';
 import { analyzeTikzLayout, getThemeSemanticPalette } from './layout-diagnostics';
 import { buildPublicationStyleSystemPrompt } from './prompt-compiler';
+import { buildDiagramDesignContext, resolveDiagramDesignMode, type DiagramDesignMode } from './diagram-design-policy';
 
 /**
  * Builds the comprehensive Agent Skill, Component Library, Color Palette,
@@ -20,7 +21,8 @@ export function buildAgentSkillAndLibraryContext(
   activeThemeId: string = 'neurips',
   canvasTikz: string = '',
   selectedIds: string[] = [],
-  options: { enforcePublicationStyleGuide?: boolean; requireFigureContract?: boolean } = {}
+  options: { enforcePublicationStyleGuide?: boolean; requireFigureContract?: boolean;
+    taskPrompt?: string; diagramMode?: DiagramDesignMode } = {}
 ): string {
   const themeId = (
     activeThemeId in JOURNAL_THEMES ? activeThemeId : 'neurips'
@@ -33,12 +35,15 @@ export function buildAgentSkillAndLibraryContext(
       `- [${p.category.toUpperCase()}] ${p.name} (${p.id}): ${p.description}\n  Snippet: ${p.generateSnippet(1, 0, 0).replace(/\n/g, ' ')}`
   );
 
-  const pubStyleSection = buildPublicationStyleSystemPrompt(themeId, options);
+  const diagramMode = options.diagramMode ?? resolveDiagramDesignMode(options.taskPrompt || '', canvasTikz);
+  const pubStyleSection = buildPublicationStyleSystemPrompt(themeId, { ...options, diagramMode });
 
   const sections: string[] = [
+    buildDiagramDesignContext(options.taskPrompt || '', themeId, diagramMode),
+    '',
     ...(pubStyleSection ? [pubStyleSection, ''] : []),
     '=== AGENTIKZ COMPONENT LIBRARY & VISUAL RENDERER SPECIFICATION ===',
-    'AgenTikZ renders TikZ on an interactive vector canvas + LaTeX compiler. Use these canonical styles and node attributes so components render with rich visual fidelity:',
+    'These optional editable building blocks implement the drawing plan. They do not replace the skill shape vocabulary. Complex faithful paths/macros can use exact TeX preview; do not claim that every such element supports dragging.',
     '1. Neural & Architecture Blocks:',
     '   - Attention / Multi-Head Block: `\\node[mha_block, fill=' +
       palette.attention.fill +
@@ -91,7 +96,7 @@ export function buildAgentSkillAndLibraryContext(
     ...primitiveLines,
     '',
     `=== ACTIVE JOURNAL COLOR DESIGN SYSTEM (${theme.name} [${themeId}]) ===`,
-    'NEVER output monochrome or plain white (`fill=white`) functional blocks! Every academic figure must use a cohesive, high-contrast semantic color hierarchy with soft fills (`!14` to `!18`) and darker matching borders (`!80!black` to `!85!black`):',
+    'Fallback palette for an original design with no chosen functional palette. The drawing skill, explicit user style, and reference fidelity take priority. White/grey blocks are valid for operators, reference reproduction and monochrome figures. Do not recolor intentional local \\definecolor tokens.',
     `- Primary Attention / Core Innovation Module: \`fill=${palette.attention.fill}, draw=${palette.attention.stroke}\``,
     `- Secondary Backbone / Feed-Forward / Conv Module: \`fill=${palette.backbone.fill}, draw=${palette.backbone.stroke}\``,
     `- Normalization / Add & Norm / Gate Module: \`fill=${palette.norm.fill}, draw=${palette.norm.stroke}\``,
@@ -99,13 +104,13 @@ export function buildAgentSkillAndLibraryContext(
     `- Output Head / Loss / Prediction / Classifier: \`fill=${palette.output.fill}, draw=${palette.output.stroke}\``,
     `- Background Stage Container (\`stage_box\`): \`fill=${palette.neutral.containerFill}, draw=${palette.neutral.containerStroke}, dashed\``,
     '',
-    '=== ACADEMIC DRAWING & GEOMETRIC LAYOUT RULES (ZERO OVERLAP GUARANTEE) ===',
+    '=== ACADEMIC DRAWING & GEOMETRIC LAYOUT GUIDANCE (VERIFY WITH REAL PREVIEW) ===',
     '1. Center-Coordinate System (`at (x, y)` is the CENTER of every node):',
     '   - Two vertically stacked nodes `(x, y1)` and `(x, y2)` with heights `h1` and `h2` have an edge-to-edge gap of `|y2 - y1| - (h1 + h2)/2`.',
     '   - NEVER set `|y2 - y1| == (h1 + h2)/2` (0cm gap)! That causes boxes to touch/collide and hides connecting arrows completely.',
-    '   - REQUIRED VERTICAL STEP: For standard blocks (`height = 0.75cm..0.90cm`), use `Δy >= 1.45cm` (recommended `1.50cm..1.65cm`) so every arrow has `>= 0.60cm` of clean visible shaft + arrowhead.',
+    '   - For standard 0.75–0.90cm blocks a 1.45–1.65cm center step is a useful starting point. Recompute from actual sizes/column width for compact layer bars, token strips and reference measurements rather than forcing every glyph onto this spacing.',
     '2. Horizontal Multi-Stream Separation:',
-    '   - Parallel stacks (e.g., Encoder on the left, Decoder on the right) with `stage_box` width `4.6cm..5.0cm` MUST have center X coordinates separated by `Δx >= 6.2cm` (e.g., Encoder at `x = 4.5`, Decoder at `x = 11.2`), leaving a `>= 1.5cm` open routing corridor in between for cross-attention arrows and residual bypasses.',
+    '   - Derive stream separation from container widths plus a routing corridor. For 4.6–5.0cm containers, 6.2cm separation is one example; compact panels and faithful reproduction use their own measured grid.',
     '3. Container (`stage_box`) Bounding Formula:',
     '   - If a stage wraps inner blocks from `y_min` to `y_max` (each of height `h`), set:',
     '     `stage_y = (y_min + y_max)/2 + 0.15`',
@@ -113,11 +118,13 @@ export function buildAgentSkillAndLibraryContext(
     '     `minimum width = max_inner_width + 1.35cm`',
     '4. Clean Orthogonal Routing (`\\draw`):',
     '   - Direct connection: `\\draw[-Stealth, thick] (src) -- (dst);`',
-    '   - Right-side residual bypass: `\\draw[-Stealth, thick, dashed, rounded corners=4pt] (src.east) -- ++(0.95, 0) |- (dst.east);`',
+    '   - Right-side residual bypass: `\\draw[-Stealth, thick, rounded corners=4pt] (src.east) -- ++(0.95, 0) |- (dst.east);`',
     '   - Cross-module routing: `\\draw[-Stealth, thick, rounded corners=4pt] (enc_out.east) -- ++(1.1, 0) |- (dec_cross.west);`',
     '   - Always reference defined node IDs `(node_id)` or `(node_id.anchor)` as the start and end of every `\\draw` statement.',
     '',
-    '=== SURGICAL DIFF PROTOCOL vs FULL REPLACEMENT ===',
+    '=== SURGICAL DIFF PROTOCOL / REVIEWABLE TOOL PROPOSALS ===',
+    '- Primary route: read get_canvas_source, then use propose_surgical_diff for targeted edits or propose_tikz_patch for a full figure. Preview/refine the pending proposal. Do not duplicate a successful tool proposal as replacement code.',
+    '- The code-fence syntax below is only a fallback when proposal tools are unavailable; clearly report that limitation.',
     '- Mode A (Surgical Diff Patch — PREFERRED when modifying/refining an existing non-empty canvas):',
     '  When the user asks to adjust colors, fix spacing/overlaps, rename labels, add/remove a module, or tweak part of the current canvas, output `SEARCH/REPLACE` blocks inside a ```tikz code fence so only the targeted lines change:',
     '  ```tikz',

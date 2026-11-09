@@ -1,4 +1,5 @@
 pub mod acp;
+mod agent_image;
 pub mod image_gen;
 pub mod mcp;
 pub mod pi;

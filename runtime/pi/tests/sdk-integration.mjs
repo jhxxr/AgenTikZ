@@ -4,11 +4,14 @@ import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { readFileSync } from 'node:fs';
 import {
   createAgentSession, createExtensionRuntime, ModelRuntime, SessionManager, SettingsManager,
 } from '@earendil-works/pi-coding-agent';
 import { InMemoryCredentialStore } from '@earendil-works/pi-ai';
 import { PiEngine } from '../engine.mjs';
+
+const PNG = readFileSync(new URL('../../../src-tauri/icons/32x32.png', import.meta.url)).toString('base64');
 
 test('real pinned SDK performs tool calls and reuses their history through a loopback model fixture', { timeout: 30000 }, async (t) => {
   const requests = [];
@@ -22,7 +25,7 @@ test('real pinned SDK performs tool calls and reuses their history through a loo
     if (req.url === '/call') {
       tools++;
       res.setHeader('content-type', 'application/json');
-      res.end(JSON.stringify({ projectId: 'fixture', paperRevision: 7 }));
+      res.end(JSON.stringify({ projectId: 'fixture', renderer: 'tex', image: { data: PNG, mimeType: 'image/png' } }));
       return;
     }
     const input = JSON.parse(body);
@@ -47,7 +50,7 @@ test('real pinned SDK performs tool calls and reuses their history through a loo
     chunk({ role: 'assistant' });
     if (toolCall) {
       chunk({ tool_calls: [{ index: 0, id: 'fixture_call', type: 'function',
-        function: { name: 'get_project_context', arguments: '{}' } }] });
+        function: { name: 'render_canvas_preview', arguments: '{}' } }] });
       chunk({}, 'tool_calls');
     } else {
       chunk({ content: 'Fixture verified.' });
@@ -67,7 +70,7 @@ test('real pinned SDK performs tool calls and reuses their history through a loo
         modelsPath: null, refreshOnCreate: false, allowModelNetwork: false });
       runtime.registerProvider('agentikz-test', {
         baseUrl: base + '/v1', api: 'openai-completions', apiKey: 'fixture-only',
-        models: [{ id: 'fixture', name: 'Local test fixture', reasoning: false, input: ['text'],
+        models: [{ id: 'fixture', name: 'Local test fixture', reasoning: false, input: ['text', 'image'],
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 16384, maxTokens: 1024 }],
       });
       return runtime;
@@ -82,7 +85,8 @@ test('real pinned SDK performs tool calls and reuses their history through a loo
   const request = {
     requestId: 'one', conversationId: 'chat', projectId: 'project', provider: 'agentikz-test',
     model: 'fixture', apiKey: 'fixture-only', prompt: 'Read the project.', history: [],
-    tools: [{ name: 'get_project_context', description: 'Read project context',
+    images: [{ name: 'reference.png', mimeType: 'image/png', data: PNG }],
+    tools: [{ name: 'render_canvas_preview', description: 'Render a draft figure',
       inputSchema: { type: 'object', properties: {}, additionalProperties: false } }],
     bridge: { endpoint: base + '/call', token: 't'.repeat(64) },
   };
@@ -90,9 +94,14 @@ test('real pinned SDK performs tool calls and reuses their history through a loo
   assert.equal(first.resumed, false);
   assert.equal(first.reply, 'Fixture verified.');
   assert.equal(tools, 1);
-  assert.deepEqual(actualSession.getActiveToolNames(), ['get_project_context']);
-  assert.deepEqual(actualSession.getCallableToolNames(), ['get_project_context']);
+  assert.deepEqual(actualSession.getActiveToolNames(), ['render_canvas_preview']);
+  assert.deepEqual(actualSession.getCallableToolNames(), ['render_canvas_preview']);
   assert.ok(actualSession.messages.some((message) => message.role === 'toolResult'));
+  const imageBlocks = (request) => request.messages.flatMap((message) => Array.isArray(message.content) ? message.content : [])
+    .filter((block) => block.type === 'image_url');
+  assert.equal(imageBlocks(requests[0]).length, 1, 'reference is an actual model image input');
+  assert.equal(imageBlocks(requests[1]).length, 2, 'rendered tool pixels reach the model alongside the reference');
+  assert.ok(actualSession.messages.some((message) => message.role === 'toolResult' && message.content.some((block) => block.type === 'image')));
   const second = await engine.prompt({ ...request, requestId: 'two', prompt: 'Continue from your tool result.' }, () => {});
   assert.equal(second.resumed, true);
   assert.ok(requests.at(-1).messages.some((message) => message.role === 'tool'));

@@ -27,6 +27,8 @@ async function fixture(t) {
       ? { projectId: 'fixture-project', workbenchMode: 'paper', paperRevision: 9 }
       : call.toolName === 'read_project_file'
       ? { relativePath: call.arguments.relativePath, source: 'Unsaved manuscript', sourceHash: 'paper-fixture', paperRevision: 9 }
+      : call.toolName === 'render_canvas_preview'
+      ? { renderer: 'tex', image: { mimeType: 'image/png', data: 'cGl4ZWxz' }, applied: false }
       : { error: { code: 'source_changed', message: 'Source changed' } }));
   });
   server.listen(0, '127.0.0.1');
@@ -83,7 +85,8 @@ for (const version of ['2024-11-05', '2025-11-25']) {
     assert.equal(initialized.result.protocolVersion, version);
     client.notify('notifications/initialized');
     const listed = await client.request('tools/list');
-    assert.equal(listed.result.tools.length, 13);
+    assert.equal(listed.result.tools.length, 15);
+    assert.ok(listed.result.tools.some((tool) => tool.name === 'get_diagram_design_skill'));
     assert.ok(listed.result.tools.some((tool) => tool.name === 'propose_tikz_patch'));
     for (const name of ['get_project_context', 'read_project_file', 'propose_project_patch', 'get_paper_diagnostics']) {
       assert.ok(listed.result.tools.some((tool) => tool.name === name));
@@ -97,6 +100,10 @@ for (const version of ['2024-11-05', '2025-11-25']) {
     const paper = await client.request('tools/call', { name: 'read_project_file', arguments: { relativePath: 'sections/results.tex' } });
     assert.equal(JSON.parse(paper.result.content[0].text).source, 'Unsaved manuscript');
     assert.equal(client.calls.at(-1).arguments.relativePath, 'sections/results.tex');
+    const preview = await client.request('tools/call', { name: 'render_canvas_preview', arguments: {} });
+    assert.deepEqual(preview.result.content[1], { type: 'image', mimeType: 'image/png', data: 'cGl4ZWxz' });
+    assert.ok(!preview.result.content[0].text.includes('cGl4ZWxz'));
+    assert.equal(preview.result.structuredContent.image, undefined);
     const proposal = await client.request('tools/call', { name: 'propose_tikz_patch', arguments: { baseRevision: 1 } });
     assert.equal(proposal.result.isError, true);
     assert.equal(JSON.parse(proposal.result.content[0].text).error.code, 'source_changed');

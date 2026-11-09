@@ -6,6 +6,16 @@ import { buildVectorPreview, evaluatePreviewNumber, expandPreviewMacros } from '
 import { parseTikzDocument } from '../../parser/parser';
 
 describe('full documents and path-based TikZ rendering', () => {
+  it('routes noncanonical flowchart shapes to exact preview rather than showing misleading rectangles', () => {
+    for (const source of [
+      '\\node[diamond] (decision) at (0,0) {Accept?};',
+      '\\node[cylinder,draw] (storage) at (0,0) {Dataset};',
+      '\\begin{tikzpicture}[reduce/.style={trapezium,draw}]\\node[reduce] (r) at (0,0) {Encode};\\end{tikzpicture}',
+      '\\node[shape=ellipse] (end) at (0,0) {End};',
+    ]) expect(getExactPreviewReasons(source)).toContain('自定义节点形状');
+    expect(getExactPreviewReasons('\\node[dl_block] (a) at (0,0) {A};')).toEqual([]);
+  });
+
   it('recovers the supplied SWSA diagram without nesting document preambles', () => {
     const normalized = buildStandaloneLatexDocument(nestedSwsa, 'neurips');
     expect(normalized.match(/\\documentclass\b/g)).toHaveLength(1);
