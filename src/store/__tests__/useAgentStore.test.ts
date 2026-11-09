@@ -9,7 +9,7 @@ const bridge = vi.hoisted(() => ({
   revision: 0,
   projectDir: 'E:\\Research\\current-project',
   workbenchMode: 'figure' as 'figure' | 'paper',
-  onProjectChange: undefined as undefined | ((state: any, previous: any) => void),
+  projectListeners: new Set<(state: any, previous: any) => void>(),
   onEvent: undefined as undefined | ((event: { payload: Record<string, unknown> }) => void),
 }));
 
@@ -19,7 +19,10 @@ vi.mock('../../core/mcp/runtime', () => ({ ensureMcpRuntime: vi.fn().mockResolve
 vi.mock('../useProjectStore', () => ({
   getPaperWorkspaceVersion: () => 0,
   useProjectStore: {
-    subscribe: vi.fn((callback) => { bridge.onProjectChange = callback; return () => {}; }),
+    subscribe: vi.fn((callback) => {
+      bridge.projectListeners.add(callback);
+      return () => { bridge.projectListeners.delete(callback); };
+    }),
     getState: () => ({
       projectDir: bridge.projectDir, workbenchMode: bridge.workbenchMode,
       activePaperFilePath: 'main.tex', paperFileContents: { 'main.tex': 'Unsaved manuscript' },
@@ -62,7 +65,7 @@ beforeEach(() => {
   bridge.revision = 0;
   bridge.projectDir = 'E:\\Research\\current-project';
   bridge.workbenchMode = 'figure';
-  bridge.onProjectChange = undefined;
+  bridge.projectListeners.clear();
   bridge.setTikzCode.mockImplementation((code: string) => { bridge.canvasCode = code; bridge.revision += 1; });
   vi.stubGlobal('window', { __TAURI_INTERNALS__: {} });
   bridge.listen.mockImplementation(async (_name, callback) => {
@@ -154,15 +157,24 @@ describe('real ACP frontend contract', () => {
     useSettingsStore.getState().updateSettings({ piModel: 'fixture' });
     store.getState().setActiveAgentId('pi');
     bridge.invoke.mockResolvedValue({ runtimeStarted: true, reply: 'Pi result', resumed: false });
-    const projectSubscription = bridge.onProjectChange;
     await store.getState().sendPromptToAgent('Project A');
+    // Production Zustand notifies every subscriber. A later observer must not
+    // replace the Agent's reset listener (paper/MCP modules subscribe as well).
+    const { useProjectStore } = await import('../useProjectStore');
+    const observer = vi.fn();
+    const unsubscribeObserver = useProjectStore.subscribe(observer);
     let finishReset!: () => void;
     bridge.invoke.mockImplementation((command) => command === 'pi_reset_runtime'
       ? new Promise<void>((resolve) => { finishReset = resolve; })
       : Promise.resolve({ runtimeStarted: true, reply: 'Pi result', resumed: false }));
     const before = bridge.projectDir;
     bridge.projectDir = 'E:\\OtherProject';
-    projectSubscription?.({ projectDir: bridge.projectDir }, { projectDir: before });
+    for (const listener of [...bridge.projectListeners]) {
+      listener({ projectDir: bridge.projectDir }, { projectDir: before });
+    }
+    expect(observer).toHaveBeenCalledTimes(1);
+    unsubscribeObserver();
+    expect(bridge.projectListeners.has(observer)).toBe(false);
     const sending = store.getState().sendPromptToAgent('Project B');
     await vi.waitFor(() => expect(bridge.invoke).toHaveBeenCalledWith('pi_reset_runtime'));
     expect(bridge.invoke.mock.calls.filter(([command]) => command === 'pi_send_prompt')).toHaveLength(1);
