@@ -16,7 +16,8 @@ const bridge = vi.hoisted(() => ({
   onEvent: undefined as undefined | ((event: { payload: Record<string, unknown> }) => void),
 }));
 
-vi.mock('@tauri-apps/api/core', () => ({ invoke: bridge.invoke }));
+// Mock the native IPC boundary, not the dynamically imported JS module.
+// Vitest 3's manual mock loader can bypass a mock during concurrent imports.
 vi.mock('@tauri-apps/api/event', () => ({ listen: bridge.listen }));
 vi.mock('../../core/mcp/runtime', () => ({ ensureMcpRuntime: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../useProjectStore', () => ({
@@ -71,7 +72,9 @@ beforeEach(() => {
   bridge.projectDir = 'E:\\Research\\current-project';
   bridge.workbenchMode = 'figure';
   bridge.setTikzCode.mockImplementation((code: string) => { bridge.canvasCode = code; bridge.revision += 1; });
-  vi.stubGlobal('window', { __TAURI_INTERNALS__: {} });
+  vi.stubGlobal('window', { __TAURI_INTERNALS__: {
+    invoke: (command: string, args: Record<string, unknown>) => bridge.invoke(command, args),
+  } });
   bridge.listen.mockImplementation(async (_name, callback) => {
     bridge.onEvent = callback;
     return bridge.unlisten;
@@ -86,6 +89,23 @@ afterEach(() => {
 });
 
 describe('real ACP frontend contract', () => {
+  it('delivers every IPC call when reset and send import the Tauri wrapper concurrently', async () => {
+    bridge.invoke.mockImplementation((_command: string, args: { index: number }) => Promise.resolve(args.index));
+    const results = await Promise.allSettled(Array.from({ length: 32 }, async (_, index) => {
+      // Exercise both resolution paths deterministically. Under Vitest 3 a
+      // concurrent manual mock import can fall through to the actual module.
+      const { invoke } = index % 2
+        ? await import('@tauri-apps/api/core')
+        : await vi.importActual<typeof import('@tauri-apps/api/core')>('@tauri-apps/api/core');
+      expect(invoke).not.toBe(bridge.invoke);
+      return invoke<number>('concurrent_agent_ipc_probe', { index });
+    }));
+    expect(results.filter((result) => result.status === 'rejected').map((result) => String(result.reason))).toEqual([]);
+    expect(results.map((result) => result.status === 'fulfilled' ? result.value : undefined))
+      .toEqual(Array.from({ length: 32 }, (_, index) => index));
+    expect(bridge.invoke).toHaveBeenCalledTimes(32);
+  });
+
   it('injects the user drawing skill and reproduction intent without silently recoloring fallback source', async () => {
     const store = await freshStore();
     bridge.canvasCode = '\\begin{tikzpicture}\\node[fill=white] (a) at (0,0) {resnet};\\end{tikzpicture}';
@@ -182,7 +202,9 @@ describe('real ACP frontend contract', () => {
     unsubscribeObserver();
     expect(bridge.projectListeners.has(observer)).toBe(false);
     const sending = store.getState().sendPromptToAgent('Project B');
-    await vi.waitFor(() => expect(bridge.invoke).toHaveBeenCalledWith('pi_reset_runtime'));
+    // Keep failure output focused on command ordering, not the full model prompt.
+    await vi.waitFor(() => expect(bridge.invoke.mock.calls.map(([command]) => command)).toContain('pi_reset_runtime'));
+    expect(bridge.invoke).toHaveBeenCalledWith('pi_reset_runtime', {});
     expect(bridge.invoke.mock.calls.filter(([command]) => command === 'pi_send_prompt')).toHaveLength(1);
     finishReset();
     await sending;
