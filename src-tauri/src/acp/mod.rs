@@ -1166,7 +1166,7 @@ pub async fn acp_send_prompt(
 
 /// Node and shell-based agents do not consistently accept Windows verbatim
 /// paths returned by canonicalize. Keep UNC semantics while removing that prefix.
-fn protocol_workspace_path(path: PathBuf) -> PathBuf {
+pub(crate) fn protocol_workspace_path(path: PathBuf) -> PathBuf {
     #[cfg(windows)]
     {
         let text = path.to_string_lossy();

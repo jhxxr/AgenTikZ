@@ -248,6 +248,12 @@ impl Worker {
     }
 
     async fn start_at(node: PathBuf, entry: PathBuf, cwd: PathBuf) -> Result<Self, String> {
+        // Node cannot load an entrypoint using Windows verbatim paths (\\?\),
+        // including the canonicalized resource_dir supplied by Tauri. Normalize
+        // at the process boundary so all callers, including tests, use safe paths.
+        let node = crate::acp::protocol_workspace_path(node);
+        let entry = crate::acp::protocol_workspace_path(entry);
+        let cwd = crate::acp::protocol_workspace_path(cwd);
         let mut check = Command::new(&node);
         restricted_environment(&mut check);
         check.current_dir(&cwd);
@@ -291,7 +297,8 @@ impl Worker {
         };
         let ready = timeout(Duration::from_secs(30), worker.read())
             .await
-            .map_err(|_| "Pi 启动超时。")??;
+            .map_err(|_| "Pi 启动超时。")?
+            .map_err(|error| format!("Pi 启动失败（尚未就绪）：{error} 请检查内置运行时是否完整。"))?;
         if ready["type"] != "ready" || ready["protocol"] != 1 || ready["version"] != "1.5.0" {
             return Err("Pi 运行时协议或 SDK 版本不兼容。".into());
         }
@@ -319,7 +326,17 @@ impl Worker {
                 .await
                 .map_err(|_| "Pi 输出读取失败。")?;
             if available.is_empty() {
-                return Err("Pi 进程已退出；下轮请求会重建会话。".into());
+                // Never forward raw stderr: provider failures may include keys
+                // or project contents. The exit status is safe to report.
+                let status = timeout(Duration::from_secs(1), self._child.wait())
+                    .await
+                    .ok()
+                    .and_then(Result::ok)
+                    .and_then(|status| status.code());
+                return Err(match status {
+                    Some(code) => format!("Pi 进程已退出（退出码 {code}）；运行时需要重建。"),
+                    None => "Pi 进程输出已关闭；运行时需要重建。".into(),
+                });
             }
             let end = available.iter().position(|b| *b == b'\n').map(|p| p + 1);
             let count = end.unwrap_or(available.len());
@@ -620,6 +637,69 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+    }
+
+    // Tauri's resource_dir is derived from a canonicalized executable path on
+    // Windows. Test that actual path shape, not only CARGO_MANIFEST_DIR paths.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn real_worker_starts_from_canonicalized_windows_resource_paths() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("pi-runtime");
+        let entry = root.join("worker.mjs").canonicalize().unwrap();
+        assert!(entry.to_string_lossy().starts_with(r"\\?\"));
+        let node = crate::acp::resolve_mcp_executable("node").unwrap();
+        let mut worker = Worker::start_at(node, entry, root.canonicalize().unwrap())
+            .await
+            .unwrap();
+        worker.write(&json!({"type":"inspect", "requestId":"windows-resource"}))
+            .await
+            .unwrap();
+        let response = timeout(Duration::from_secs(20), worker.read())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(response["type"], "models");
+        assert_eq!(response["requestId"], "windows-resource");
+        assert!(response["models"].as_array().is_some_and(|models| !models.is_empty()));
+
+        // Exercise model discovery through the desktop worker protocol, not a
+        // direct JS import. A channel HTTP failure must not look like a crash.
+        use axum::{http::HeaderMap, routing::get, Json, Router};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let router = Router::new().route("/v1/models", get(|headers: HeaderMap| async move {
+                assert_eq!(headers.get("authorization").unwrap(), "Bearer fixture-only-key");
+                Json(json!({"data":[{"id":"fixture-model"}]}))
+            }));
+            axum::serve(listener, router).await.unwrap();
+        });
+        let pid = worker._child.id();
+        for (id, base_path, expected_type) in [
+            ("discover", "/v1", "models"),
+            ("missing-endpoint", "/missing/v1", "error"),
+        ] {
+            worker.write(&json!({"type":"fetch_models", "requestId":id,
+                "channel":{"id":"fixture", "api":"openai-completions",
+                    "baseUrl":format!("http://{address}{base_path}")},
+                "apiKey":"fixture-only-key"}))
+                .await.unwrap();
+            let result = timeout(Duration::from_secs(20), worker.read()).await.unwrap().unwrap();
+            assert_eq!(result["requestId"], id);
+            assert_eq!(result["type"], expected_type);
+            if expected_type == "models" {
+                assert_eq!(result["models"][0]["id"], "fixture-model");
+            } else {
+                assert!(result["error"].as_str().unwrap().contains("HTTP 404"));
+                assert!(!result.to_string().contains("fixture-only-key"));
+            }
+            assert_eq!(worker._child.id(), pid);
+        }
+        server.abort();
+        worker.write(&json!({"type":"inspect", "requestId":"after-discovery"})).await.unwrap();
+        let result = timeout(Duration::from_secs(20), worker.read()).await.unwrap().unwrap();
+        assert_eq!(result["type"], "models");
+        assert_eq!(result["requestId"], "after-discovery");
     }
 
     #[test]
