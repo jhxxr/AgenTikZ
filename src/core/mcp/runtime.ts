@@ -314,12 +314,19 @@ export function ensureMcpRuntime(): Promise<void> {
             } : message) } : s) }));
       };
       update('running');
+      useMcpStore.setState({ sessionStatus: `正在执行项目工具：${event.toolName}…` });
       const result = await executeMcpTool(event);
       try {
         await invoke('mcp_tool_result', { requestId: event.requestId, toolRequestId: event.toolRequestId, result });
         const failed = !!(result && typeof result === 'object' && 'error' in result);
+        const elapsedMs = Math.round(performance.now() - started);
         update(failed ? 'failed' : 'completed');
-        useMcpStore.setState({ lastBuiltinCall: `${event.toolName} · ${failed ? '失败' : '成功'} · ${Math.round(performance.now() - started)} ms` });
+        useMcpStore.setState({
+          lastBuiltinCall: `${event.toolName} · ${failed ? '失败' : '成功'} · ${elapsedMs} ms`,
+          sessionStatus: failed
+            ? `项目工具 ${event.toolName} 返回提示（${elapsedMs} ms），等待模型调整…`
+            : `已完成项目工具：${event.toolName}（${elapsedMs} ms），等待模型继续响应…`,
+        });
       } catch { update('failed'); }
     });
   })().catch((error) => { listening = undefined; throw error; });

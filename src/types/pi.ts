@@ -20,6 +20,25 @@ export interface PiChannel {
   models: PiChannelModel[];
 }
 
+export type PiThinkingLevel = 'auto' | 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+export const PI_THINKING_LEVELS: Array<{ id: PiThinkingLevel; name: string; shortName: string }> = [
+  { id: 'auto', name: '默认（不传参数，由模型/网关决定）', shortName: '思考：默认(不传)' },
+  { id: 'off', name: '关闭思考 (off)', shortName: '思考：关闭' },
+  { id: 'minimal', name: '极低 (minimal)', shortName: '思考：极低' },
+  { id: 'low', name: '低 (low)', shortName: '思考：低' },
+  { id: 'medium', name: '中 (medium)', shortName: '思考：中' },
+  { id: 'high', name: '高 (high)', shortName: '思考：高' },
+  { id: 'xhigh', name: '超高 (xhigh)', shortName: '思考：超高' },
+  { id: 'max', name: '最大 (max)', shortName: '思考：最大' },
+];
+
+export function sanitizePiThinkingLevel(value: unknown): PiThinkingLevel {
+  return typeof value === 'string' && PI_THINKING_LEVELS.some((item) => item.id === value)
+    ? (value as PiThinkingLevel)
+    : 'auto';
+}
+
 export const PI_APIS: Array<{ id: PiApi; name: string }> = [
   { id: 'openai-completions', name: 'OpenAI 兼容 · Chat Completions' },
   { id: 'openai-responses', name: 'OpenAI 兼容 · Responses' },
@@ -87,10 +106,16 @@ export function sanitizePiChannels(value: unknown): PiChannel[] {
       if (!model || typeof model.id !== 'string' || !model.id.trim() || model.id.length > 256 || modelIds.has(model.id.trim())) return [];
       const id = model.id.trim();
       modelIds.add(id);
-      const contextWindow = Number.isInteger(model.contextWindow) && model.contextWindow! >= 1024 && model.contextWindow! <= 10000000 ? model.contextWindow! : DEFAULT_PI_CONTEXT_WINDOW;
-      const maxTokens = Number.isInteger(model.maxTokens) && model.maxTokens! >= 1 ? Math.min(model.maxTokens!, contextWindow) : Math.min(DEFAULT_PI_MAX_TOKENS, contextWindow);
+      const isLegacyDefaultCap = model.contextWindow === 32768 && model.maxTokens === 4096;
+      const contextWindow = !isLegacyDefaultCap && Number.isInteger(model.contextWindow) && model.contextWindow! >= 1024 && model.contextWindow! <= 10000000
+        ? model.contextWindow!
+        : DEFAULT_PI_CONTEXT_WINDOW;
+      const maxTokens = !isLegacyDefaultCap && Number.isInteger(model.maxTokens) && model.maxTokens! >= 1
+        ? Math.min(model.maxTokens!, contextWindow)
+        : Math.min(DEFAULT_PI_MAX_TOKENS, contextWindow);
       return [{ id, name: typeof model.name === 'string' ? model.name.slice(0, 256) : id,
-        reasoning: model.reasoning === true, supportsImages: model.supportsImages === true, contextWindow, maxTokens }];
+        reasoning: model.reasoning === true || (isLegacyDefaultCap && inferPiModelReasoning(id)),
+        supportsImages: model.supportsImages === true, contextWindow, maxTokens }];
     });
     return [{ id: item.id, name: typeof item.name === 'string' ? item.name.slice(0, 100) : item.id,
       provider: typeof item.provider === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(item.provider) ? item.provider : 'openai',

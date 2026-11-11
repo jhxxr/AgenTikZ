@@ -24,6 +24,7 @@ pub fn run() {
             acp::sys_probe_environment,
             pi::pi_probe,
             pi::pi_fetch_models,
+            pi::pi_test_channel,
             pi::pi_send_prompt,
             pi::pi_cancel_prompt,
             pi::pi_reset_runtime,

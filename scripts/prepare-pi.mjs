@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const [major, minor] = process.versions.node.split('.').map(Number);
-if (major < 22 || (major === 22 && minor < 19)) throw new Error('Pi requires Node.js >= 22.19');
+if (major < 20 || (major === 20 && minor < 12)) throw new Error('Pi requires Node.js >= 20.12');
 const source = path.join(root, 'runtime/pi');
 const output = path.join(root, 'src-tauri/pi-runtime');
 const files = ['package.json', 'package-lock.json', 'worker.mjs', 'engine.mjs', 'channels.mjs'];
@@ -21,6 +21,41 @@ try {
     files.every((file) => fs.readFileSync(path.join(source, file)).equals(fs.readFileSync(path.join(output, file)))) &&
     JSON.parse(fs.readFileSync(path.join(output, 'node_modules/@earendil-works/pi-coding-agent/package.json'))).version === '1.5.0';
 } catch {}
+
+function pruneStageNodeModules(stageRoot) {
+  const nm = path.join(stageRoot, 'node_modules');
+  const explicitDirs = [
+    path.join(nm, '@types'),
+    path.join(nm, '@earendil-works/pi-coding-agent/dist/bundle'),
+    path.join(nm, '@earendil-works/pi-coding-agent/examples'),
+    path.join(nm, '@earendil-works/pi-tui/native'),
+  ];
+  for (const target of explicitDirs) {
+    fs.rmSync(target, { recursive: true, force: true });
+  }
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === 'dist-types') {
+          fs.rmSync(full, { recursive: true, force: true });
+        } else {
+          walk(full);
+        }
+      } else if (
+        entry.name.endsWith('.d.ts') ||
+        entry.name.endsWith('.d.mts') ||
+        entry.name.endsWith('.d.cts') ||
+        entry.name.endsWith('.map') ||
+        entry.name.endsWith('.tsbuildinfo') ||
+        (/\.md$/i.test(entry.name) && !/^(?:license|notice|copying)/i.test(entry.name))
+      ) {
+        fs.rmSync(full, { force: true });
+      }
+    }
+  };
+  walk(nm);
+}
 
 // Verify the relocated SDK can import and discover its catalog without credentials or a model call.
 async function verify(directory) {
@@ -46,7 +81,9 @@ async function verify(directory) {
           if (record.type === 'models' && record.requestId === 'stage' && record.models.length > 0) {
             clearTimeout(timer); resolve();
           }
-          if (record.type === 'error') fail(new Error('Pi model catalog unavailable'));
+          if (record.type === 'error' || record.type === 'startup_error') {
+            fail(new Error(`Pi model catalog unavailable (${record.error || record.code || 'unknown'})`));
+          }
         }
       });
     });
@@ -63,9 +100,9 @@ if (!cached) {
   const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
   if (process.platform === 'win32') {
     // npm.cmd needs cmd.exe; no filesystem operations are delegated to this shell.
-    execFileSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'npm ci --ignore-scripts --no-audit --no-fund'],
+    execFileSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'npm ci --ignore-scripts --engine-strict=false --no-audit --no-fund'],
       { cwd: source, stdio: 'inherit', windowsHide: true });
-  } else execFileSync(npm, ['ci', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: source, stdio: 'inherit' });
+  } else execFileSync(npm, ['ci', '--ignore-scripts', '--engine-strict=false', '--no-audit', '--no-fund'], { cwd: source, stdio: 'inherit' });
   const stage = fs.mkdtempSync(path.join(root, 'src-tauri/.pi-runtime-build-'));
   // All recursive removals are constrained to these explicit build-only paths.
   const remove = (target) => {
@@ -77,6 +114,7 @@ if (!cached) {
   try {
     for (const file of files) fs.copyFileSync(path.join(source, file), path.join(stage, file));
     fs.cpSync(path.join(source, 'node_modules'), path.join(stage, 'node_modules'), { recursive: true, dereference: true });
+    pruneStageNodeModules(stage);
     await verify(stage);
     fs.writeFileSync(path.join(stage, 'manifest.json'), JSON.stringify({ version: '1.5.0', fingerprint: stamp }, null, 2));
     // The old working runtime is retained until the new runtime has passed its smoke test.

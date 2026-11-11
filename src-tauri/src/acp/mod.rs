@@ -263,6 +263,40 @@ fn user_home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+fn parse_version_key(name: &str) -> (u32, u32, u32, String) {
+    let trimmed = name.trim_start_matches('v');
+    let mut parts = trimmed.split('.');
+    let major = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let minor = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let patch = parts
+        .next()
+        .and_then(|s| s.split(['-', '+']).next())
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    (major, minor, patch, name.to_string())
+}
+
+fn collect_versioned_bin_dirs(parent: &Path, sub_bin: &str) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return Vec::new();
+    };
+    let mut versioned: Vec<((u32, u32, u32, String), PathBuf)> = entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|ft| ft.is_dir()))
+        .map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let path = if sub_bin.is_empty() {
+                entry.path()
+            } else {
+                entry.path().join(sub_bin)
+            };
+            (parse_version_key(&name), path)
+        })
+        .collect();
+    versioned.sort_by(|a, b| b.0.cmp(&a.0));
+    versioned.into_iter().map(|(_, path)| path).collect()
+}
+
 /// Extra directories GUI apps often miss when launched outside a login shell.
 fn extra_path_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
@@ -270,19 +304,82 @@ fn extra_path_dirs() -> Vec<PathBuf> {
         for rel in HOME_BIN_DIRS {
             dirs.push(home.join(rel));
         }
+        dirs.push(home.join(".asdf").join("shims"));
+        dirs.push(home.join(".local").join("share").join("mise").join("shims"));
+        dirs.extend(collect_versioned_bin_dirs(
+            &home.join(".nvm").join("versions").join("node"),
+            "bin",
+        ));
+        dirs.extend(collect_versioned_bin_dirs(
+            &home.join(".local").join("share").join("fnm").join("node-versions"),
+            "installation/bin",
+        ));
+        dirs.extend(collect_versioned_bin_dirs(
+            &home.join(".fnm").join("node-versions"),
+            "installation/bin",
+        ));
+        dirs.extend(collect_versioned_bin_dirs(
+            &home
+                .join("Library")
+                .join("Application Support")
+                .join("fnm")
+                .join("node-versions"),
+            "installation/bin",
+        ));
     }
     #[cfg(windows)]
     {
+        if let Ok(nvm_symlink) = std::env::var("NVM_SYMLINK") {
+            if !nvm_symlink.trim().is_empty() {
+                dirs.push(PathBuf::from(nvm_symlink));
+            }
+        }
+        if let Ok(volta_home) = std::env::var("VOLTA_HOME") {
+            if !volta_home.trim().is_empty() {
+                dirs.push(PathBuf::from(volta_home).join("bin"));
+            }
+        }
+        for key in ["ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"] {
+            if let Ok(pf) = std::env::var(key) {
+                if !pf.trim().is_empty() {
+                    let base = PathBuf::from(pf);
+                    dirs.push(base.join("nodejs"));
+                    dirs.push(base.join("Volta"));
+                }
+            }
+        }
+        dirs.push(PathBuf::from(r"C:\Program Files\nodejs"));
         if let Ok(appdata) = std::env::var("APPDATA") {
-            dirs.push(PathBuf::from(appdata).join("npm"));
+            let appdata = PathBuf::from(appdata);
+            dirs.push(appdata.join("npm"));
+            dirs.extend(collect_versioned_bin_dirs(&appdata.join("nvm"), ""));
+            dirs.extend(collect_versioned_bin_dirs(
+                &appdata.join("fnm").join("node-versions"),
+                "installation",
+            ));
+        }
+        if let Ok(nvm_home) = std::env::var("NVM_HOME") {
+            if !nvm_home.trim().is_empty() {
+                dirs.extend(collect_versioned_bin_dirs(&PathBuf::from(nvm_home), ""));
+            }
         }
         if let Ok(local) = std::env::var("LOCALAPPDATA") {
             let local = PathBuf::from(local);
+            dirs.push(local.join("Programs").join("nodejs"));
+            dirs.push(local.join("Volta").join("bin"));
             dirs.push(local.join("pnpm"));
+            dirs.push(local.join("mise").join("shims"));
             dirs.push(local.join("Microsoft").join("WinGet").join("Links"));
+            dirs.extend(collect_versioned_bin_dirs(&local.join("nvm"), ""));
+            dirs.extend(collect_versioned_bin_dirs(
+                &local.join("fnm").join("node-versions"),
+                "installation",
+            ));
         }
         if let Some(home) = user_home_dir() {
             dirs.push(home.join("scoop").join("shims"));
+            dirs.push(home.join("scoop").join("apps").join("nodejs").join("current"));
+            dirs.push(home.join("scoop").join("apps").join("nodejs-lts").join("current"));
         }
         dirs.push(PathBuf::from(r"C:\ProgramData\chocolatey\bin"));
     }
@@ -296,7 +393,7 @@ fn extra_path_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-fn merged_path_entries(explicit_path: Option<&str>) -> Vec<PathBuf> {
+pub(crate) fn merged_path_entries(explicit_path: Option<&str>) -> Vec<PathBuf> {
     let mut entries = Vec::new();
     if let Some(explicit) = explicit_path {
         for part in std::env::split_paths(explicit) {
@@ -355,9 +452,7 @@ fn is_executable(path: &Path) -> bool {
     }
 }
 
-/// Keep the resolved extension: Rust can launch an explicit .cmd/.bat path,
-/// whereas CreateProcess's extensionless lookup does not honor PATHEXT.
-fn find_executable_in_paths(command: &Path, search_paths: &[PathBuf]) -> Option<PathBuf> {
+pub(crate) fn find_all_executables_in_paths(command: &Path, search_paths: &[PathBuf]) -> Vec<PathBuf> {
     let extensions: Vec<String> = if cfg!(windows) && command.extension().is_none() {
         vec![".exe".into(), ".com".into(), ".cmd".into(), ".bat".into()]
     } else {
@@ -368,22 +463,35 @@ fn find_executable_in_paths(command: &Path, search_paths: &[PathBuf]) -> Option<
     } else {
         search_paths.to_vec()
     };
-    roots.into_iter().find_map(|root| {
-        extensions.iter().find_map(|extension| {
+    let mut matches = Vec::new();
+    for root in roots {
+        for extension in &extensions {
             let mut name = command.as_os_str().to_os_string();
             name.push(extension);
             let path = root.join(name);
             // Do not canonicalize to a Windows \\?\ path: cmd.exe rejects it.
             if !is_executable(&path) {
-                return None;
+                continue;
             }
-            if path.is_absolute() {
-                Some(path)
+            let resolved = if path.is_absolute() {
+                path
+            } else if let Ok(cwd) = std::env::current_dir() {
+                cwd.join(path)
             } else {
-                std::env::current_dir().ok().map(|cwd| cwd.join(path))
+                continue;
+            };
+            if !matches.contains(&resolved) {
+                matches.push(resolved);
             }
-        })
-    })
+        }
+    }
+    matches
+}
+
+/// Keep the resolved extension: Rust can launch an explicit .cmd/.bat path,
+/// whereas CreateProcess's extensionless lookup does not honor PATHEXT.
+fn find_executable_in_paths(command: &Path, search_paths: &[PathBuf]) -> Option<PathBuf> {
+    find_all_executables_in_paths(command, search_paths).into_iter().next()
 }
 
 fn host_requirement(agent_id: &str) -> Option<(&'static str, &'static str)> {
@@ -632,6 +740,8 @@ fn apply_runtime_env_overrides(
         .collect();
     let explicit_proxy = proxy_url.map(str::trim).filter(|s| !s.is_empty());
     if let Some(proxy) = explicit_proxy {
+        let normalized_raw = crate::pi::normalize_http_proxy_for_node(proxy)
+            .unwrap_or_else(|| proxy.to_string());
         for key in [
             "HTTP_PROXY",
             "HTTPS_PROXY",
@@ -640,10 +750,22 @@ fn apply_runtime_env_overrides(
             "https_proxy",
             "all_proxy",
         ] {
-            env_map.insert(key.into(), proxy.into());
+            env_map.insert(key.into(), normalized_raw.clone());
+        }
+    } else {
+        for key in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
+            let raw = env_map
+                .get(key)
+                .cloned()
+                .or_else(|| std::env::var(key).ok());
+            if let Some(value) = raw {
+                if let Some(normalized) = crate::pi::normalize_http_proxy_for_node(&value) {
+                    env_map.insert(key.into(), normalized);
+                }
+            }
         }
     }
-    let has_proxy = explicit_proxy.is_some()
+    let has_any_proxy = explicit_proxy.is_some()
         || [
             "HTTP_PROXY",
             "HTTPS_PROXY",
@@ -657,7 +779,17 @@ fn apply_runtime_env_overrides(
             env_map.get(*key).is_some_and(|v| !v.is_empty())
                 || std::env::var_os(key).is_some_and(|v| !v.is_empty())
         });
-    if has_proxy {
+    let has_valid_node_http_proxy = ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]
+        .iter()
+        .any(|key| {
+            env_map
+                .get(*key)
+                .cloned()
+                .or_else(|| std::env::var(key).ok())
+                .and_then(|v| crate::pi::normalize_http_proxy_for_node(&v))
+                .is_some()
+        });
+    if has_any_proxy {
         let base_no_proxy = env_map
             .get("NO_PROXY")
             .cloned()
@@ -667,7 +799,9 @@ fn apply_runtime_env_overrides(
         let merged = crate::pi::merge_loopback_no_proxy(base_no_proxy.as_deref());
         env_map.insert("NO_PROXY".into(), merged.clone());
         env_map.insert("no_proxy".into(), merged);
-        env_map.insert("NODE_USE_ENV_PROXY".into(), "1".into());
+        if has_valid_node_http_proxy {
+            env_map.insert("NODE_USE_ENV_PROXY".into(), "1".into());
+        }
     }
     if let Some(ua) = user_agent.map(str::trim).filter(|s| !s.is_empty()) {
         env_map.insert("USER_AGENT".into(), ua.into());
@@ -828,15 +962,25 @@ pub async fn acp_test_agent(
                 _ => agent_id.clone(),
             };
             let model_state = model_info.lock().unwrap().clone();
+            let thought_note = if model_state.thought_levels.is_empty() {
+                String::new()
+            } else {
+                format!(" · {} 个思考强度档位", model_state.thought_levels.len())
+            };
             AcpHandshakeResult {
                 ok: true,
                 agent_name,
                 agent_version,
                 protocol_version: Some(protocol_version),
                 resolved_source,
-                message: format!("ACP 连接成功 · {label} · {}",
-                    if model_state.models.is_empty() { "Agent 未提供模型选项".to_string() }
-                    else { format!("已读取 {} 个模型", model_state.models.len()) }),
+                message: format!(
+                    "ACP 连接成功 · {label} · {}{thought_note}",
+                    if model_state.models.is_empty() {
+                        "Agent 未提供模型选项".to_string()
+                    } else {
+                        format!("已读取 {} 个模型", model_state.models.len())
+                    }
+                ),
                 model_state,
             }
         }
@@ -958,6 +1102,7 @@ pub async fn acp_send_prompt(
     proxy_url: Option<String>,
     user_agent: Option<String>,
     model_id: Option<String>,
+    thought_level: Option<String>,
     response_language: Option<String>,
     personal_prompt: Option<String>,
     template_references: Option<String>,
@@ -1095,6 +1240,11 @@ pub async fn acp_send_prompt(
             agent_client_protocol::on_receive_request!(),
         )
         .connect_with(agent, |connection: ConnectionTo<_>| async move {
+            let _ = session_app.emit_to(
+                &session_window,
+                "acp:stream",
+                AcpStreamEvent::text(&session_request_id, "mcp_status", "正在启动本地 ACP 进程并进行协议握手…"),
+            );
             let init = timeout(Duration::from_secs(30), connection
                 .send_request(InitializeRequest::new(ProtocolVersion::V1)
                     .client_capabilities(access::client_capabilities(full_access))).block_task()).await
@@ -1114,6 +1264,11 @@ pub async fn acp_send_prompt(
                 agent_client_protocol::v1::schema::McpServer::Http(server) => server.name.clone(),
                 _ => "MCP".into(),
             }).collect();
+            let _ = session_app.emit_to(
+                &session_window,
+                "acp:stream",
+                AcpStreamEvent::text(&session_request_id, "mcp_status", "ACP 协议握手成功，正在创建项目会话并挂载工具…"),
+            );
             let session = timeout(Duration::from_secs(30), connection
                 .send_request(NewSessionRequest::new(cwd).mcp_servers(mcp_servers)).block_task()).await
                 .map_err(|_| protocol_error("ACP session creation timed out after 30 seconds"))??;
@@ -1128,7 +1283,13 @@ pub async fn acp_send_prompt(
                     .send_request(SetSessionModeRequest::new(session.session_id.clone(), mode_id)).block_task()).await
                     .map_err(|_| protocol_error("ACP access mode selection timed out after 30 seconds"))??;
             }
-            let model_state = models::apply_selection(&connection, &session, model_id.as_deref()).await?;
+            let model_state = models::apply_selections(
+                &connection,
+                &session,
+                model_id.as_deref(),
+                thought_level.as_deref(),
+            )
+            .await?;
             let _ = session_app.emit_to(&session_window, "acp:stream", AcpStreamEvent::text(
                 &session_request_id, "model_state", serde_json::to_string(&model_state).unwrap_or_default()));
             let mut content = vec![ContentBlock::Text(TextContent::new(structured_prompt))];
@@ -1141,6 +1302,11 @@ pub async fn acp_send_prompt(
                 content.push(ContentBlock::Text(TextContent::new(format!("Reference image name (data): {}", image.name))));
                 content.push(ContentBlock::Image(ImageContent::new(image.data, image.mime_type)));
             }
+            let _ = session_app.emit_to(
+                &session_window,
+                "acp:stream",
+                AcpStreamEvent::text(&session_request_id, "mcp_status", "会话已就绪，已发送提示词，正在等待 Agent 思考与响应…"),
+            );
             let response = timeout(Duration::from_secs(600), connection
                 .send_request(PromptRequest::new(session.session_id, content)).block_task()).await
                 .map_err(|_| protocol_error("ACP prompt timed out after 600 seconds"))??;

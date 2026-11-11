@@ -4,7 +4,8 @@ import { createServer } from 'node:http';
 import { once } from 'node:events';
 import {
   DEFAULT_CHANNEL_CONTEXT_WINDOW, DEFAULT_CHANNEL_MAX_TOKENS,
-  escapeConfigLiteral, fetchChannelModels, normalizeChannelBaseUrl, registerChannel, validateChannel, validateUserAgent,
+  escapeConfigLiteral, fetchChannelModels, normalizeChannelBaseUrl, normalizeHttpProxyUrl,
+  registerChannel, sanitizeProxyEnvironment, testChannelConnection, validateChannel, validateUserAgent,
 } from '../channels.mjs';
 import { sessionKey } from '../engine.mjs';
 
@@ -116,20 +117,89 @@ test('normalizes bare gateway origins and pasted endpoint suffixes per protocol'
   assert.equal(normalizeChannelBaseUrl('https://example.test/missing/v1', 'openai-completions'), 'https://example.test/missing/v1');
 });
 
-test('validates and escapes User-Agent literals and sets DeepSeek reasoning compat', () => {
+test('validates and escapes User-Agent literals and honors selectable thinking levels across gateways', () => {
   assert.equal(escapeConfigLiteral('!whoami $HOME'), '$!whoami $$HOME');
   assert.throws(() => validateUserAgent('bad\r\nheader: injected'), /Invalid User-Agent/);
   let captured;
   const runtime = { registerProvider: (id, config) => { captured = { id, config }; } };
   const deepseekChannel = channel({
     baseUrl: 'https://share.example.test/',
-    models: [{ id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash', contextWindow: 128000, maxTokens: 32768, reasoning: false, supportsImages: false }],
+    models: [{ id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash', contextWindow: 128000, maxTokens: 32768, reasoning: true, supportsImages: false }],
   });
-  registerChannel(runtime, deepseekChannel, 'deepseek-v4.1-flash', '!ua $ENV');
+  // Default 'auto' omits outgoing thinking parameters so strict gateways never 400, while replaying reasoning_content if returned.
+  registerChannel(runtime, deepseekChannel, 'deepseek-v4.1-flash', '!ua $ENV', 'auto');
   assert.equal(captured.config.baseUrl, 'https://share.example.test/v1');
   assert.equal(captured.config.headers['User-Agent'], '$!ua $$ENV');
-  assert.equal(captured.config.models[0].reasoning, true);
+  assert.equal(captured.config.models[0].reasoning, false);
   assert.equal(captured.config.models[0].compat.requiresReasoningContentOnAssistantMessages, true);
+  assert.equal(captured.config.models[0].compat.supportsReasoningEffort, false);
+
+  // Explicit 'xhigh' enables reasoning and preserves xhigh/max without clamping to high.
+  registerChannel(runtime, deepseekChannel, 'deepseek-v4.1-flash', undefined, 'xhigh');
+  assert.equal(captured.config.models[0].reasoning, true);
+  assert.deepEqual(captured.config.models[0].thinkingLevelMap, { xhigh: 'xhigh', max: 'max' });
+  assert.equal(captured.config.models[0].compat.supportsReasoningEffort, undefined);
+
+  // Official api.deepseek.com uses thinkingFormat: 'deepseek' without reasoning_effort.
+  const officialDeepSeek = channel({
+    baseUrl: 'https://api.deepseek.com',
+    models: [{ id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', contextWindow: 128000, maxTokens: 32768, reasoning: true, supportsImages: false }],
+  });
+  registerChannel(runtime, officialDeepSeek, 'deepseek-reasoner', undefined, 'high');
+  assert.equal(captured.config.models[0].reasoning, true);
   assert.equal(captured.config.models[0].compat.thinkingFormat, 'deepseek');
   assert.equal(captured.config.models[0].compat.supportsReasoningEffort, false);
+});
+
+test('normalizes bare Windows proxy URLs, strips socks5 ambient proxies, and drops dead ambient loopback proxies', async () => {
+  assert.equal(normalizeHttpProxyUrl('127.0.0.1:7890'), 'http://127.0.0.1:7890');
+  assert.equal(normalizeHttpProxyUrl('http://127.0.0.1:7890/'), 'http://127.0.0.1:7890');
+  assert.equal(normalizeHttpProxyUrl('socks5://127.0.0.1:10808'), undefined);
+
+  const liveEnv = { HTTP_PROXY: '127.0.0.1:7890', ALL_PROXY: 'socks5://127.0.0.1:10808' };
+  await sanitizeProxyEnvironment(liveEnv, { probeFn: async () => true });
+  assert.equal(liveEnv.HTTP_PROXY, 'http://127.0.0.1:7890');
+  assert.equal(liveEnv.HTTPS_PROXY, 'http://127.0.0.1:7890');
+  assert.equal(liveEnv.ALL_PROXY, undefined);
+  assert.match(liveEnv.NO_PROXY, /127\.0\.0\.1/);
+
+  const deadAmbientEnv = { HTTP_PROXY: '127.0.0.1:7890' };
+  await sanitizeProxyEnvironment(deadAmbientEnv, { probeFn: async () => false });
+  assert.equal(deadAmbientEnv.HTTP_PROXY, undefined);
+  assert.equal(deadAmbientEnv.HTTPS_PROXY, undefined);
+
+  const explicitClosedEnv = { AGEN_PI_PROXY_MODE: 'explicit', HTTP_PROXY: 'http://127.0.0.1:7890' };
+  await sanitizeProxyEnvironment(explicitClosedEnv, { probeFn: async () => false });
+  assert.equal(explicitClosedEnv.HTTP_PROXY, 'http://127.0.0.1:7890');
+});
+
+test('testChannelConnection validates live completion endpoints and thinkingLevel payloads without leaking secret error bodies', async () => {
+  let seen;
+  const ok = await testChannelConnection(channel({ baseUrl: 'https://share.example.test/' }), 'test-key', 'deepseek-v4.1-flash', async (url, init) => {
+    seen = { url: String(url), init, body: JSON.parse(init.body) };
+    return json({ id: 'chatcmpl-1', choices: [{ message: { role: 'assistant', content: 'pong' } }] });
+  });
+  assert.equal(seen.url, 'https://share.example.test/v1/chat/completions');
+  assert.equal(seen.init.headers.authorization, 'Bearer test-key');
+  assert.equal(seen.body.reasoning_effort, undefined);
+  assert.equal(seen.body.thinking, undefined);
+  assert.equal(ok.ok, true);
+  assert.equal(ok.model, 'deepseek-v4.1-flash');
+  assert.equal(ok.thinkingLevel, 'auto');
+
+  await testChannelConnection(channel({ baseUrl: 'https://share.example.test/' }), 'test-key', 'deepseek-v4.1-flash', async (url, init) => {
+    seen = { url: String(url), body: JSON.parse(init.body) };
+    return json({ id: 'chatcmpl-2', choices: [{ message: { role: 'assistant', content: 'pong' } }] });
+  }, undefined, 'xhigh');
+  assert.equal(seen.body.reasoning_effort, 'xhigh');
+  assert.equal(seen.body.max_tokens, 32);
+
+  await assert.rejects(
+    testChannelConnection(channel(), 'SECRET-KEY', 'model-a', async () => json({ error: { message: 'SECRET-KEY', type: 'invalid_api_key' } }, 401)),
+    (err) => err.message.includes('HTTP 401') && !err.message.includes('SECRET-KEY'),
+  );
+  await assert.rejects(
+    testChannelConnection(channel(), 'SECRET-KEY', 'model-a', async () => new Response('<!DOCTYPE html><html>login</html>', { status: 200 })),
+    /非 JSON/,
+  );
 });

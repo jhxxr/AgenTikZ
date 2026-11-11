@@ -19,7 +19,7 @@ export const usePiStore = create<PiState>((set) => ({
     probeInFlight = (async (): Promise<PiProbe> => {
       try {
         if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
-          throw new Error('内置 Pi 需要 Tauri 桌面端和 Node.js 22.19+。');
+          throw new Error('内置 Pi 需要 Tauri 桌面端和 Node.js 20.12+。');
         }
         const { invoke } = await import('@tauri-apps/api/core');
         const result = await invoke<PiProbe>('pi_probe');

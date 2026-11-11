@@ -188,7 +188,7 @@ describe('real ACP frontend contract', () => {
     bridge.invoke.mockResolvedValue({ runtimeStarted: true, reply: 'Pi response', resumed: true });
     await store.getState().sendPromptToAgent('Update the caption');
     expect(bridge.invoke).toHaveBeenCalledWith('pi_send_prompt', { request: expect.objectContaining({
-      conversationId: 'test-session', provider: 'anthropic', model: 'fixture', thinkingLevel: 'medium',
+      conversationId: 'test-session', provider: 'anthropic', model: 'fixture', thinkingLevel: 'auto',
       target: expect.objectContaining({ projectId: bridge.projectDir }),
     }) });
     const args = bridge.invoke.mock.calls[0][1].request;
@@ -196,6 +196,15 @@ describe('real ACP frontend contract', () => {
     expect(args).not.toHaveProperty('fullAccess');
     expect(args.prompt).toContain('Unsaved manuscript');
     expect(store.getState().sessions[0].messages.at(-1)?.content).toBe('Pi response');
+
+    useSettingsStore.getState().updateSettings({ piThinkingLevel: 'xhigh', acpThoughtSelections: { 'codex-cli': 'high' } });
+    await store.getState().sendPromptToAgent('Deep check');
+    expect(bridge.invoke.mock.calls.at(-1)![1].request.thinkingLevel).toBe('xhigh');
+
+    store.getState().setActiveAgentId('codex-cli');
+    bridge.invoke.mockResolvedValue({ usedNativeCli: true, reply: 'Codex response' });
+    await store.getState().sendPromptToAgent('Codex check');
+    expect(bridge.invoke.mock.calls.at(-1)![1]).toMatchObject({ agentId: 'codex-cli', thoughtLevel: 'high' });
   });
 
   it('cancels the running Pi backend even after the provider selector changes', async () => {

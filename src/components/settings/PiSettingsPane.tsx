@@ -3,7 +3,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { resolveEffectiveUserAgent, useSettingsStore } from '../../store/useSettingsStore';
 import { usePiStore } from '../../store/usePiStore';
 import { useAgentStore } from '../../store/useAgentStore';
-import { PI_APIS, newPiModel, normalizePiChannelBaseUrl, type PiApi, type PiChannel, type PiChannelModel } from '../../types/pi';
+import { PI_APIS, PI_THINKING_LEVELS, newPiModel, normalizePiChannelBaseUrl, type PiApi, type PiChannel, type PiChannelModel, type PiThinkingLevel } from '../../types/pi';
 
 const PRESETS = [
   { provider: 'openai', name: 'OpenAI / 兼容渠道', api: 'openai-completions', baseUrl: 'https://api.openai.com/v1' },
@@ -35,6 +35,7 @@ export const PiSettingsPane: React.FC = () => {
   const [hasKey, setHasKey] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [urlDraft, setUrlDraft] = useState('');
   const [preset, setPreset] = useState(() => Math.max(0,
     PRESETS.findIndex((item) => item.provider === useSettingsStore.getState().piProvider)));
@@ -42,40 +43,50 @@ export const PiSettingsPane: React.FC = () => {
   const [discovered, setDiscovered] = useState<PiChannelModel[]>([]);
   const [checked, setChecked] = useState<string[]>([]);
   const [filter, setFilter] = useState('');
-  const channel = piChannels.find((item) => item.id === piActiveChannelId);
-  const activeId = useRef(piActiveChannelId);
-  activeId.current = piActiveChannelId;
+  const channel = piChannels.find((item) => item.id === piActiveChannelId) ?? (!piActiveChannelId ? piChannels[0] : undefined);
+  const activeId = useRef(channel?.id ?? '');
+  activeId.current = channel?.id ?? '';
   const desktop = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
   const disabled = busy || isStreaming;
   useEffect(() => {
     let current = true;
-    setApiKey(''); setHasKey(null); setNotice(''); setDiscovered([]); setChecked([]); setManualId(''); setFilter('');
+    setApiKey(''); setHasKey(null); setNotice(''); setTestResult(null); setDiscovered([]); setChecked([]); setManualId(''); setFilter('');
     setUrlDraft(channel?.baseUrl ?? '');
     if (desktop && channel) void import('@tauri-apps/api/core').then(({ invoke }) =>
       invoke<boolean>('pi_has_api_key', { provider: channel.id }))
       .then((saved) => { if (current) setHasKey(saved); })
       .catch(() => { if (current) setNotice('系统凭据状态读取失败。'); });
     return () => { current = false; };
-  }, [piActiveChannelId, desktop]); // Only channel switches reset drafts and credential state.
+  }, [channel?.id, desktop]); // Only channel switches reset drafts and credential state.
 
   const patchChannel = (patch: Partial<PiChannel>) => {
     if (!channel) return;
     const state = useSettingsStore.getState();
     updateSettings({ piChannels: state.piChannels.map((item) => item.id === channel.id ? { ...item, ...patch } : item) });
   };
-  const addModels = (additions: PiChannelModel[]) => {
-    if (!channel) return;
-    const unique = new Map(channel.models.map((model) => [model.id, model]));
-    for (const model of additions) if (!unique.has(model.id)) unique.set(model.id, model);
-    const nextModelId = (piModel && unique.has(piModel)) ? piModel : (additions[0]?.id ?? [...unique.keys()][0] ?? '');
+  const addModels = (additions: PiChannelModel[], preferredModelId?: string): { channel: PiChannel; modelId: string } | null => {
+    if (!channel) return null;
     const state = useSettingsStore.getState();
+    const latest = state.piChannels.find((item) => item.id === channel.id) ?? channel;
+    const unique = new Map(latest.models.map((model) => [model.id, model]));
+    for (const model of additions) if (!unique.has(model.id)) unique.set(model.id, model);
+    const nextModelId = preferredModelId && unique.has(preferredModelId)
+      ? preferredModelId
+      : (state.piModel && unique.has(state.piModel))
+        ? state.piModel
+        : (additions[0]?.id ?? latest.defaultModelId ?? [...unique.keys()][0] ?? '');
+    const updatedChannel: PiChannel = {
+      ...latest,
+      models: [...unique.values()],
+      defaultModelId: nextModelId || undefined,
+    };
     updateSettings({
-      piChannels: state.piChannels.map((item) =>
-        item.id === channel.id ? { ...item, models: [...unique.values()], defaultModelId: nextModelId || undefined } : item
-      ),
+      piChannels: state.piChannels.map((item) => item.id === channel.id ? updatedChannel : item),
+      piActiveChannelId: channel.id,
       piProvider: channel.provider,
       piModel: nextModelId,
     });
+    return { channel: updatedChannel, modelId: nextModelId };
   };
   const addChannel = () => {
     const selected = PRESETS[preset];
@@ -89,11 +100,29 @@ export const PiSettingsPane: React.FC = () => {
     updateSettings({ piChannels: [...state.piChannels, item], piActiveChannelId: id,
       piProvider: selected.provider, piModel: item.models[0]?.id ?? '' });
   };
+  const commitUrlDraftIfValid = (): PiChannel | null => {
+    if (!channel) return null;
+    const normalized = tryNormalizeUrl(urlDraft, channel.api);
+    if (!normalized) return null;
+    const state = useSettingsStore.getState();
+    const latest = state.piChannels.find((item) => item.id === channel.id) ?? channel;
+    if (normalized !== latest.baseUrl || urlDraft !== normalized) {
+      const updated = { ...latest, baseUrl: normalized };
+      updateSettings({
+        piChannels: state.piChannels.map((item) => item.id === channel.id ? updated : item),
+        piActiveChannelId: channel.id,
+      });
+      setUrlDraft(normalized);
+      return updated;
+    }
+    return latest;
+  };
   const credential = async (remove: boolean) => {
     if (!channel) return;
     const id = channel.id;
-    setBusy(true); setNotice('');
+    setBusy(true); setNotice(''); setTestResult(null);
     try {
+      if (!remove) commitUrlDraftIfValid();
       const { invoke } = await import('@tauri-apps/api/core');
       await invoke(remove ? 'pi_delete_api_key' : 'pi_save_api_key', { provider: id, ...(remove ? {} : { apiKey: apiKey.trim() }) });
       if (activeId.current !== id) return;
@@ -109,12 +138,7 @@ export const PiSettingsPane: React.FC = () => {
       setNotice('请输入 HTTP(S) 基础 URL；不能包含用户名、密码、查询参数或片段。');
       return null;
     }
-    let effective = channel;
-    if (normalized !== channel.baseUrl || urlDraft !== normalized) {
-      patchChannel({ baseUrl: normalized });
-      setUrlDraft(normalized);
-      effective = { ...channel, baseUrl: normalized };
-    }
+    const effective = commitUrlDraftIfValid() ?? { ...channel, baseUrl: normalized };
     if (desktop && apiKey.trim()) {
       const { invoke } = await import('@tauri-apps/api/core');
       await invoke('pi_save_api_key', { provider: channel.id, apiKey: apiKey.trim() });
@@ -124,10 +148,40 @@ export const PiSettingsPane: React.FC = () => {
     }
     return effective;
   };
+  const commitPendingModelSelection = (baseChannel: PiChannel): { channel: PiChannel; modelId: string } => {
+    const typedId = manualId.trim();
+    if (typedId && typedId.length <= 256) {
+      const committed = addModels([newPiModel(typedId)], typedId);
+      setManualId('');
+      if (committed) return { channel: { ...committed.channel, baseUrl: baseChannel.baseUrl }, modelId: committed.modelId };
+    } else if (checked.length > 0) {
+      const additions = discovered.filter((model) => checked.includes(model.id));
+      if (additions.length > 0) {
+        const committed = addModels(additions, additions[0].id);
+        setChecked([]);
+        if (committed) return { channel: { ...committed.channel, baseUrl: baseChannel.baseUrl }, modelId: committed.modelId };
+      }
+    }
+    const state = useSettingsStore.getState();
+    const latest = state.piChannels.find((item) => item.id === baseChannel.id) ?? baseChannel;
+    const resolvedModelId = (state.piModel && latest.models.some((m) => m.id === state.piModel))
+      ? state.piModel
+      : (latest.defaultModelId && latest.models.some((m) => m.id === latest.defaultModelId))
+        ? latest.defaultModelId
+        : (latest.models[0]?.id ?? '');
+    if (resolvedModelId && (state.piModel !== resolvedModelId || state.piActiveChannelId !== latest.id)) {
+      updateSettings({
+        piActiveChannelId: latest.id,
+        piProvider: latest.provider,
+        piModel: resolvedModelId,
+      });
+    }
+    return { channel: { ...latest, baseUrl: baseChannel.baseUrl }, modelId: resolvedModelId };
+  };
   const discover = async () => {
     if (!channel) return;
     const id = channel.id;
-    setBusy(true); setNotice(''); setDiscovered([]); setChecked([]);
+    setBusy(true); setNotice(''); setTestResult(null); setDiscovered([]); setChecked([]);
     try {
       const effective = await commitDraftAndKey();
       if (!effective || activeId.current !== id) return;
@@ -141,13 +195,50 @@ export const PiSettingsPane: React.FC = () => {
       });
       if (activeId.current !== id) return;
       setDiscovered(result);
-      setNotice(`获取到 ${result.length} 个模型，勾选后添加。不支持列举模型的渠道可手动添加。`);
+      setNotice(`获取到 ${result.length} 个模型，可勾选添加或直接点击「选用」。不支持列举模型的渠道可手动添加。`);
     } catch (failure) { if (activeId.current === id) setNotice(String(failure)); }
     finally { setBusy(false); }
   };
+  const testConnection = async () => {
+    if (!channel) return;
+    const id = channel.id;
+    setBusy(true); setNotice(''); setTestResult(null);
+    try {
+      const effectiveBase = await commitDraftAndKey();
+      if (!effectiveBase || activeId.current !== id) return;
+      const { channel: effectiveChannel, modelId } = commitPendingModelSelection(effectiveBase);
+      if (!modelId) {
+        setTestResult({ ok: false, message: '请先选择或手动输入要测试的模型 ID（如 deepseek-v4.1-flash）。' });
+        return;
+      }
+      const { invoke } = await import('@tauri-apps/api/core');
+      const effectiveProxy = proxyEnabled && proxyUrl.trim() ? proxyUrl.trim() : undefined;
+      const effectiveUa = resolveEffectiveUserAgent(userAgentPreset, customUserAgent)?.trim() || undefined;
+      const res = await invoke<{ ok: boolean; message?: string; latencyMs?: number; model?: string }>('pi_test_channel', {
+        channel: effectiveChannel,
+        model: modelId,
+        thinkingLevel: useSettingsStore.getState().piThinkingLevel,
+        ...(effectiveProxy ? { proxyUrl: effectiveProxy } : {}),
+        ...(effectiveUa ? { userAgent: effectiveUa } : {}),
+      });
+      if (activeId.current !== id) return;
+      if (res.ok) {
+        useAgentStore.getState().setActiveAgentId('pi');
+        updateSettings({ defaultAgentId: 'pi', piActiveChannelId: effectiveChannel.id, piProvider: effectiveChannel.provider, piModel: modelId });
+      }
+      setTestResult({
+        ok: res.ok,
+        message: res.message || `网关连通性验证通过 · 模型 ${res.model || modelId}${res.latencyMs ? ` · 耗时 ${res.latencyMs} ms` : ''}`,
+      });
+    } catch (failure) {
+      if (activeId.current === id) setTestResult({ ok: false, message: String(failure) });
+    } finally {
+      setBusy(false);
+    }
+  };
   const removeChannel = async () => {
     if (!channel || !window.confirm(`删除渠道「${channel.name}」及其系统凭据？`)) return;
-    setBusy(true); setNotice('');
+    setBusy(true); setNotice(''); setTestResult(null);
     try {
       if (desktop) {
         const { invoke } = await import('@tauri-apps/api/core');
@@ -160,9 +251,13 @@ export const PiSettingsPane: React.FC = () => {
     } catch (failure) { setNotice(String(failure)); }
     finally { setBusy(false); }
   };
-  const selectedModel = channel?.models.find((model) => model.id === piModel);
+  const effectiveModelValue = (piModel && channel?.models.some((m) => m.id === piModel))
+    ? piModel
+    : (channel?.defaultModelId ?? channel?.models[0]?.id ?? '');
+  const selectedModel = channel?.models.find((model) => model.id === effectiveModelValue);
+  const hasPendingOrSelectedModel = Boolean(selectedModel || manualId.trim() || checked.length > 0);
   const updateModel = (patch: Partial<PiChannelModel>) => patchChannel({
-    models: channel!.models.map((model) => model.id === piModel ? { ...model, ...patch } : model),
+    models: channel!.models.map((model) => model.id === effectiveModelValue ? { ...model, ...patch } : model),
   });
   const normalizedDraft = channel ? tryNormalizeUrl(urlDraft, channel.api) : null;
   const urlSaved = Boolean(channel && normalizedDraft && normalizedDraft === channel.baseUrl);
@@ -208,20 +303,22 @@ export const PiSettingsPane: React.FC = () => {
               const renormalized = tryNormalizeUrl(urlDraft || channel.baseUrl, nextApi);
               patchChannel({ api: nextApi, ...(renormalized ? { baseUrl: renormalized } : {}) });
               if (renormalized) setUrlDraft(renormalized);
-              setDiscovered([]); setChecked([]);
+              setDiscovered([]); setChecked([]); setTestResult(null);
             }}>
             {PI_APIS.map((api) => <option value={api.id} key={api.id}>{api.name}</option>)}</select></label>
         </div>
         <div className="flex items-end gap-2">
           <label className="flex-1 text-xs">API 基础 URL（自动按协议补全或精简 /v1）
-            <input aria-label="Pi API URL" type="url" value={urlDraft} disabled={disabled} className={inputClass} onChange={(event) => setUrlDraft(event.target.value)} /></label>
+            <input aria-label="Pi API URL" type="url" value={urlDraft} disabled={disabled} className={inputClass}
+              onChange={(event) => setUrlDraft(event.target.value)}
+              onBlur={() => { commitUrlDraftIfValid(); }} /></label>
           <button type="button" disabled={disabled || urlSaved} className={buttonClass} onClick={() => {
             const normalized = tryNormalizeUrl(urlDraft, channel.api);
             if (!normalized) {
               setNotice('请输入 HTTP(S) 基础 URL；不能包含用户名、密码、查询参数或片段。');
               return;
             }
-            patchChannel({ baseUrl: normalized }); setUrlDraft(normalized); setDiscovered([]); setChecked([]);
+            patchChannel({ baseUrl: normalized }); setUrlDraft(normalized); setDiscovered([]); setChecked([]); setTestResult(null);
             setNotice(`地址已保存为 ${normalized}；下一轮使用新地址，不复用旧渠道会话。`);
           }}>保存地址</button>
         </div>
@@ -243,40 +340,59 @@ export const PiSettingsPane: React.FC = () => {
           <div className="max-h-44 overflow-y-auto space-y-1">
             {filteredDiscovered.map((model) => {
               const added = channel.models.some((item) => item.id === model.id);
-              return <label key={model.id} className="flex items-center gap-2 text-xs">
-                <input type="checkbox" disabled={disabled || added} checked={added || checked.includes(model.id)} onChange={(event) =>
-                  setChecked((current) => event.target.checked ? [...current, model.id] : current.filter((id) => id !== model.id))} />
-                <span className="break-all">{model.id}{added ? ' · 已添加' : ''}</span>
-              </label>;
+              const isSelected = effectiveModelValue === model.id;
+              return <div key={model.id} className="flex items-center justify-between gap-2 text-xs py-0.5">
+                <label className="flex items-center gap-2 min-w-0 flex-1 cursor-pointer">
+                  <input type="checkbox" disabled={disabled || added} checked={added || checked.includes(model.id)} onChange={(event) =>
+                    setChecked((current) => event.target.checked ? [...current, model.id] : current.filter((id) => id !== model.id))} />
+                  <span className="break-all">{model.id}{added ? ' · 已添加' : ''}</span>
+                </label>
+                <button type="button" disabled={disabled || isSelected}
+                  onClick={() => {
+                    commitUrlDraftIfValid();
+                    addModels([model], model.id);
+                    setNotice(`已选用模型 ${model.id}。可点击下方「测试模型连通性」验证实际请求。`);
+                  }}
+                  className="shrink-0 rounded border border-indigo-200 bg-indigo-50/60 px-2 py-0.5 text-[11px] text-indigo-700 hover:bg-indigo-100 disabled:opacity-50">
+                  {isSelected ? '当前选用' : '选用'}
+                </button>
+              </div>;
             })}
           </div>
           <button type="button" disabled={disabled || !checked.length} className={buttonClass} onClick={() => {
-            addModels(discovered.filter((model) => checked.includes(model.id))); setChecked([]);
+            commitUrlDraftIfValid();
+            const additions = discovered.filter((model) => checked.includes(model.id));
+            addModels(additions, additions[0]?.id); setChecked([]);
           }}>添加所选模型（{checked.length}）</button>
         </div>}
         <form className="flex items-end gap-2" onSubmit={(event) => {
           event.preventDefault(); const id = manualId.trim();
-          if (!disabled && id && id.length <= 256) { addModels([newPiModel(id)]); setManualId(''); }
+          if (!disabled && id && id.length <= 256) {
+            commitUrlDraftIfValid();
+            addModels([newPiModel(id)], id);
+            setManualId('');
+          }
         }}>
           <label className="flex-1 text-xs">手动添加模型 ID<input aria-label="Pi 手动模型 ID" value={manualId} maxLength={256} disabled={disabled} onChange={(event) => setManualId(event.target.value)} className={inputClass} placeholder="填写渠道实际提供的模型 ID（如 deepseek-v4.1-flash）" /></label>
           <button type="submit" disabled={disabled || !manualId.trim()} className={buttonClass}>添加模型</button>
         </form>
         <div className="flex items-end gap-2">
           <label className="flex-1 text-xs">默认模型（{channel.models.length}）
-            <select aria-label="Pi 模型" value={piModel} disabled={disabled} className={inputClass} onChange={(event) => {
-              patchChannel({ defaultModelId: event.target.value }); updateSettings({ piModel: event.target.value });
+            <select aria-label="Pi 模型" value={effectiveModelValue} disabled={disabled} className={inputClass} onChange={(event) => {
+              patchChannel({ defaultModelId: event.target.value });
+              updateSettings({ piActiveChannelId: channel.id, piProvider: channel.provider, piModel: event.target.value });
             }}>
               <option value="">请选择模型</option>
               {channel.models.map((model) => <option value={model.id} key={model.id}>{model.name === model.id ? model.id : `${model.name} · ${model.id}`}</option>)}
             </select>
           </label>
           <button type="button" disabled={disabled || !selectedModel} className={buttonClass} onClick={() => {
-            const remaining = channel.models.filter((model) => model.id !== piModel);
+            const remaining = channel.models.filter((model) => model.id !== effectiveModelValue);
             patchChannel({ models: remaining, defaultModelId: remaining[0]?.id }); updateSettings({ piModel: remaining[0]?.id ?? '' });
           }}>删除模型</button>
         </div>
         {selectedModel && <div className="space-y-2 rounded-lg bg-white/70 p-2">
-          <p className="text-[11px] text-slate-500">模型列表通常不包含完整能力，请按渠道实际规格核对。手动添加默认仅文本、无推理。</p>
+          <p className="text-[11px] text-slate-500">模型列表通常不包含完整能力，请按渠道实际规格核对。支持自动识别常见推理模型与 32K 输出上限。</p>
           <div className="flex flex-wrap items-center gap-4 text-xs">
             <label className="flex items-center gap-1"><input type="checkbox" checked={selectedModel.supportsImages} disabled={disabled} onChange={(event) => updateModel({ supportsImages: event.target.checked })} />图片输入</label>
             <label className="flex items-center gap-1"><input type="checkbox" checked={selectedModel.reasoning} disabled={disabled} onChange={(event) => updateModel({ reasoning: event.target.checked })} />推理模型</label>
@@ -289,30 +405,57 @@ export const PiSettingsPane: React.FC = () => {
           </div>
         </div>}
       </>}
-      <label className="flex items-center justify-between text-xs">推理强度
-        <select aria-label="Pi 推理强度" value={piThinkingLevel} disabled={disabled} onChange={(event) => updateSettings({ piThinkingLevel: event.target.value as typeof piThinkingLevel })} className="rounded-lg border border-slate-200 bg-white px-2 py-1.5">
-          <option value="off">关闭</option><option value="low">低</option><option value="medium">中</option><option value="high">高</option>
-        </select></label>
+      <div className="space-y-1">
+        <label className="flex items-center justify-between gap-2 text-xs">
+          <span>思考强度（推理档位）</span>
+          <select aria-label="Pi 推理强度" value={piThinkingLevel} disabled={disabled}
+            onChange={(event) => updateSettings({ piThinkingLevel: event.target.value as PiThinkingLevel })}
+            className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs">
+            {PI_THINKING_LEVELS.map((level) => (
+              <option key={level.id} value={level.id}>{level.name}</option>
+            ))}
+          </select>
+        </label>
+        <p className="text-[11px] text-slate-500">若所选模型或中转网关不支持特定推理参数（报 HTTP 400），请选择「默认（不传参数）」。右侧聊天栏也可随时快捷切换。</p>
+      </div>
       <div className="flex flex-wrap gap-2">
-        <button type="button" disabled={!desktop || disabled || !canUseKey || !selectedModel || !normalizedDraft} onClick={async () => {
-          if (!selectedModel) return;
+        <button type="button" disabled={!desktop || disabled || !canUseKey || !hasPendingOrSelectedModel || !normalizedDraft} onClick={async () => {
           setBusy(true); setNotice('');
           try {
-            const effective = await commitDraftAndKey();
-            if (!effective) return;
+            const effectiveBase = await commitDraftAndKey();
+            if (!effectiveBase) return;
+            const { channel: effectiveChannel, modelId } = commitPendingModelSelection(effectiveBase);
+            if (!modelId) {
+              setNotice('请先选择或添加模型。');
+              return;
+            }
             useAgentStore.getState().setActiveAgentId('pi');
-            updateSettings({ defaultAgentId: 'pi', piProvider: effective.provider, piModel: selectedModel.id });
-            setNotice('已使用当前 Pi 渠道与模型。获取列表不代表模型请求验证成功。');
+            updateSettings({ defaultAgentId: 'pi', piActiveChannelId: effectiveChannel.id, piProvider: effectiveChannel.provider, piModel: modelId });
+            setNotice(`已启用渠道「${effectiveChannel.name}」与模型 ${modelId}。可点击「测试模型连通性」验证实际对话接口。`);
           } catch (failure) { setNotice(String(failure)); }
           finally { setBusy(false); }
         }} className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs text-white disabled:opacity-50">使用此渠道与模型</button>
+        <button type="button" disabled={!desktop || disabled || !canUseKey || !hasPendingOrSelectedModel || !normalizedDraft}
+          onClick={() => void testConnection()}
+          className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-800 hover:bg-emerald-100 disabled:opacity-50">
+          {busy ? '测试中…' : '测试模型连通性'}
+        </button>
         <button type="button" disabled={!desktop || disabled} className={buttonClass} onClick={async () => {
           setBusy(true);
           try { const { invoke } = await import('@tauri-apps/api/core'); await invoke('pi_reset_runtime'); setNotice('Pi 会话已重置。'); }
           catch (failure) { setNotice(String(failure)); } finally { setBusy(false); }
         }}>重置 Pi 会话</button>
       </div>
-      <p className="text-xs text-slate-500">需要 Node.js 22.19+。仅开放 AgenTikZ 项目工具；API 单独计费，不复用 CLI 登录。渠道 URL 会按协议自动规范化，获取模型不会发送项目上下文。</p>
+      {testResult && (
+        <div role="status" className={`rounded-lg border px-3 py-2 text-xs break-words ${
+          testResult.ok
+            ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+            : 'border-rose-200 bg-rose-50 text-rose-900'
+        }`}>
+          {testResult.ok ? '✅ ' : '❌ '}{testResult.message}
+        </div>
+      )}
+      <p className="text-xs text-slate-500">需要 Node.js 20.12+。仅开放 AgenTikZ 项目工具；API 单独计费，不复用 CLI 登录。渠道 URL 会按协议自动规范化，获取模型不会发送项目上下文。</p>
       {!desktop && <p className="text-xs text-amber-700">浏览器模式可配置渠道，但保存密钥、获取模型与运行 Pi 需要桌面端。</p>}
       {(notice || error) && <p className="break-words text-xs text-slate-700" role="status">{notice || error}</p>}
     </section>

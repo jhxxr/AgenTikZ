@@ -112,8 +112,11 @@ test('disables discovered resources, prompt expansion, native tools and backgrou
   assert.deepEqual(options.resourceLoader.getSkills().skills, []);
   assert.deepEqual(created[0].prompts[0].promptOptions, { expandPromptTemplates: false });
   assert.equal(options.settingsManager.cacheWarming, 'off');
-  assert.equal(options.thinkingLevel, 'medium');
+  assert.equal(options.thinkingLevel, 'off');
   await assert.rejects(options.customTools[0].execute('late', {}), /ended/);
+
+  await engine.prompt(request({ thinkingLevel: 'xhigh' }), () => {});
+  assert.equal(created[1].options.thinkingLevel, 'xhigh');
   engine.dispose();
 });
 

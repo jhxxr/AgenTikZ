@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { AcpAgentId } from '../types/acp';
 import { ImageGenProviderId } from '../core/agent/illustration-prompt';
-import { sanitizePiChannels, type PiChannel } from '../types/pi';
+import { sanitizePiChannels, sanitizePiThinkingLevel, type PiChannel, type PiThinkingLevel } from '../types/pi';
 
 export type SettingsSection =
   | 'general'
@@ -49,10 +49,11 @@ export interface PersistedSettings {
   defaultAgentId: AcpAgentId;
   piProvider: string;
   piModel: string;
-  piThinkingLevel: 'off' | 'low' | 'medium' | 'high';
+  piThinkingLevel: PiThinkingLevel;
   piChannels: PiChannel[];
   piActiveChannelId: string;
   acpModelSelections: Partial<Record<AcpAgentId, string>>;
+  acpThoughtSelections: Partial<Record<AcpAgentId, string>>;
   responseLanguage: AgentResponseLanguage;
   defaultAttachCanvas: boolean;
   defaultAttachSelection: boolean;
@@ -98,10 +99,11 @@ export const DEFAULT_SETTINGS: PersistedSettings = {
   defaultAgentId: 'claude-code',
   piProvider: 'anthropic',
   piModel: '',
-  piThinkingLevel: 'medium',
+  piThinkingLevel: 'auto',
   piChannels: [],
   piActiveChannelId: '',
   acpModelSelections: {},
+  acpThoughtSelections: {},
   responseLanguage: 'zh-CN',
   defaultAttachCanvas: true,
   defaultAttachSelection: true,
@@ -125,8 +127,14 @@ function loadInitialSettings(): PersistedSettings {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return DEFAULT_SETTINGS;
     const parsed = JSON.parse(raw);
-    return { ...DEFAULT_SETTINGS, ...parsed, piChannels: sanitizePiChannels(parsed.piChannels),
-      acpModelSelections: sanitizeAcpSelections(parsed.acpModelSelections) };
+    return {
+      ...DEFAULT_SETTINGS,
+      ...parsed,
+      piThinkingLevel: sanitizePiThinkingLevel(parsed.piThinkingLevel),
+      piChannels: sanitizePiChannels(parsed.piChannels),
+      acpModelSelections: sanitizeAcpSelections(parsed.acpModelSelections),
+      acpThoughtSelections: sanitizeAcpSelections(parsed.acpThoughtSelections),
+    };
   } catch {
     return DEFAULT_SETTINGS;
   }
@@ -255,10 +263,11 @@ export const useSettingsStore = create<SettingsState>((set) => {
           defaultAgentId: patch.defaultAgentId ?? state.defaultAgentId,
           piProvider: patch.piProvider ?? state.piProvider,
           piModel: patch.piModel ?? state.piModel,
-          piThinkingLevel: patch.piThinkingLevel ?? state.piThinkingLevel,
+          piThinkingLevel: sanitizePiThinkingLevel(patch.piThinkingLevel ?? state.piThinkingLevel),
           piChannels: sanitizePiChannels(patch.piChannels ?? state.piChannels),
           piActiveChannelId: patch.piActiveChannelId ?? state.piActiveChannelId,
           acpModelSelections: sanitizeAcpSelections(patch.acpModelSelections ?? state.acpModelSelections),
+          acpThoughtSelections: sanitizeAcpSelections(patch.acpThoughtSelections ?? state.acpThoughtSelections),
           responseLanguage: patch.responseLanguage ?? state.responseLanguage,
           defaultAttachCanvas: patch.defaultAttachCanvas ?? state.defaultAttachCanvas,
           defaultAttachSelection: patch.defaultAttachSelection ?? state.defaultAttachSelection,

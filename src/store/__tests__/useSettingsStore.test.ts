@@ -42,21 +42,34 @@ describe('agent access preferences', () => {
     expect(JSON.parse(storage.get(STORAGE_KEY)!).piChannels).toHaveLength(1);
   });
 
-  it('persists non-secret Pi model preferences without accepting a key into settings storage', async () => {
+  it('persists non-secret Pi and ACP thinking preferences without accepting a key into settings storage', async () => {
     const { useSettingsStore } = await import('../useSettingsStore');
     useSettingsStore.getState().updateSettings({
-      defaultAgentId: 'pi', piProvider: 'anthropic', piModel: 'fixture', piThinkingLevel: 'high',
+      defaultAgentId: 'pi', piProvider: 'anthropic', piModel: 'fixture', piThinkingLevel: 'xhigh',
+      acpThoughtSelections: { 'codex-cli': 'high', 'claude-code': 'medium' },
       ...({ piApiKey: 'secret-fixture-do-not-persist' } as Record<string, string>),
     });
     const saved = JSON.parse(storage.get(STORAGE_KEY)!);
-    expect(saved).toMatchObject({ defaultAgentId: 'pi', piModel: 'fixture', piThinkingLevel: 'high' });
+    expect(saved).toMatchObject({
+      defaultAgentId: 'pi',
+      piModel: 'fixture',
+      piThinkingLevel: 'xhigh',
+      acpThoughtSelections: { 'codex-cli': 'high', 'claude-code': 'medium' },
+    });
     expect(saved).not.toHaveProperty('piApiKey');
     expect(storage.get(STORAGE_KEY)).not.toContain('secret-fixture');
     vi.resetModules();
     const { useSettingsStore: reloaded } = await import('../useSettingsStore');
-    expect(reloaded.getState()).toMatchObject({ defaultAgentId: 'pi', piModel: 'fixture', piThinkingLevel: 'high' });
+    expect(reloaded.getState()).toMatchObject({
+      defaultAgentId: 'pi',
+      piModel: 'fixture',
+      piThinkingLevel: 'xhigh',
+      acpThoughtSelections: { 'codex-cli': 'high', 'claude-code': 'medium' },
+    });
+    reloaded.getState().updateSettings({ piThinkingLevel: 'invalid-level' as any });
+    expect(reloaded.getState().piThinkingLevel).toBe('auto');
     reloaded.getState().resetSettings();
-    expect(reloaded.getState()).toMatchObject({ defaultAgentId: 'claude-code', piModel: '', piThinkingLevel: 'medium' });
+    expect(reloaded.getState()).toMatchObject({ defaultAgentId: 'claude-code', piModel: '', piThinkingLevel: 'auto', acpThoughtSelections: {} });
   });
 
   it('migrates existing settings with access disabled', async () => {
@@ -110,5 +123,37 @@ describe('agent access preferences', () => {
       'https://share.example.test/v1',
       'https://share.example.test',
     ]);
+  });
+
+  it('migrates legacy 32k/4096 Pi channel models while preserving explicit user token overrides', async () => {
+    storage.set(STORAGE_KEY, JSON.stringify({
+      piChannels: [
+        {
+          id: 'legacy-gw',
+          name: 'Legacy GW',
+          provider: 'openai',
+          api: 'openai-completions',
+          baseUrl: 'https://gateway.example.test',
+          models: [
+            { id: 'deepseek-v4.1-flash', name: 'deepseek-v4.1-flash', reasoning: false, supportsImages: false, contextWindow: 32768, maxTokens: 4096 },
+            { id: 'custom-explicit', name: 'custom-explicit', reasoning: false, supportsImages: false, contextWindow: 65536, maxTokens: 8192 },
+          ],
+        },
+      ],
+    }));
+    const { useSettingsStore } = await import('../useSettingsStore');
+    const models = useSettingsStore.getState().piChannels[0].models;
+    expect(models[0]).toMatchObject({
+      id: 'deepseek-v4.1-flash',
+      reasoning: true,
+      contextWindow: 128000,
+      maxTokens: 32768,
+    });
+    expect(models[1]).toMatchObject({
+      id: 'custom-explicit',
+      reasoning: false,
+      contextWindow: 65536,
+      maxTokens: 8192,
+    });
   });
 });

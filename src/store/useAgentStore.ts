@@ -82,6 +82,7 @@ interface AgentStoreState {
   autoLayoutRepairEnabled: boolean;
   visualReviewEnabled: boolean;
   isStreaming: boolean;
+  streamingStartedAt: number | null;
   activeRequestId: string | null;
   activeRequestBackend: 'pi' | 'acp' | null;
   sessions: AgentSession[];
@@ -130,6 +131,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
   autoLayoutRepairEnabled: true,
   visualReviewEnabled: true,
   isStreaming: false,
+  streamingStartedAt: null,
   activeRequestId: null,
   activeRequestBackend: null,
   sessions: [initialSession],
@@ -204,7 +206,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
       set((state) => ({ providers: state.providers.map((provider) => provider.id === 'pi' ? {
         ...provider, detected: pi.ok, binaryAvailable: pi.ok,
         version: pi.agentVersion, diagnostic: pi.message,
-        installHint: '需 Node.js 22.19+；开发环境请运行 npm run pi:stage。',
+        installHint: '需 Node.js 20.12+；开发环境请运行 npm run pi:stage。',
       } : provider) }));
     } catch {
       set((state) => ({
@@ -254,7 +256,14 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
                 detected: res.ok ? true : p.detected,
                 handshakeStatus: res.ok ? 'ok' : 'error',
                 handshakeMessage: res.message,
-                ...(agentId !== 'pi' ? { models: res.models ?? [], currentModelId: res.currentModelId } : {}),
+                ...(agentId !== 'pi'
+                  ? {
+                      models: res.models ?? [],
+                      currentModelId: res.currentModelId,
+                      thoughtLevels: res.thoughtLevels ?? [],
+                      currentThoughtLevel: res.currentThoughtLevel,
+                    }
+                  : {}),
                 handshakeAgentName: res.agentName
                   ? `${res.agentName}${res.agentVersion ? ` v${res.agentVersion}` : ''}`
                   : undefined,
@@ -315,6 +324,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
     };
     set((state) => ({
       isStreaming: true,
+      streamingStartedAt: Date.now(),
       sessions: state.sessions.map((session) => session.id === activeSessionId
         ? { ...session, agentId: activeAgentId, projectId,
             title: session.messages.length <= 1 ? promptText.trim().slice(0, 22) : session.title,
@@ -327,10 +337,11 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
       }
       const settings = useSettingsStore.getState();
       const activePiChannel = activeAgentId === 'pi'
-        ? settings.piChannels.find((item) => item.id === settings.piActiveChannelId)
+        ? (settings.piChannels.find((item) => item.id === settings.piActiveChannelId)
+          ?? (!settings.piActiveChannelId ? settings.piChannels[0] : undefined))
         : undefined;
       const activePiModelId = activeAgentId === 'pi'
-        ? (settings.piModel.trim() || activePiChannel?.defaultModelId?.trim() || '')
+        ? (settings.piModel.trim() || activePiChannel?.defaultModelId?.trim() || activePiChannel?.models[0]?.id?.trim() || '')
         : '';
       const piModelSupportsImages = activeAgentId === 'pi'
         ? (activePiChannel
@@ -394,7 +405,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
           }] }
         : session) }));
     } finally {
-      set({ isStreaming: false });
+      set({ isStreaming: false, streamingStartedAt: null });
     }
   },
   runLocalAgentSkill: (skillId) => {
@@ -713,6 +724,10 @@ async function sendViaRealAcp(
   let finished = false;
   let unlisten: (() => void) | undefined;
   let releaseMcp: (() => void) | undefined;
+  let acpThoughtChars = 0;
+  let acpReplyChars = 0;
+  let lastAcpStatusAt = 0;
+  let lastAcpPhase = '';
   try {
     if (agentId === 'pi') await piResetPending;
     const { ensureMcpRuntime } = await import('../core/mcp/runtime');
@@ -730,7 +745,14 @@ async function sendViaRealAcp(
           const modelState = JSON.parse(event.text) as AcpHandshakeResult;
           if (Array.isArray(modelState.models)) useAgentStore.setState((state) => ({
             providers: state.providers.map((provider) => provider.id === agentId
-              ? { ...provider, models: modelState.models, currentModelId: modelState.currentModelId } : provider),
+              ? {
+                  ...provider,
+                  models: modelState.models,
+                  currentModelId: modelState.currentModelId,
+                  thoughtLevels: modelState.thoughtLevels ?? provider.thoughtLevels,
+                  currentThoughtLevel: modelState.currentThoughtLevel ?? provider.currentThoughtLevel,
+                }
+              : provider),
           }));
         } catch { /* Ignore malformed model metadata, never interpret it as chat content. */ }
         return;
@@ -740,7 +762,38 @@ async function sendViaRealAcp(
         return;
       }
       if (event.kind === 'tool_call' && event.toolName?.startsWith('mcp__')) {
+        lastAcpPhase = 'mcp_tool';
+        lastAcpStatusAt = Date.now();
         useMcpStore.setState({ sessionStatus: `本轮已发起 MCP 调用：${event.toolName}。结果见聊天中的工具记录。` });
+      } else if (agentId !== 'pi') {
+        const now = Date.now();
+        if (event.kind === 'thought') {
+          acpThoughtChars += event.text.length;
+          if (lastAcpPhase !== 'thought' || now - lastAcpStatusAt >= 350) {
+            lastAcpPhase = 'thought';
+            lastAcpStatusAt = now;
+            useMcpStore.setState({ sessionStatus: `ACP Agent 正在深度思考与规划（已推理 ${acpThoughtChars} 字）…` });
+          }
+        } else if (event.kind === 'message') {
+          acpReplyChars += event.text.length;
+          if (lastAcpPhase !== 'message' || now - lastAcpStatusAt >= 450) {
+            lastAcpPhase = 'message';
+            lastAcpStatusAt = now;
+            useMcpStore.setState({ sessionStatus: `ACP Agent 正在输出回复（已生成 ${acpReplyChars} 字）…` });
+          }
+        } else if (event.kind === 'tool_call') {
+          lastAcpPhase = 'tool';
+          lastAcpStatusAt = now;
+          useMcpStore.setState({ sessionStatus: `ACP Agent 正在调用工具：${event.toolName || event.text}…` });
+        } else if (event.kind === 'tool_update' && (event.toolStatus === 'completed' || event.toolStatus === 'failed')) {
+          lastAcpPhase = 'post_tool';
+          lastAcpStatusAt = now;
+          useMcpStore.setState({
+            sessionStatus: event.toolStatus === 'failed'
+              ? '工具调用返回错误，等待 Agent 继续处理…'
+              : '工具调用已完成，等待 Agent 继续推理与总结…',
+          });
+        }
       }
       if (event.kind === 'permission_denied') {
         const noticeId = `permission_${requestId}`;
@@ -791,13 +844,14 @@ async function sendViaRealAcp(
     useAgentStore.setState({ activeRequestId: requestId, activeRequestBackend: agentId === 'pi' ? 'pi' : 'acp' });
     useMcpStore.setState({ sessionStatus: agentId === 'pi' ? '正在连接 Pi 长驻会话与项目工具…' : '正在建立 Agent 会话并提交 MCP 配置…' });
     const response = agentId === 'pi' ? await (async () => {
-      const rawChannel = settings.piChannels.find((item) => item.id === settings.piActiveChannelId);
+      const rawChannel = settings.piChannels.find((item) => item.id === settings.piActiveChannelId)
+        ?? (!settings.piActiveChannelId ? settings.piChannels[0] : undefined);
       if (settings.piActiveChannelId && !rawChannel) throw new Error('Pi 渠道已被删除，请重新选择渠道。');
       const channel = rawChannel
         ? { ...rawChannel, baseUrl: normalizePiChannelBaseUrl(rawChannel.baseUrl, rawChannel.api) }
         : undefined;
       const effectiveProvider = (channel?.provider || settings.piProvider).trim();
-      const effectiveModel = (settings.piModel || channel?.defaultModelId || '').trim();
+      const effectiveModel = (settings.piModel || channel?.defaultModelId || channel?.models[0]?.id || '').trim();
       if (!effectiveProvider || !effectiveModel) {
         throw new Error('请先在设置 → Agent → 内置 Pi 中选择渠道、模型并保存该渠道的 API Key。');
       }
@@ -850,6 +904,7 @@ async function sendViaRealAcp(
       proxyUrl,
       userAgent,
       modelId: settings.acpModelSelections[agentId] || undefined,
+      thoughtLevel: settings.acpThoughtSelections[agentId] || undefined,
       responseLanguage: settings.responseLanguage,
       personalPrompt: settings.personalPrompt || undefined,
       workbenchMode: paperMode ? 'paper' : 'figure',
@@ -890,6 +945,9 @@ async function sendViaRealAcp(
         ? { ...patchProposal, targetCanvas: target, baseTikzCode, baseRevision }
         : undefined),
     }));
+    useMcpStore.setState({
+      sessionStatus: agentId === 'pi' ? 'Pi 本轮响应已完成（长驻会话保持就绪）。' : 'ACP Agent 本轮响应已完成。',
+    });
   } catch (error) {
     useMcpStore.setState({ sessionStatus: `Agent 会话未完成：${error instanceof Error ? error.message : String(error)}` });
     // Keep real partial output; remove only a completely empty placeholder.

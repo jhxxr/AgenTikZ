@@ -17,6 +17,8 @@ export interface AcpModelChoice { id: string; name: string }
 export interface AcpModelState {
   models?: AcpModelChoice[];
   currentModelId?: string;
+  thoughtLevels?: AcpModelChoice[];
+  currentThoughtLevel?: string;
 }
 
 export interface AcpAgentProvider {
@@ -38,6 +40,8 @@ export interface AcpAgentProvider {
   handshakeAgentName?: string;
   models?: AcpModelChoice[];
   currentModelId?: string;
+  thoughtLevels?: AcpModelChoice[];
+  currentThoughtLevel?: string;
   description: string;
   badgeColor: string;
 }

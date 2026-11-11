@@ -132,6 +132,31 @@ fn validate_provider(provider: &str) -> Result<(), String> {
     Ok(())
 }
 
+pub(crate) fn normalize_http_proxy_for_node(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty()
+        || trimmed.len() > 2048
+        || trimmed.bytes().any(|b| b < 0x20 || b == 0x7f)
+    {
+        return None;
+    }
+    let candidate = if trimmed.contains("://") {
+        trimmed.to_string()
+    } else {
+        format!("http://{trimmed}")
+    };
+    let url = tauri::Url::parse(&candidate).ok()?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        return None;
+    }
+    let rendered = url.to_string();
+    if url.path() == "/" && url.query().is_none() && url.fragment().is_none() {
+        Some(rendered.trim_end_matches('/').to_string())
+    } else {
+        Some(rendered)
+    }
+}
+
 fn validate_proxy_url(proxy_url: Option<&str>) -> Result<Option<String>, String> {
     let Some(trimmed) = proxy_url.map(str::trim).filter(|s| !s.is_empty()) else {
         return Ok(None);
@@ -139,11 +164,20 @@ fn validate_proxy_url(proxy_url: Option<&str>) -> Result<Option<String>, String>
     if trimmed.len() > 2048 || trimmed.bytes().any(|b| b < 0x20 || b == 0x7f) {
         return Err("代理地址格式无效。".into());
     }
-    let url = tauri::Url::parse(trimmed).map_err(|_| "代理地址格式无效。")?;
-    if !matches!(url.scheme(), "http" | "https" | "socks5" | "socks5h") || url.host_str().is_none() {
-        return Err("代理地址仅支持 http(s):// 或 socks5://。".into());
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("socks5://")
+        || lower.starts_with("socks5h://")
+        || lower.starts_with("socks4://")
+        || lower.starts_with("socks://")
+    {
+        return Err(
+            "内置 Pi 的 Node.js 运行时仅支持 HTTP(S) 代理（如 Clash 混合端口 http://127.0.0.1:7890 或 v2rayN HTTP 端口 http://127.0.0.1:10809），暂不支持 socks5://。"
+                .into(),
+        );
     }
-    Ok(Some(trimmed.to_string()))
+    normalize_http_proxy_for_node(trimmed).map(Some).ok_or_else(|| {
+        "代理地址格式无效，请填写 HTTP(S) 代理地址（例如 http://127.0.0.1:7890）。".into()
+    })
 }
 
 fn validate_user_agent(user_agent: Option<&str>) -> Result<Option<String>, String> {
@@ -261,80 +295,134 @@ fn worker_path(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 fn node_version_supported(version: &str) -> bool {
-    let Ok(numbers) = version
-        .trim()
-        .trim_start_matches('v')
-        .split('.')
-        .map(str::parse::<u32>)
-        .collect::<Result<Vec<_>, _>>()
-    else {
+    let trimmed = version.trim().trim_start_matches('v');
+    let parts: Vec<&str> = trimmed.split('.').collect();
+    if parts.len() != 3 {
+        return false;
+    }
+    let Ok(major) = parts[0].parse::<u32>() else {
         return false;
     };
-    numbers.len() == 3 && (numbers[0] > 22 || (numbers[0] == 22 && numbers[1] >= 19))
+    let Ok(minor) = parts[1].parse::<u32>() else {
+        return false;
+    };
+    let patch_part = parts[2].split(['-', '+']).next().unwrap_or("");
+    if patch_part.parse::<u32>().is_err() {
+        return false;
+    }
+    major > 20 || (major == 20 && minor >= 12)
+}
+
+async fn resolve_supported_node() -> Result<PathBuf, String> {
+    let search_paths = crate::acp::merged_path_entries(None);
+    let candidates =
+        crate::acp::find_all_executables_in_paths(std::path::Path::new("node"), &search_paths);
+    if candidates.is_empty() {
+        return Err(
+            "未检测到 Node.js。请安装 Node.js 20.12 或更新版本（推荐 LTS 22/24），安装后点击「重新检测」。"
+                .into(),
+        );
+    }
+    let mut first_rejected: Option<(String, String)> = None;
+    for candidate in candidates {
+        let normalized = crate::acp::protocol_workspace_path(candidate);
+        let mut check = Command::new(&normalized);
+        restricted_environment(&mut check, None);
+        check.arg("--version").kill_on_drop(true);
+        #[cfg(windows)]
+        check.creation_flags(0x08000000);
+        if let Ok(Ok(output)) = timeout(Duration::from_secs(6), check.output()).await {
+            let ver = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if output.status.success() && node_version_supported(&ver) {
+                return Ok(normalized);
+            }
+            if first_rejected.is_none() && !ver.is_empty() {
+                first_rejected = Some((ver, normalized.display().to_string()));
+            }
+        }
+    }
+    if let Some((ver, path)) = first_rejected {
+        Err(format!(
+            "已检测到 Node.js {ver}（{path}），但内置 Pi 需要 Node.js 20.12 或更新版本。"
+        ))
+    } else {
+        Err("无法启动 Node.js，请确认已安装 Node.js 20.12 或更新版本。".into())
+    }
 }
 
 fn restricted_environment(command: &mut Command, proxy_url: Option<&str>) {
     command.env_clear();
+    // Use merged GUI + version-manager PATH so child processes work outside login shells.
+    let merged_paths = crate::acp::merged_path_entries(None);
+    if let Ok(joined_path) = std::env::join_paths(&merged_paths) {
+        command.env("PATH", joined_path);
+    } else if let Some(raw_path) = std::env::var_os("PATH") {
+        command.env("PATH", raw_path);
+    }
     // No model credentials, NODE_OPTIONS, npm hooks or discovered extension settings.
     for key in [
-        "PATH",
         "SystemRoot",
+        "SystemDrive",
         "WINDIR",
+        "ComSpec",
+        "ProgramFiles",
+        "ProgramFiles(x86)",
+        "ProgramW6432",
+        "CommonProgramFiles",
+        "CommonProgramW6432",
+        "ProgramData",
+        "PATHEXT",
         "TEMP",
         "TMP",
         "HOME",
+        "HOMEDRIVE",
+        "HOMEPATH",
         "USERPROFILE",
         "LOCALAPPDATA",
         "APPDATA",
+        "VOLTA_HOME",
+        "NVM_HOME",
+        "NVM_SYMLINK",
         "SSL_CERT_FILE",
         "SSL_CERT_DIR",
         "NODE_EXTRA_CA_CERTS",
-        "HTTP_PROXY",
-        "HTTPS_PROXY",
-        "ALL_PROXY",
-        "NO_PROXY",
-        "http_proxy",
-        "https_proxy",
-        "all_proxy",
-        "no_proxy",
     ] {
         if let Some(value) = std::env::var_os(key) {
             command.env(key, value);
         }
     }
-    let explicit_proxy = proxy_url.map(str::trim).filter(|s| !s.is_empty());
+    let explicit_proxy = proxy_url.and_then(normalize_http_proxy_for_node);
     if let Some(proxy) = explicit_proxy {
-        for key in [
-            "HTTP_PROXY",
-            "HTTPS_PROXY",
-            "ALL_PROXY",
-            "http_proxy",
-            "https_proxy",
-            "all_proxy",
-        ] {
-            command.env(key, proxy);
+        for key in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
+            command.env(key, &proxy);
+        }
+        command.env("AGEN_PI_PROXY_MODE", "explicit");
+    } else {
+        let ambient_http = ["HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"]
+            .iter()
+            .find_map(|key| std::env::var(key).ok().and_then(|v| normalize_http_proxy_for_node(&v)));
+        let ambient_https = ["HTTPS_PROXY", "https_proxy"]
+            .iter()
+            .find_map(|key| std::env::var(key).ok().and_then(|v| normalize_http_proxy_for_node(&v)))
+            .or_else(|| ambient_http.clone());
+        if let Some(http_p) = &ambient_http {
+            command.env("HTTP_PROXY", http_p);
+            command.env("http_proxy", http_p);
+        }
+        if let Some(https_p) = &ambient_https {
+            command.env("HTTPS_PROXY", https_p);
+            command.env("https_proxy", https_p);
+        }
+        if ambient_http.is_some() || ambient_https.is_some() {
+            command.env("AGEN_PI_PROXY_MODE", "ambient");
         }
     }
-    let has_proxy = explicit_proxy.is_some()
-        || [
-            "HTTP_PROXY",
-            "HTTPS_PROXY",
-            "ALL_PROXY",
-            "http_proxy",
-            "https_proxy",
-            "all_proxy",
-        ]
-        .iter()
-        .any(|key| std::env::var_os(key).is_some_and(|v| !v.is_empty()));
     let base_no_proxy = std::env::var("NO_PROXY")
         .ok()
         .or_else(|| std::env::var("no_proxy").ok());
     let merged_no_proxy = merge_loopback_no_proxy(base_no_proxy.as_deref());
     command.env("NO_PROXY", &merged_no_proxy);
     command.env("no_proxy", &merged_no_proxy);
-    if has_proxy {
-        command.env("NODE_USE_ENV_PROXY", "1");
-    }
 }
 
 struct Worker {
@@ -352,7 +440,7 @@ impl Drop for Worker {
 }
 impl Worker {
     async fn start(app: &AppHandle, proxy_url: Option<String>) -> Result<Self, String> {
-        let node = crate::acp::resolve_mcp_executable("node")?;
+        let node = resolve_supported_node().await?;
         let entry = worker_path(app)?;
         let cwd = app
             .path()
@@ -393,7 +481,7 @@ impl Worker {
         if !output.status.success()
             || !node_version_supported(&String::from_utf8_lossy(&output.stdout))
         {
-            return Err("内置 Pi 需要 Node.js 22.19 或更新版本；不会自动下载安装。".into());
+            return Err("内置 Pi 需要 Node.js 20.12 或更新版本；不会自动下载安装。".into());
         }
         let mut command = Command::new(node);
         restricted_environment(&mut command, proxy_url.as_deref());
@@ -426,6 +514,12 @@ impl Worker {
             .await
             .map_err(|_| "Pi 启动超时。")?
             .map_err(|error| format!("Pi 启动失败（尚未就绪）：{error} 请检查内置运行时是否完整。"))?;
+        if ready["type"] == "startup_error" {
+            let code = ready["code"].as_str().unwrap_or("StartupError");
+            return Err(format!(
+                "Pi 运行时初始化失败（{code}），请检查安装包完整性或代理配置。"
+            ));
+        }
         if ready["type"] != "ready" || ready["protocol"] != 1 || ready["version"] != "1.5.0" {
             return Err("Pi 运行时协议或 SDK 版本不兼容。".into());
         }
@@ -497,7 +591,7 @@ impl Worker {
                         let _ = app.emit_to(window, "acp:stream", &frame);
                     }
                 }
-                Some("result" | "models") => {
+                Some("result" | "models" | "channel_status") => {
                     self.last_used = Instant::now();
                     return Ok(frame);
                 }
@@ -522,7 +616,7 @@ pub async fn pi_probe(app: AppHandle, window: WebviewWindow) -> Result<Value, St
     .map_err(|_| "Pi 模型目录读取超时。")??;
     Ok(
         json!({"ok":true, "agentName":"Pi SDK", "agentVersion":"1.5.0", "protocolVersion":"AgenTikZ Pi/1",
-        "message":"Pi 运行时与模型目录已就绪；未调用模型，不代表 API Key 验证通过。", "models":result["models"]}),
+        "message":"Pi 本地运行时已就绪；请在下方配置渠道密钥并点击「测试模型连通性」验证网关。", "models":result["models"]}),
     )
 }
 
@@ -550,6 +644,73 @@ pub async fn pi_fetch_models(
     let result = timeout(Duration::from_secs(60), worker.run(&app, window.label(), &request))
         .await.map_err(|_| "获取模型超时，请检查渠道地址或手动添加模型。")??;
     Ok(result["models"].clone())
+}
+
+#[tauri::command]
+pub async fn pi_test_channel(
+    app: AppHandle,
+    window: WebviewWindow,
+    channel: PiChannel,
+    model: Option<String>,
+    thinking_level: Option<String>,
+    proxy_url: Option<String>,
+    user_agent: Option<String>,
+) -> Result<Value, String> {
+    channel.validate()?;
+    let proxy = validate_proxy_url(proxy_url.as_deref())?;
+    let ua = validate_user_agent(user_agent.as_deref())?;
+    let level = thinking_level
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("auto");
+    if !matches!(
+        level,
+        "auto" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"
+    ) {
+        return Err("思考强度参数无效。".into());
+    }
+    let api_key = load_credential(&channel.id)?
+        .ok_or_else(|| "请先输入并保存该渠道的 API Key。".to_string())?;
+    let target_model = model
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .or(channel.default_model_id.as_deref())
+        .or_else(|| channel.models.first().map(|m| m.id.as_str()))
+        .ok_or_else(|| "请先添加或输入至少一个模型 ID（例如 deepseek-v4.1-flash）。".to_string())?;
+    let mut worker = Worker::start(&app, proxy).await?;
+    let request = json!({
+        "type":"test_channel",
+        "requestId":uuid::Uuid::new_v4().to_string(),
+        "channel":channel,
+        "model":target_model,
+        "thinkingLevel":level,
+        "apiKey":api_key,
+        "userAgent":ua,
+    });
+    let result = timeout(
+        Duration::from_secs(35),
+        worker.run(&app, window.label(), &request),
+    )
+    .await
+    .map_err(|_| "模型网关连通性测试超时（35s），请检查网关地址与代理设置。")??;
+    let model_name = result["model"].as_str().unwrap_or(target_model);
+    let latency_ms = result["latencyMs"].as_u64().unwrap_or(0);
+    let level_label = if level == "auto" {
+        "默认（不传参数）".to_string()
+    } else {
+        level.to_string()
+    };
+    Ok(json!({
+        "ok": true,
+        "latencyMs": result["latencyMs"],
+        "model": result["model"],
+        "baseUrl": result["baseUrl"],
+        "api": result["api"],
+        "thinkingLevel": level,
+        "message": format!("网关连通性验证通过 · 模型 {model_name} · 思考强度 {level_label} · 耗时 {latency_ms} ms"),
+    }))
 }
 
 #[tauri::command]
@@ -601,7 +762,7 @@ pub async fn pi_send_prompt(
         || request.model.len() > 256
         || !matches!(
             request.thinking_level.as_str(),
-            "off" | "low" | "medium" | "high"
+            "auto" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"
         )
         || request.conversation_id != request.target.conversation_id
         || request.prompt.len() > 2 * 1024 * 1024
@@ -663,11 +824,22 @@ pub async fn pi_send_prompt(
         worker.take();
     }
     if worker.is_none() {
+        let _ = app.emit_to(
+            window.label(),
+            "acp:stream",
+            &json!({"requestId":request.request_id, "kind":"mcp_status", "text":"正在启动内置 Pi 运行时（校验 Node.js 与 SDK）…"}),
+        );
         let startup = tokio::select! {
             _ = cancelled.changed() => Err("Pi 请求已取消。".to_string()),
             result = Worker::start(&app, proxy_url) => result,
         }?;
         *worker = Some(startup);
+    } else {
+        let _ = app.emit_to(
+            window.label(),
+            "acp:stream",
+            &json!({"requestId":request.request_id, "kind":"mcp_status", "text":"已复用内置 Pi 常驻进程，正在派发任务…"}),
+        );
     }
     if *cancelled.borrow() {
         worker.take();
@@ -734,18 +906,20 @@ mod tests {
         command.env("NODE_OPTIONS", "--require=untrusted.js");
         command.env("ANTHROPIC_API_KEY", "test-only-do-not-inherit");
         command.env("OPENAI_API_KEY", "test-only-do-not-inherit");
-        restricted_environment(&mut command, Some("http://127.0.0.1:7890"));
+        restricted_environment(&mut command, Some("127.0.0.1:7890"));
         let envs: HashMap<String, String> = command
             .as_std()
             .get_envs()
             .filter_map(|(k, v)| Some((k.to_string_lossy().to_string(), v?.to_string_lossy().to_string())))
             .collect();
-        for key in ["NODE_OPTIONS", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"] {
+        for key in ["NODE_OPTIONS", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "NODE_USE_ENV_PROXY"] {
             assert!(!envs.contains_key(key));
         }
         assert_eq!(envs.get("HTTPS_PROXY").map(String::as_str), Some("http://127.0.0.1:7890"));
-        assert_eq!(envs.get("NODE_USE_ENV_PROXY").map(String::as_str), Some("1"));
+        assert_eq!(envs.get("AGEN_PI_PROXY_MODE").map(String::as_str), Some("explicit"));
         assert!(envs.get("NO_PROXY").is_some_and(|v| v.contains("127.0.0.1") && v.contains("localhost")));
+        assert!(validate_proxy_url(Some("127.0.0.1:7890")).unwrap().as_deref() == Some("http://127.0.0.1:7890"));
+        assert!(validate_proxy_url(Some("socks5://127.0.0.1:10808")).is_err());
     }
 
     #[tokio::test]
@@ -844,8 +1018,11 @@ mod tests {
 
     #[test]
     fn validates_node_minimum_and_provider_ids() {
-        assert!(!node_version_supported("v22.18.0"));
-        assert!(node_version_supported("v22.19.0"));
+        assert!(!node_version_supported("v18.20.4"));
+        assert!(!node_version_supported("v20.11.1"));
+        assert!(node_version_supported("v20.12.0"));
+        assert!(node_version_supported("v22.14.0"));
+        assert!(node_version_supported("v22.19.0-rc.1"));
         assert!(node_version_supported("v24.14.1\n"));
         assert!(!node_version_supported("not node"));
         assert!(!node_version_supported("v22.foo.19"));

@@ -17,6 +17,7 @@ import { AgentComposer } from './AgentComposer';
 import { AgentModelSelector } from './AgentModelSelector';
 import { imageDataUrl } from '../../core/agent/image-attachments';
 import {
+  AlertCircle,
   Bot,
   Check,
   ChevronDown,
@@ -28,6 +29,7 @@ import {
   History,
   Image as ImageIcon,
   Layers,
+  Loader2,
   Palette,
   PanelRightClose,
   PanelRightOpen,
@@ -37,10 +39,18 @@ import {
   ScanSearch,
   Settings,
   Sparkles,
+  Square,
   Terminal,
   Wand2,
   Wrench,
 } from 'lucide-react';
+
+function formatElapsed(seconds: number): string {
+  const safe = Math.max(0, Math.floor(seconds));
+  const mins = String(Math.floor(safe / 60)).padStart(2, '0');
+  const secs = String(safe % 60).padStart(2, '0');
+  return `${mins}:${secs}`;
+}
 
 export const RightAgentPanel: React.FC = () => {
   const {
@@ -54,6 +64,7 @@ export const RightAgentPanel: React.FC = () => {
     visualReviewEnabled,
     setVisualReviewEnabled,
     isStreaming,
+    streamingStartedAt,
     activeRequestId,
     cancelPrompt,
     sessions,
@@ -80,6 +91,7 @@ export const RightAgentPanel: React.FC = () => {
     visualReviewEnabled: s.visualReviewEnabled,
     setVisualReviewEnabled: s.setVisualReviewEnabled,
     isStreaming: s.isStreaming,
+    streamingStartedAt: s.streamingStartedAt,
     activeRequestId: s.activeRequestId,
     cancelPrompt: s.cancelPrompt,
     sessions: s.sessions,
@@ -124,6 +136,7 @@ export const RightAgentPanel: React.FC = () => {
     ? (s.status === 'running' ? '正在编译论文…' : s.result?.message) : undefined);
 
   const [inputText, setInputText] = useState('');
+  const [elapsedSec, setElapsedSec] = useState(0);
   const [showHistoryDropdown, setShowHistoryDropdown] = useState(false);
   const [showAgentConfig, setShowAgentConfig] = useState(false);
   const [showWorkflowMenu, setShowWorkflowMenu] = useState(false);
@@ -139,6 +152,18 @@ export const RightAgentPanel: React.FC = () => {
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const historyDropdownRef = useRef<HTMLDivElement | null>(null);
   const workflowMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!isStreaming) {
+      setElapsedSec(0);
+      return;
+    }
+    const base = streamingStartedAt ?? Date.now();
+    const tick = () => setElapsedSec(Math.max(0, Math.floor((Date.now() - base) / 1000)));
+    tick();
+    const timer = window.setInterval(tick, 1000);
+    return () => window.clearInterval(timer);
+  }, [isStreaming, streamingStartedAt]);
 
   // Close dropdowns on outside click
   useEffect(() => {
@@ -168,6 +193,11 @@ export const RightAgentPanel: React.FC = () => {
   const activeProvider =
     providers.find((p) => p.id === activeAgentId) || providers[0];
   const activeTheme = JOURNAL_THEMES[activeThemeId] || JOURNAL_THEMES.neurips;
+  const activePiChannel = settings.piChannels.find((item) => item.id === settings.piActiveChannelId)
+    ?? (!settings.piActiveChannelId ? settings.piChannels[0] : undefined);
+  const activePiModelId = settings.piModel || activePiChannel?.defaultModelId || activePiChannel?.models[0]?.id || '';
+  const piConfigIncomplete = activeAgentId === 'pi' && (!activePiChannel || !activePiModelId);
+  const lastMsg = activeSession?.messages[activeSession.messages.length - 1];
 
   useEffect(() => {
     probeLocalAgents();
@@ -175,7 +205,14 @@ export const RightAgentPanel: React.FC = () => {
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [activeSession?.messages.length, isStreaming]);
+  }, [
+    activeSession?.messages.length,
+    isStreaming,
+    lastMsg?.content.length,
+    lastMsg?.thoughtProcess?.length,
+    lastMsg?.mcpToolCalls?.length,
+    Boolean(lastMsg?.patchProposal),
+  ]);
 
   const executeAgentImageDirectives = async (
     msgId: string,
@@ -280,7 +317,7 @@ export const RightAgentPanel: React.FC = () => {
             <PanelRightOpen className="w-4 h-4" />
           </button>
           <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 text-white flex items-center justify-center shadow-sm">
-            <Bot className="w-3.5 h-3.5" />
+            {isStreaming ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Bot className="w-3.5 h-3.5" />}
           </div>
         </div>
 
@@ -290,12 +327,12 @@ export const RightAgentPanel: React.FC = () => {
           style={{ writingMode: 'vertical-rl' }}
           title="展开 AI 绘图助手面板"
         >
-          AI 项目助手
+          {isStreaming ? `思考中 ${formatElapsed(elapsedSec)}` : 'AI 项目助手'}
         </button>
 
         <div className="flex flex-col items-center gap-1.5">
           <span
-            className="w-2 h-2 rounded-full"
+            className={`w-2 h-2 rounded-full ${isStreaming ? 'animate-pulse' : ''}`}
             style={{ backgroundColor: activeProvider.badgeColor }}
             title={`${activeProvider.name}${activeProvider.detected ? ' · 已就绪' : ''}`}
           />
@@ -318,7 +355,7 @@ export const RightAgentPanel: React.FC = () => {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1.5">
             <div className="w-5 h-5 rounded-md bg-gradient-to-br from-blue-500 to-indigo-600 text-white flex items-center justify-center shadow-xs">
-              <Bot className="w-3 h-3" />
+              {isStreaming ? <Loader2 className="w-3 h-3 animate-spin" /> : <Bot className="w-3 h-3" />}
             </div>
             <span className="text-xs font-semibold text-slate-900">
               项目 Agent
@@ -406,7 +443,7 @@ export const RightAgentPanel: React.FC = () => {
               ))}
             </select>
             <span
-              className="w-2 h-2 rounded-full absolute left-2.5 top-1/2 -translate-y-1/2"
+              className={`w-2 h-2 rounded-full absolute left-2.5 top-1/2 -translate-y-1/2 ${isStreaming ? 'animate-pulse' : ''}`}
               style={{ backgroundColor: activeProvider.badgeColor }}
             />
             <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -435,22 +472,49 @@ export const RightAgentPanel: React.FC = () => {
         </div>
 
         <AgentModelSelector agentId={activeAgentId} includePi />
-        <button
-          type="button"
-          onClick={() => openSettings('agent')}
-          title={activeAgentId === 'pi' ? '内置 Pi 仅使用 AgenTikZ 项目工具；点击配置模型与密钥。' : settings.agentFullAccess
-            ? `工作目录：${settings.agentWorkingDirectory.trim() || projectDir || '应用工作目录'}`
-            : '打开设置可开启跨文件夹访问和命令执行'}
-          className={`text-[10.5px] cursor-pointer ${settings.agentFullAccess ? 'text-amber-700' : 'text-slate-500'}`}
-        >
-          {activeAgentId === 'pi' ? 'Pi · 长驻会话 · 仅项目工具 · 配置模型' : settings.agentFullAccess ? '完整本机访问已开启' : '受限模式 · 配置本机访问'}
-        </button>
-        <button type="button" onClick={() => openSettings('mcp')}
-          className="inline-flex items-center gap-1 text-[10.5px] text-blue-600 hover:text-blue-700 cursor-pointer">
-          <Plug className="h-3 w-3" />MCP 服务
-        </button>
-        {activeAgentId === 'pi' && runtimeStatus && (
-          <p className="text-[10px] text-slate-500 break-words" role="status">{runtimeStatus}</p>
+        <div className="flex items-center justify-between gap-2">
+          <button
+            type="button"
+            onClick={() => openSettings('agent')}
+            title={activeAgentId === 'pi' ? '内置 Pi 仅使用 AgenTikZ 项目工具；点击配置模型与密钥。' : settings.agentFullAccess
+              ? `工作目录：${settings.agentWorkingDirectory.trim() || projectDir || '应用工作目录'}`
+              : '打开设置可开启跨文件夹访问和命令执行'}
+            className={`text-[10.5px] cursor-pointer ${settings.agentFullAccess ? 'text-amber-700' : 'text-slate-500'}`}
+          >
+            {activeAgentId === 'pi' ? 'Pi · 长驻会话 · 仅项目工具 · 配置模型' : settings.agentFullAccess ? '完整本机访问已开启' : '受限模式 · 配置本机访问'}
+          </button>
+          <button type="button" onClick={() => openSettings('mcp')}
+            className="inline-flex items-center gap-1 text-[10.5px] text-blue-600 hover:text-blue-700 cursor-pointer shrink-0">
+            <Plug className="h-3 w-3" />MCP 服务
+          </button>
+        </div>
+        {(isStreaming || runtimeStatus) && (
+          <div
+            role="status"
+            className={`flex items-center justify-between gap-1.5 rounded-md border px-2 py-1 text-[10.5px] leading-snug ${
+              isStreaming
+                ? 'border-indigo-200 bg-indigo-50/80 text-indigo-900'
+                : 'border-slate-200/80 bg-slate-50/80 text-slate-600'
+            }`}
+          >
+            <span className="flex items-center gap-1.5 min-w-0 break-words">
+              {isStreaming && <span className="h-1.5 w-1.5 rounded-full bg-indigo-600 animate-ping shrink-0" />}
+              <span>{runtimeStatus || '正在等待 Agent 响应…'}</span>
+            </span>
+            {isStreaming && (
+              <span className="font-mono text-[10px] text-indigo-700 shrink-0">
+                {formatElapsed(elapsedSec)}
+              </span>
+            )}
+          </div>
+        )}
+        {!isStreaming && piConfigIncomplete && (
+          <div className="flex items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50/90 px-2 py-1.5 text-[10.5px] text-amber-900">
+            <span>尚未配置内置 Pi 渠道或默认模型</span>
+            <button type="button" onClick={() => openSettings('agent')} className="shrink-0 font-semibold text-indigo-700 hover:underline cursor-pointer">
+              去配置 →
+            </button>
+          </div>
         )}
 
         {/* Collapsible ACP Command Inspector (Agentero style BYOA transparency) */}
@@ -477,7 +541,7 @@ export const RightAgentPanel: React.FC = () => {
               </div>
             )}
             <p className="text-[10px] text-slate-500 leading-snug">
-              {activeAgentId === 'pi' ? (activeProvider.detected ? 'Pi SDK 已就绪；模型密钥与实际请求需单独验证。' : '请在设置中检测 Pi 运行时并配置模型。') : activeProvider.detected
+              {activeAgentId === 'pi' ? (activeProvider.detected ? 'Pi SDK 已就绪；可在设置中点击「测试模型连通性」验证渠道。' : (activeProvider.diagnostic || '请在设置中检测 Pi 运行时并配置模型。')) : activeProvider.detected
                 ? `已就绪${activeProvider.version ? ` (${activeProvider.version})` : ''} — 发送时建立 ACP 会话`
                 : '未检测到本地 Agent CLI 或 ACP 适配器，请先安装并登录对应 CLI'}
             </p>
@@ -501,11 +565,18 @@ export const RightAgentPanel: React.FC = () => {
 
       {/* 2. Middle Scrollable Chat Conversation Window */}
       <div className="flex-1 overflow-y-auto p-3 space-y-3 bg-white select-text">
-        {activeSession?.messages.map((msg) => {
+        {activeSession?.messages.map((msg, msgIndex) => {
           const patch = msg.patchProposal;
           const previewMode =
             previewTabByMsgId[msg.id] ||
             (patch?.mode === 'surgical_diff' ? 'diff' : 'closed');
+          const isActiveStreamingMsg =
+            isStreaming &&
+            msg.role === 'assistant' &&
+            msgIndex === activeSession.messages.length - 1;
+          const isSystemError =
+            msg.role === 'system' &&
+            (/^(?:Pi|ACP)\s*错误：/.test(msg.content) || msg.content.startsWith('ACP 权限请求已拒绝：'));
 
           return (
             <div
@@ -562,17 +633,70 @@ export const RightAgentPanel: React.FC = () => {
                 className={`max-w-[95%] rounded-xl px-3 py-2 text-xs leading-relaxed ${
                   msg.role === 'user'
                     ? 'bg-blue-600 text-white rounded-br-xs shadow-2xs'
+                    : isSystemError
+                    ? 'bg-rose-50/95 text-rose-900 border border-rose-200 rounded-bl-xs space-y-2'
+                    : isActiveStreamingMsg
+                    ? 'w-full bg-indigo-50/35 text-slate-800 border border-indigo-200/90 rounded-bl-xs space-y-2 shadow-2xs'
                     : 'bg-slate-50/90 text-slate-800 border border-slate-200/90 rounded-bl-xs space-y-2'
                 }`}
               >
-                {/* ACP Thought Stream */}
+                {/* Live Agent Thinking / Streaming Activity Indicator */}
+                {isActiveStreamingMsg && (
+                  <div
+                    data-testid="agent-live-activity"
+                    className="rounded-lg border border-indigo-200/90 bg-white/95 px-2.5 py-2 space-y-1.5 shadow-2xs"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <Loader2 className="w-3.5 h-3.5 text-indigo-600 animate-spin shrink-0" />
+                        <span className="text-[11px] font-semibold text-indigo-950 truncate">
+                          Agent 正在运行
+                        </span>
+                        <span className="inline-flex items-center gap-0.5 pl-0.5" aria-hidden="true">
+                          <span className="w-1 h-1 rounded-full bg-indigo-500 animate-bounce" style={{ animationDelay: '0ms' }} />
+                          <span className="w-1 h-1 rounded-full bg-indigo-500 animate-bounce" style={{ animationDelay: '150ms' }} />
+                          <span className="w-1 h-1 rounded-full bg-indigo-500 animate-bounce" style={{ animationDelay: '300ms' }} />
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <span className="rounded bg-indigo-50 px-1.5 py-0.5 font-mono text-[10px] font-medium text-indigo-700 border border-indigo-100">
+                          {formatElapsed(elapsedSec)}
+                        </span>
+                        {activeRequestId && (
+                          <button
+                            type="button"
+                            onClick={() => void cancelPrompt()}
+                            className="inline-flex items-center gap-1 rounded border border-rose-200 bg-rose-50 px-1.5 py-0.5 text-[10px] font-medium text-rose-700 hover:bg-rose-100 cursor-pointer"
+                            title="中止本轮 Agent 请求"
+                          >
+                            <Square className="w-2.5 h-2.5 fill-current" />
+                            <span>停止</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <p className="text-[10.5px] text-slate-600 leading-snug break-words">
+                      {runtimeStatus || '正在等待模型思考与首字节响应…'}
+                    </p>
+                  </div>
+                )}
+
+                {/* Agent Thought / Reasoning Stream */}
                 {msg.thoughtProcess && (
-                  <details className="group bg-white rounded-lg border border-slate-200/80 px-2.5 py-1.5 text-[11px] text-slate-500">
-                    <summary className="cursor-pointer font-medium text-slate-600 flex items-center gap-1 list-none">
-                      <ChevronRight className="w-3 h-3 group-open:rotate-90 transition-transform" />
-                      <span>ACP 推理与 AST 分析过程</span>
+                  <details
+                    open={isActiveStreamingMsg ? true : undefined}
+                    className="group bg-white rounded-lg border border-slate-200/80 px-2.5 py-1.5 text-[11px] text-slate-500"
+                  >
+                    <summary className="cursor-pointer font-medium text-slate-600 flex items-center justify-between gap-1 list-none">
+                      <span className="flex items-center gap-1">
+                        <ChevronRight className="w-3 h-3 group-open:rotate-90 transition-transform" />
+                        <span>Agent 思考与推理过程</span>
+                      </span>
+                      <span className="font-mono text-[10px] text-slate-400">
+                        {msg.thoughtProcess.length} 字
+                      </span>
                     </summary>
-                    <p className="mt-1.5 pt-1.5 border-t border-slate-100 text-[10.5px] font-mono text-slate-500 leading-normal">
+                    <p className="mt-1.5 pt-1.5 border-t border-slate-100 text-[10.5px] font-mono text-slate-500 leading-normal whitespace-pre-wrap max-h-44 overflow-y-auto">
                       {msg.thoughtProcess}
                     </p>
                   </details>
@@ -597,15 +721,12 @@ export const RightAgentPanel: React.FC = () => {
                         </span>
                         {tc.status === 'completed' ? (
                           <Check className="w-3 h-3 text-emerald-600 shrink-0 ml-1" />
+                        ) : tc.status === 'failed' ? (
+                          <span className="text-red-600 shrink-0 ml-1">失败</span>
                         ) : (
-                          <span
-                            className={
-                              tc.status === 'failed'
-                                ? 'text-red-600 shrink-0 ml-1'
-                                : 'text-slate-400 shrink-0 ml-1'
-                            }
-                          >
-                            {tc.status === 'failed' ? '失败' : '运行中'}
+                          <span className="inline-flex items-center gap-1 text-indigo-600 shrink-0 ml-1">
+                            <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                            <span>运行中</span>
                           </span>
                         )}
                       </div>
@@ -614,7 +735,23 @@ export const RightAgentPanel: React.FC = () => {
                 )}
 
                 {/* Message Text */}
-                <div className="whitespace-pre-wrap">{msg.content}</div>
+                {msg.content && (
+                  <div className="whitespace-pre-wrap flex items-start gap-1.5">
+                    {isSystemError && <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0 mt-0.5" />}
+                    <div className="min-w-0 flex-1">{msg.content}</div>
+                  </div>
+                )}
+                {isSystemError && (
+                  <div className="pt-1 flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => openSettings('agent')}
+                      className="rounded border border-rose-200 bg-white px-2 py-0.5 text-[10.5px] font-medium text-rose-800 hover:bg-rose-100 cursor-pointer"
+                    >
+                      检查 Agent 与渠道设置 →
+                    </button>
+                  </div>
+                )}
                 {msg.projectPatchProposal && <ProjectPatchCard messageId={msg.id} proposal={msg.projectPatchProposal} />}
 
                 {/* TikZ Code Patch Proposal Card with Diff & Semantic Change Preview */}
