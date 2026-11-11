@@ -21,7 +21,7 @@
 \setCJKsansfont{NotoSansCJKsc-Regular.otf}[BoldFont=NotoSansCJKsc-Bold.otf]
 \setCJKmonofont{NotoSansCJKsc-Regular.otf}
 %% The Latin roman and math fonts stay Latin Modern, matching LaTeX defaults.
-\XeTeXlinebreaklocale "zh"
-\XeTeXlinebreakskip = 0pt plus 1pt
+%% xeCJK supplies CJK spacing and line-break opportunities. Do not also set
+%% XeTeXlinebreaklocale: portable/static engines may omit ICU locale data.
 
 \endinput
