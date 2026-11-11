@@ -12,7 +12,7 @@ import {
 import { useWorkspaceStore } from './useWorkspaceStore';
 import { getPaperWorkspaceVersion, useProjectStore } from './useProjectStore';
 import { useMcpStore } from './useMcpStore';
-import { currentCanvasTarget, endMcpRequest, proposalConflict, registerMcpRequest, sourceHash } from '../core/mcp/context';
+import { currentCanvasTarget, endMcpRequest, getMcpRequest, proposalConflict, registerMcpRequest, sourceHash } from '../core/mcp/context';
 import { buildAgentSkillAndLibraryContext } from '../core/agent/agent-knowledge';
 import { compileUserPromptWithStyleGuide } from '../core/agent/prompt-compiler';
 import { buildProjectAgentContext } from '../core/agent/project-context';
@@ -413,7 +413,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
       const visualGuidanceBlock = !paperMode && get().visualReviewEnabled
         ? (effectiveVisualReview
             ? VISUAL_REVIEW_GUIDANCE
-            : '\n\n=== TEXTUAL LAYOUT VERIFICATION (NON-VISION MODEL) ===\nThe selected model does not support image input (`render_canvas_preview` is disabled). Submit one complete `\\begin{tikzpicture}...\\end{tikzpicture}` via `propose_tikz_patch` (or `propose_surgical_diff` for small edits) and inspect the `report` returned directly in that tool response (or pass `proposalId` to `inspect_layout_diagnostics` / `propose_layout_repair`). Do NOT call `propose_layout_repair` without `proposalId`, as that repairs the original live canvas and overwrites your pending proposal. Refine at most once or twice if `report.issues` reports concrete overlaps, then stop and summarize.')
+            : '\n\n=== TEXTUAL LAYOUT VERIFICATION (NON-VISION MODEL) ===\nThe selected model does not support image input (`render_canvas_preview` is disabled). Submit one complete `\\begin{tikzpicture}...\\end{tikzpicture}` via `propose_tikz_patch` (or `propose_surgical_diff` for small edits) and inspect the `report` returned directly in that tool response (or pass `proposalId` to `inspect_layout_diagnostics` / `propose_layout_repair`). In manual mode do NOT call `propose_layout_repair` without `proposalId`, as that repairs the original live canvas and overwrites your pending proposal. In automatic mode valid tool edits are applied immediately; read the latest canvas source, revision and hash before further edits. Refine at most once or twice if `report.issues` reports concrete overlaps, then stop and summarize.')
         : '';
       const agentContext = buildProjectAgentContext(autoMode) + (paperMode ? '' : '\n\n' + buildAgentSkillAndLibraryContext(
         activeThemeId,
@@ -612,6 +612,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
   },
   applyPatchProposal: (messageId) => applyCanvasProposal(get().activeSessionId, messageId),
   revertPatchProposal: (messageId) => {
+    if (get().isStreaming) return;
     const { sessions, activeSessionId } = get();
     const message = sessions.find((session) => session.id === activeSessionId)?.messages.find((item) => item.id === messageId);
     if (!message?.patchProposal || message.patchProposal.previousTikzCode === undefined) return;
@@ -687,12 +688,23 @@ function applyCanvasProposal(sessionId: string, messageId: string, autoApplied =
     workspace.setSelectedIds(proposal.affectedElementIds);
   }
   updateAgentMessage(sessionId, messageId, (item) => ({ ...item,
-    patchProposal: { ...proposal, status: 'applied', previousTikzCode: currentCode, autoApplied },
+    patchProposal: { ...proposal, status: 'applied',
+      previousTikzCode: proposal.previousTikzCode ?? currentCode,
+      baseTikzCode: proposal.previousTikzCode ?? currentCode, autoApplied },
   }));
   return true;
 }
 
-/** One attempt on the final proposal, not a subscription that would reapply reverted work. */
+/** Apply each completed tool edit, not a subscription that would reapply reverted work. */
+export function autoApplyMcpProposal(requestId: string, kind: 'canvas' | 'project'): void {
+  const context = getMcpRequest(requestId);
+  if (!context?.autoMode || !context.messageId || !context.agentId ||
+      !useSettingsStore.getState().agentAutoMode || cancelRequested) return;
+  if (kind === 'canvas') applyCanvasProposal(context.target.conversationId, context.messageId, true);
+  else changeProjectProposal(context.target.conversationId, context.messageId, false, true);
+}
+
+/** Final text fallback and local skills still use the same checked apply path. */
 function autoApplyProposals(sessionId: string, messageId: string): void {
   if (!useSettingsStore.getState().agentAutoMode || useAgentStore.getState().isStreaming) return;
   applyCanvasProposal(sessionId, messageId, true);
@@ -700,7 +712,7 @@ function autoApplyProposals(sessionId: string, messageId: string): void {
 }
 
 function changeProjectProposal(sessionId: string, messageId: string, reverting: boolean, autoApplied = false): boolean {
-  if (useAgentStore.getState().isStreaming) return false;
+  if (useAgentStore.getState().isStreaming && !autoApplied) return false;
   const message = useAgentStore.getState().sessions.find((session) => session.id === sessionId)
     ?.messages.find((item) => item.id === messageId);
   const proposal = message?.projectPatchProposal;
@@ -843,7 +855,7 @@ async function sendViaRealAcp(
         (useProjectStore.getState().projectDir || 'temporary') !== target.projectId) {
       throw new Error('项目已切换，请在目标项目重新发送请求。');
     }
-    releaseMcp = registerMcpRequest(requestId, { target, agentId, messageId, visualReviewEnabled, diagramMode });
+    releaseMcp = registerMcpRequest(requestId, { target, agentId, messageId, visualReviewEnabled, diagramMode, autoMode });
     // Establish delivery before creating a placeholder or invoking the backend.
     unlisten = await listen<AcpStreamEvent>('acp:stream', ({ payload: event }) => {
       if (finished || event.requestId !== requestId) return;

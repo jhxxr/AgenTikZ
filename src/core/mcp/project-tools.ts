@@ -1,5 +1,6 @@
 import { useProjectStore } from '../../store/useProjectStore';
-import { useAgentStore } from '../../store/useAgentStore';
+import { autoApplyMcpProposal, projectProposalConflict, useAgentStore } from '../../store/useAgentStore';
+import { useSettingsStore } from '../../store/useSettingsStore';
 import { useMcpStore } from '../../store/useMcpStore';
 import { getPaperBuildDiagnostics } from '../../store/usePaperBuildStore';
 import { getProjectContext } from '../agent/project-context';
@@ -62,7 +63,7 @@ export async function executeProjectTool(event: McpToolRequest, context: McpRequ
     }
     if (!context.messageId || !context.agentId) fail('read_only_request', '此连接只允许读取。');
     const summary = text(args, 'summary').trim();
-    const rationale = args.rationale === undefined ? '项目修改草稿，等待审核。' : text(args, 'rationale');
+    const rationale = args.rationale === undefined ? '由项目工具提交的文件修改。' : text(args, 'rationale');
     if (!summary || summary.length > 2000 || rationale.length > 8000 ||
         !Number.isSafeInteger(args.baseRevision) || Number(args.baseRevision) < 0 ||
         !Array.isArray(args.files) || args.files.length < 1 || args.files.length > 20) {
@@ -107,14 +108,37 @@ export async function executeProjectTool(event: McpToolRequest, context: McpRequ
     const message = useAgentStore.getState().sessions.find((s) => s.id === context.target.conversationId)
       ?.messages.find((m) => m.id === context.messageId);
     if (!message) fail('request_ended', '原始会话消息已不存在。');
-    if (message.projectPatchProposal && message.projectPatchProposal.status !== 'pending') {
+    const previous = message.projectPatchProposal;
+    const continuingAutoEdit = context.autoMode && useSettingsStore.getState().agentAutoMode &&
+      previous?.status === 'applied' && previous.autoApplied;
+    if (previous && previous.status !== 'pending' && !continuingAutoEdit) {
       fail('proposal_closed', '已审阅的修改集不能被后台覆盖，请发起新一轮请求。');
     }
+    if (continuingAutoEdit && projectProposalConflict(previous!, true)) {
+      fail('source_changed', '上次应用后论文已变化，请发起新一轮请求，避免覆盖后续编辑。');
+    }
+    // Keep one cumulative undo record while each individual tool edit uses the latest versions.
+    const cumulativeFiles = new Map((continuingAutoEdit ? previous!.files : []).map((file) => [file.relativePath, file]));
+    for (const file of files) {
+      const before = cumulativeFiles.get(file.relativePath)?.before ?? file.before;
+      cumulativeFiles.set(file.relativePath, { ...file, before, diffLines: computeCompactLineDiff(before, file.after) });
+    }
+    if (cumulativeFiles.size > 20) fail('invalid_arguments', '本轮累计修改不能超过 20 个文件，请拆分为新一轮任务。');
     useAgentStore.setState((state) => ({ sessions: state.sessions.map((session) =>
       session.id === context.target.conversationId ? { ...session, messages: session.messages.map((m) =>
         m.id === context.messageId ? { ...m, projectPatchProposal: proposal } : m) } : session) }));
-    return { proposalId: proposal.id, status: 'pending', applied: false,
-      projectId: proposal.projectId, paperRevision: revision, files: files.map((file) => file.relativePath) };
+    autoApplyMcpProposal(event.requestId, 'project');
+    const published = useAgentStore.getState().sessions.find((s) => s.id === context.target.conversationId)
+      ?.messages.find((m) => m.id === context.messageId)?.projectPatchProposal;
+    const applied = published?.status === 'applied';
+    if (applied && continuingAutoEdit) {
+      useAgentStore.setState((state) => ({ sessions: state.sessions.map((session) =>
+        session.id === context.target.conversationId ? { ...session, messages: session.messages.map((m) =>
+          m.id === context.messageId ? { ...m, projectPatchProposal: { ...published!, files: [...cumulativeFiles.values()] } } : m) } : session) }));
+    }
+    return { proposalId: proposal.id, status: published?.status ?? 'pending', applied,
+      projectId: proposal.projectId, paperRevision: useProjectStore.getState().paperEditRevision,
+      files: files.map((file) => file.relativePath) };
   } catch (error) {
     return { error: { code: error instanceof ProjectToolError ? error.code : 'tool_failed',
       message: error instanceof Error ? error.message : String(error) } };

@@ -1,7 +1,7 @@
 {
   "name": "agentikz",
   "private": true,
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "AI-era Visual TikZ & PGFPlots Editor for Scientific Research with BYOA (ACP/MCP)",
   "license": "MIT",
   "repository": {

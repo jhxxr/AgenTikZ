@@ -8,6 +8,8 @@ export interface McpRequestContext {
   target: CanvasTarget;
   agentId?: AcpAgentId;
   messageId?: string;
+  /** Captured for this request; enabling auto mode later cannot approve older work. */
+  autoMode?: boolean;
   paperReads?: Map<string, { revision: number; sourceHash: string; source: string }>;
   visualReviewEnabled?: boolean;
   diagramMode?: DiagramDesignMode;

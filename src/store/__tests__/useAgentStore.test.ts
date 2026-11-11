@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { useAgentStore } from '../useAgentStore';
+import { autoApplyMcpProposal, useAgentStore } from '../useAgentStore';
+import { getMcpRequest } from '../../core/mcp/context';
 import { useSettingsStore } from '../useSettingsStore';
 import { useMcpStore } from '../useMcpStore';
 
@@ -134,6 +135,49 @@ describe('automatic mode', () => {
     await store.getState().sendPromptToAgent('Another edit');
     expect(store.getState().sessions[0].messages.at(-1)?.patchProposal?.status).toBe('pending');
     expect(bridge.setTikzCode).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['claude-code', 'pi'] as const)('registers %s auto approval for immediate tool edits before the response finishes', async (agentId) => {
+    const store = await freshStore();
+    store.getState().setActiveAgentId(agentId);
+    useSettingsStore.getState().updateSettings({ agentAutoMode: true, piModel: 'fixture' });
+    bridge.invoke.mockImplementation(async (_command, args) => {
+      const requestId = agentId === 'pi' ? args.request.requestId : args.requestId;
+      expect(getMcpRequest(requestId)?.autoMode).toBe(true);
+      stageProposals();
+      autoApplyMcpProposal(requestId, 'canvas');
+      autoApplyMcpProposal(requestId, 'project');
+      expect(store.getState().isStreaming).toBe(true);
+      expect(bridge.canvasCode).toBe('% draft');
+      expect(bridge.paperContents['main.tex']).toBe('Revised manuscript');
+      return agentId === 'pi' ? { runtimeStarted: true, reply: 'Done' } : { usedNativeCli: true, reply: 'Done' };
+    });
+    await store.getState().sendPromptToAgent('Edit');
+    expect(bridge.setTikzCode).toHaveBeenCalledOnce();
+    expect(bridge.applyPaperFileChanges).toHaveBeenCalledOnce();
+    expect(assistant().patchProposal?.autoApplied).toBe(true);
+    expect(assistant().projectPatchProposal?.autoApplied).toBe(true);
+  });
+
+  it.each(['error', 'cancel'])('preserves already applied edits and undo when the rest of a run ends with %s', async (reason) => {
+    const store = await freshStore();
+    useSettingsStore.getState().updateSettings({ agentAutoMode: true });
+    bridge.invoke.mockImplementation(async (command, args) => {
+      if (command === 'acp_cancel_prompt') return;
+      stageProposals();
+      autoApplyMcpProposal(args.requestId, 'canvas');
+      autoApplyMcpProposal(args.requestId, 'project');
+      if (reason === 'cancel') await store.getState().cancelPrompt();
+      throw new Error('Run interrupted');
+    });
+    await store.getState().sendPromptToAgent('Edit');
+    expect(assistant().patchProposal?.status).toBe('applied');
+    expect(assistant().projectPatchProposal?.status).toBe('applied');
+    expect(bridge.setTikzCode).toHaveBeenCalledOnce();
+    store.getState().revertPatchProposal(assistant().id);
+    expect(store.getState().revertProjectProposal(assistant().id)).toBe(true);
+    expect(bridge.canvasCode).toBe('% original canvas');
+    expect(bridge.paperContents['main.tex']).toBe('Unsaved manuscript');
   });
 
   it('forwards effective native access without overwriting the independent full-access preference', async () => {

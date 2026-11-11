@@ -57,7 +57,7 @@ impl ServerHandler for CanvasBridge {
     fn get_info(&self) -> ServerConfig {
         let mut config = ServerConfig::new(ServerCapabilities::builder().enable_tools().build());
         config.server_info = Implementation::new("AgenTikZ", env!("CARGO_PKG_VERSION"));
-        config.instructions = Some("Use get_project_context to discover project files and read_project_file before proposing manuscript changes. Use get_canvas_source before canvas edits. Use render_canvas_preview to compile an exact figure draft and inspect its image before refining. All proposals require user review; previewing does not apply edits or validate manuscript builds.".into());
+        config.instructions = Some("Use get_project_context to discover project files and read_project_file before proposing manuscript changes. Use get_canvas_source before canvas edits. Use render_canvas_preview to compile an exact figure draft and inspect its image before refining. Manual mode keeps proposals pending for user review; automatic mode immediately applies each valid propose_* edit with version checks. Trust returned status/applied and read the latest source/version before further edits. Previewing itself does not apply edits or validate manuscript builds.".into());
         config
     }
 

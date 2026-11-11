@@ -19,12 +19,12 @@ const STATUS: Record<TikzPatchProposal['status'], { label: string; className: st
   rejected: { label: '已忽略', className: 'bg-slate-100 text-slate-500 border-slate-200' },
 };
 
-/** A reviewable TikZ change, applied manually or by auto mode after the turn finishes. */
+/** A reviewable TikZ change, applied manually or immediately by auto mode. */
 export const CanvasPatchCard: React.FC<{ messageId: string; patch: TikzPatchProposal }> = ({ messageId, patch }) => {
-  const { apply, revert, reject, restore, visualReviewEnabled } = useAgentStore(useShallow((s) => ({
+  const { apply, revert, reject, restore, visualReviewEnabled, isStreaming } = useAgentStore(useShallow((s) => ({
     apply: s.applyPatchProposal, revert: s.revertPatchProposal,
     reject: s.rejectPatchProposal, restore: s.restorePatchProposal,
-    visualReviewEnabled: s.visualReviewEnabled,
+    visualReviewEnabled: s.visualReviewEnabled, isStreaming: s.isStreaming,
   })));
   // Subscribed only so the conflict check below re-runs when the canvas moves on.
   useWorkspaceStore(useShallow((s) => ({ code: s.tikzCode, revision: s.sourceRevision })));
@@ -205,7 +205,7 @@ export const CanvasPatchCard: React.FC<{ messageId: string; patch: TikzPatchProp
           )}
           {view === 'preview' && patch.renderPreview && (
             <figure className="mt-1.5 rounded-md border border-slate-200 bg-white p-2">
-              <img src={patch.renderPreview.dataUrl} alt="待审核提案的真实 TeX 渲染" className="w-full object-contain" />
+              <img src={patch.renderPreview.dataUrl} alt="画布修改的真实 TeX 渲染" className="w-full object-contain" />
               <figcaption className="mt-1.5 text-[11px] text-slate-500">真实 TeX 渲染结果。编译成功不代表排版无误，请自行确认。</figcaption>
             </figure>
           )}
@@ -261,7 +261,7 @@ export const CanvasPatchCard: React.FC<{ messageId: string; patch: TikzPatchProp
             </button>
           </>}
           {applied && (
-            <button type="button" disabled={!!blocked} onClick={() => revert(messageId)}
+            <button type="button" disabled={isStreaming || !!blocked} onClick={() => revert(messageId)}
               className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-[12px] text-slate-700 hover:bg-slate-50 disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed">
               <Undo2 className="h-3.5 w-3.5" />撤回修改
             </button>

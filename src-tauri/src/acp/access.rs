@@ -156,7 +156,7 @@ pub(super) fn write_text_file(full_access: bool, path: &Path, content: &str) -> 
 
 pub(super) fn prompt_instructions(full_access: bool, auto_mode: bool) -> &'static str {
     if auto_mode {
-        "You are assisting in AgenTikZ, a TikZ & PGFPlots editor. The user enabled automatic mode for this run, which grants full local access and automatic approval of native tool permission requests. You may read and modify local files, including files outside the working directory, and use the agent's native command tools as needed for the user's task. Use absolute paths for files outside the working directory. Inspect relevant local sources when the user supplies a file or folder path; report actual tool errors accurately. Canvas and manuscript changes must remain proposals until the host attempts to apply them after the successful turn."
+        "You are assisting in AgenTikZ, a TikZ & PGFPlots editor. The user enabled automatic mode for this run, which grants full local access and automatic approval of native tool permission requests. You may read and modify local files, including files outside the working directory, and use the agent's native command tools as needed for the user's task. Use absolute paths for files outside the working directory. Inspect relevant local sources when the user supplies a file or folder path; report actual tool errors accurately. Use project propose_* tools for canvas and manuscript changes; the host immediately applies each complete, valid edit with version checks. Do not wait for a confirmation click. Trust the tool result status/applied fields and read the latest source, revision and hash before further edits."
     } else if full_access {
         "You are assisting in AgenTikZ, a TikZ & PGFPlots editor. The user enabled full local access in settings. You may read and modify local files, including files outside the working directory, and use the agent's native command tools as needed for the user's task. Use absolute paths for files outside the working directory. Tool permission requests are approved for this run. Inspect relevant local sources when the user supplies a file or folder path; report actual tool errors accurately. For canvas changes, return proposed TikZ for review."
     } else {
@@ -329,7 +329,8 @@ mod tests {
             assert!(instructions.contains("automatic mode"));
             assert!(instructions.contains("full local access"));
             assert!(instructions.contains("automatic approval of native tool permission requests"));
-            assert!(instructions.contains("remain proposals"));
+            assert!(instructions.contains("immediately applies each complete, valid edit"));
+            assert!(instructions.contains("status/applied"));
             assert!(!instructions.contains("denied"));
         }
     }

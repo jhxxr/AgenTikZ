@@ -7,6 +7,7 @@ import { useProjectStore } from '../../../store/useProjectStore';
 import type { McpToolRequest } from '../../../types/mcp';
 import { renderAgentPreview } from '../../agent/visual-review';
 import { getMcpRequest } from '../context';
+import { useSettingsStore } from '../../../store/useSettingsStore';
 
 vi.mock('../../agent/visual-review', () => ({ renderAgentPreview: vi.fn() }));
 
@@ -22,8 +23,9 @@ beforeEach(() => {
   useWorkspaceStore.setState(useWorkspaceStore.getInitialState());
   useWorkspaceStore.getState().setTikzCode(original);
   useProjectStore.setState({ projectDir: null, activeCanvasFileName: 'figure-a.canvas.json' });
+  useSettingsStore.setState({ agentAutoMode: false });
   useAgentStore.setState({
-    activeSessionId: 'chat', sessions: [{ id: 'chat', title: 'Test', agentId: 'claude-code', createdAt: '',
+    isStreaming: false, activeSessionId: 'chat', sessions: [{ id: 'chat', title: 'Test', agentId: 'claude-code', createdAt: '',
       messages: [{ id: 'assistant', role: 'assistant', content: '', timestamp: '', agentId: 'claude-code' }] }],
   });
   target = currentCanvasTarget('chat');
@@ -40,6 +42,55 @@ async function base() {
 }
 
 describe('actual canvas MCP handlers', () => {
+  it('applies each auto-mode edit during streaming, previews it and reverts the entire turn', async () => {
+    getMcpRequest('request')!.autoMode = true;
+    useSettingsStore.setState({ agentAutoMode: true });
+    useAgentStore.setState({ isStreaming: true });
+    const first = await call('propose_tikz_patch', { ...await base(), newTikzCode: replacement });
+    expect(first).toMatchObject({ status: 'applied', applied: true,
+      revision: useWorkspaceStore.getState().sourceRevision, sourceHash: await sourceHash(replacement) });
+    expect(useWorkspaceStore.getState().tikzCode).toBe(replacement);
+    expect(await call('render_canvas_preview', { proposalId: first.proposalId })).toMatchObject({ applied: true });
+    expect(renderAgentPreview).toHaveBeenCalledWith(replacement, expect.any(String), expect.any(Object));
+    const refined = replacement.replace('Changed', 'Refined');
+    const second = await call('propose_surgical_diff', { ...await base(), patches: [{ search: 'Changed', replace: 'Refined' }] });
+    expect(second).toMatchObject({ status: 'applied', applied: true, sourceHash: await sourceHash(refined) });
+    expect(useWorkspaceStore.getState().tikzCode).toBe(refined);
+    expect(useAgentStore.getState().sessions[0].messages[0].patchProposal).toMatchObject({
+      status: 'applied', autoApplied: true, previousTikzCode: original, baseTikzCode: original,
+    });
+    expect(await call('propose_layout_repair', { ...await base(), proposalId: first.proposalId })).toMatchObject({ applied: true });
+    useAgentStore.setState({ isStreaming: false });
+    useAgentStore.getState().revertPatchProposal('assistant');
+    expect(useWorkspaceStore.getState().tikzCode).toBe(original);
+    expect(useAgentStore.getState().sessions[0].messages[0].patchProposal?.status).toBe('pending');
+    expect(useAgentStore.getState().applyPatchProposal('assistant')).toBe(true);
+    expect(useWorkspaceStore.getState().tikzCode).toContain('Refined');
+  });
+
+  it.each(['not-opted-in', 'disabled', 'expired', 'stale', 'read-only'])('does not auto-apply a %s tool request', async (reason) => {
+    const args = await base();
+    getMcpRequest('request')!.autoMode = reason !== 'not-opted-in';
+    useSettingsStore.setState({ agentAutoMode: reason !== 'disabled' });
+    useAgentStore.setState({ isStreaming: true });
+    if (reason === 'expired') release();
+    if (reason === 'stale') useWorkspaceStore.getState().setTikzCode(original + '\n% user edit');
+    if (reason === 'read-only') getMcpRequest('request')!.agentId = undefined;
+    const result = await call('propose_tikz_patch', { ...args, newTikzCode: replacement });
+    expect(result.applied).not.toBe(true);
+    expect(useWorkspaceStore.getState().tikzCode).toBe(reason === 'stale' ? original + '\n% user edit' : original);
+  });
+
+  it('never overwrites a user edit made after an automatically applied change', async () => {
+    getMcpRequest('request')!.autoMode = true;
+    useSettingsStore.setState({ agentAutoMode: true });
+    await call('propose_tikz_patch', { ...await base(), newTikzCode: replacement });
+    useWorkspaceStore.getState().setTikzCode(replacement + '\n% user edit');
+    expect(await call('propose_tikz_patch', { ...await base(), newTikzCode: original }))
+      .toMatchObject({ error: { code: 'source_changed' } });
+    expect(useWorkspaceStore.getState().tikzCode).toBe(replacement + '\n% user edit');
+  });
+
   it('provides scoped skill pages independently of the selected canvas, validates arguments and honors request expiry', async () => {
     useProjectStore.setState({ activeCanvasFileName: 'figure-b.canvas.json' });
     const page = await call('get_diagram_design_skill', { topic: 'mae', lineCount: 20 });

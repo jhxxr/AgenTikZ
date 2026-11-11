@@ -1,4 +1,4 @@
-import { useAgentStore } from '../../store/useAgentStore';
+import { autoApplyMcpProposal, useAgentStore } from '../../store/useAgentStore';
 import { useMcpStore } from '../../store/useMcpStore';
 import { useWorkspaceStore } from '../../store/useWorkspaceStore';
 import { parseTikzDocument } from '../parser/parser';
@@ -6,7 +6,7 @@ import { analyzeTikzLayout, autoRepairTikzLayout } from '../agent/layout-diagnos
 import { computeTikzDiff } from '../agent/tikz-diff';
 import { PRIMITIVE_LIBRARY } from '../tikz/primitives';
 import { JOURNAL_THEMES } from '../themes/journal-presets';
-import { getMcpRequest, sameCanvas, sourceHash } from './context';
+import { getMcpRequest, proposalConflict, sameCanvas, sourceHash } from './context';
 import type { McpToolRequest } from '../../types/mcp';
 import type { JournalThemeId } from '../../types/theme';
 import type { TikzPatchProposal } from '../../types/acp';
@@ -167,12 +167,14 @@ export async function executeMcpTool(event: McpToolRequest): Promise<unknown> {
     };
     const session = useAgentStore.getState().sessions.find((s) => s.id === context.target.conversationId);
     const currentProposal = session?.messages.find((message) => message.id === context.messageId)?.patchProposal;
+    const inspectableProposal = currentProposal?.status === 'pending' ||
+      (currentProposal?.status === 'applied' && currentProposal.autoApplied);
     if (event.toolName === 'render_canvas_preview') {
       if (context.visualReviewEnabled === false) fail('preview_disabled', '本轮已关闭视觉复核。');
-      if (args.proposalId && (args.proposalId !== currentProposal?.id || currentProposal.status !== 'pending')) {
-        fail('proposal_not_found', '待应用提案不存在。');
+      if (args.proposalId && (args.proposalId !== currentProposal?.id || !inspectableProposal)) {
+        fail('proposal_not_found', '可检查的提案不存在。');
       }
-      if (args.proposalId && (currentProposal!.baseRevision !== revision || currentProposal!.baseTikzCode !== source)) {
+      if (args.proposalId && proposalConflict(currentProposal!, currentProposal!.status === 'applied')) {
         fail('source_changed', '画布已变化，请重新生成提案后渲染。');
       }
       const previewSource = args.proposalId ? currentProposal!.newTikzCode : source;
@@ -198,7 +200,7 @@ export async function executeMcpTool(event: McpToolRequest): Promise<unknown> {
       if (getMcpRequest(event.requestId) !== context || !useMcpStore.getState().config.builtinEnabled ||
           !sameCanvas(context.target) || live.sourceRevision !== revision || live.tikzCode !== source ||
           (live.activeThemeId ?? 'neurips') !== themeId || liveSettings.texEngine !== texEngine ||
-          (args.proposalId && (liveProposal !== currentProposal || liveProposal?.status !== 'pending'))) {
+          (args.proposalId && liveProposal !== currentProposal)) {
         fail('source_changed', '渲染期间画布、提案或请求已变化，结果已丢弃。');
       }
       if (!preview) fail('preview_failed', renderError instanceof Error ? renderError.message : String(renderError));
@@ -210,15 +212,16 @@ export async function executeMcpTool(event: McpToolRequest): Promise<unknown> {
               dataUrl: imageDataUrl(rendered.image), sourceHash: previewSourceHash,
             } } } : message) } : s) }));
       }
-      return { ...version, previewSourceHash, proposalId: args.proposalId, applied: false, cached,
+      return { ...version, previewSourceHash, proposalId: args.proposalId,
+        applied: Boolean(args.proposalId && currentProposal?.status === 'applied'), cached,
         rendersRemaining: 3 - (context.previewAttempts ?? 0), renderer: 'tex', message: rendered.message,
         report: analyzeTikzLayout(previewSource, themeId), image: rendered.image };
     }
     if (event.toolName === 'inspect_layout_diagnostics') {
-      if (args.proposalId && args.proposalId !== currentProposal?.id) fail('proposal_not_found', '待应用提案不存在。');
+      if (args.proposalId && args.proposalId !== currentProposal?.id) fail('proposal_not_found', '可检查的提案不存在。');
       return {
         ...version,
-        inspectedTarget: args.proposalId ? 'pending_proposal' : 'live_canvas',
+        inspectedTarget: args.proposalId && currentProposal?.status === 'pending' ? 'pending_proposal' : 'live_canvas',
         ...(!args.proposalId && currentProposal?.status === 'pending'
           ? {
               pendingProposalId: currentProposal.id,
@@ -229,6 +232,13 @@ export async function executeMcpTool(event: McpToolRequest): Promise<unknown> {
       };
     }
     if (!context.agentId || !context.messageId || !session) fail('read_only_request', '此连接只允许读取画布。');
+    if (currentProposal && currentProposal.status !== 'pending' &&
+        !(context.autoMode && useSettingsStore.getState().agentAutoMode && currentProposal.status === 'applied' && currentProposal.autoApplied)) {
+      fail('proposal_closed', '已审阅的提案不能被后台覆盖，请发起新一轮请求。');
+    }
+    if (currentProposal?.status === 'applied' && proposalConflict(currentProposal, true)) {
+      fail('source_changed', '上次应用后画布已变化，请发起新一轮请求，避免覆盖后续编辑。');
+    }
     if (args.baseRevision !== revision || args.baseSourceHash !== hash) fail('source_changed', '画布已变化，请重新读取后生成提案。');
     let nextSource: string;
     let repairs: string[] | undefined;
@@ -249,8 +259,8 @@ export async function executeMcpTool(event: McpToolRequest): Promise<unknown> {
         nextSource = nextSource.replace(search, () => replacement);
       }
     } else {
-      if (args.proposalId && (args.proposalId !== currentProposal?.id || currentProposal.status !== 'pending')) {
-        fail('proposal_not_found', '待应用提案不存在。');
+      if (args.proposalId && (args.proposalId !== currentProposal?.id || !inspectableProposal)) {
+        fail('proposal_not_found', '可检查的提案不存在。');
       }
       const targetSource = args.proposalId ? currentProposal!.newTikzCode : source;
       const repair = autoRepairTikzLayout(
@@ -268,11 +278,13 @@ export async function executeMcpTool(event: McpToolRequest): Promise<unknown> {
         live.tikzCode !== source || (live.sourceRevision ?? 0) !== revision) {
       fail('source_changed', '画布或请求已变化，请重新读取后生成提案。');
     }
-    const diff = computeTikzDiff(source, nextSource);
+    const previousTikzCode = currentProposal?.status === 'applied' && currentProposal.autoApplied
+      ? currentProposal.previousTikzCode : undefined;
+    const diff = computeTikzDiff(previousTikzCode ?? source, nextSource);
     const proposal: TikzPatchProposal = {
       id: `mcp_proposal_${event.requestId}`, summary: stringArg(args, 'summary'),
-      rationale: typeof args.rationale === 'string' ? args.rationale : '由 MCP 工具生成，等待审核。',
-      newTikzCode: nextSource, affectedElementIds: diff.affectedElementIds, status: 'pending',
+      rationale: typeof args.rationale === 'string' ? args.rationale : '由 MCP 工具提交的画布修改。',
+      newTikzCode: nextSource, affectedElementIds: diff.affectedElementIds, status: 'pending', previousTikzCode,
       mode: event.toolName === 'propose_surgical_diff' ? 'surgical_diff' : 'full_replace',
       semanticItems: diff.semanticItems, diffLines: diff.diffLines, autoRepairs: repairs,
       layoutScore: analyzeTikzLayout(nextSource, themeId).score,
@@ -281,7 +293,14 @@ export async function executeMcpTool(event: McpToolRequest): Promise<unknown> {
     useAgentStore.setState((state) => ({ sessions: state.sessions.map((s) => s.id === context.target.conversationId
       ? { ...s, messages: s.messages.map((message) => message.id === context.messageId
           ? { ...message, patchProposal: proposal } : message) } : s) }));
-    return { proposalId: proposal.id, status: 'pending', applied: false, ...version, report: analyzeTikzLayout(nextSource, themeId) };
+    autoApplyMcpProposal(event.requestId, 'canvas');
+    const published = useAgentStore.getState().sessions.find((s) => s.id === context.target.conversationId)
+      ?.messages.find((message) => message.id === context.messageId)?.patchProposal;
+    const applied = published?.status === 'applied';
+    const liveSource = useWorkspaceStore.getState().tikzCode;
+    return { proposalId: proposal.id, status: published?.status ?? 'pending', applied,
+      ...version, revision: useWorkspaceStore.getState().sourceRevision ?? 0,
+      sourceHash: applied ? await sourceHash(liveSource) : hash, report: analyzeTikzLayout(nextSource, themeId) };
   } catch (error) {
     return { error: { code: error instanceof ToolError ? error.code : 'tool_failed', message: error instanceof Error ? error.message : String(error) } };
   }

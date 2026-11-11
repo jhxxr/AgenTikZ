@@ -43,9 +43,9 @@
 
 **AgenTikZ** 是一款专为机器学习与自然科学研究者打造的 **TikZ 与 PGFPlots 可视化编辑器**，面向 **NeurIPS**、**ICLR**、**ICML**、**CVPR** 与 **Nature (NPG)** 论文插图标准设计。系统底层采用基于字符级源码跨度（`SourceSpan`）的 **无损 CST/AST 解析器与外科手术式补丁引擎（Surgical Patcher）**——在画布上拖拽网络层、调整 3D 特征图（$C\times H\times W$）通道厚度、拉动正交残差跳线或移动 PGFPlots 图例时，仅精准替换 `.tex` 源码中对应的数值区间，100% 保留手写注释、`\tikzset` 宏定义与原有缩进格式。
 
-在 AI 协同方面，AgenTikZ 采用 **自带智能体（BYOA, Bring Your Own Agent）** 架构，基于官方 [Agent Client Protocol (ACP)](https://agentclientprotocol.com)（`stdio`）直接连接你本机已安装并登录的 **Claude Code**、**Codex CLI**、**OpenCode**、**Gemini CLI**、**Cursor Agent** 或 **Kimi Code**。无需在软件内配置模型 API Key，无需经过第三方云端中继；支持一键附加 `@canvas` 与 `@选中` 图元上下文，所有 AI 生成的 TikZ 代码均需人工预览确认后才会应用到画布。
+在 AI 协同方面，AgenTikZ 采用 **自带智能体（BYOA, Bring Your Own Agent）** 架构，基于官方 [Agent Client Protocol (ACP)](https://agentclientprotocol.com)（`stdio`）直接连接你本机已安装并登录的 **Claude Code**、**Codex CLI**、**OpenCode**、**Gemini CLI**、**Cursor Agent** 或 **Kimi Code**。无需在软件内配置模型 API Key，无需经过第三方云端中继；支持一键附加 `@canvas` 与 `@选中` 图元上下文，自动模式下每次有效的工具修改立即写入编辑器，无需点击确认；关闭自动模式后可逐项预览确认，均支持撤回和版本冲突检查。
 
-**图片参考与视觉复核**：Agent 输入框支持 Ctrl+V 粘贴截图、缩略图预览与移除，也可仅发送图片。Pi 和 ACP 接收原生图片块；`render_canvas_preview` 可返回待审配图的真实 TeX 渲染，让支持视觉的 Agent 看图后修正。每轮最多 3 次不同输入的渲染，相同输入复用结果，最终仍由用户审核。需要桌面版（内置 XeLaTeX 引擎，无需安装 TeX Live）和支持图片的模型；布局评分或编译成功不等于完成视觉检查。
+**图片参考与视觉复核**：Agent 输入框支持 Ctrl+V 粘贴截图、缩略图预览与移除，也可仅发送图片。Pi 和 ACP 接收原生图片块；`render_canvas_preview` 可返回待审或已自动应用配图的真实 TeX 渲染，让支持视觉的 Agent 看图后修正。每轮最多 3 次不同输入的渲染，相同输入复用结果；手动模式由用户审核应用，自动模式边修改边应用。需要桌面版（内置 XeLaTeX 引擎，无需安装 TeX Live）和支持图片的模型；布局评分或编译成功不等于完成视觉检查。
 
 **内置论文绘图 skill**：`tikz-diagram-reproduction` 先规划构图分层、数据形态、语义配色与箭头语法，再生成代码。四组论文参考（SWSA、多流 GNN、掩码自编码器、黎曼/时序流程）通过 `get_diagram_design_skill` 按需分页读取，不逐轮注入整套模板。复刻图保护原有颜色与布局，复杂形状和宏使用真实 TeX 预览。详见 [v0.6.0 发布说明](docs/releases/v0.6.0.md)。
 
@@ -112,7 +112,7 @@ flowchart TB
 
 - **无损 CST/AST 解析引擎**：位于 `src/core/parser/`，通过深度感知括号 `[]` 与花括号 `{}` 匹配解析 `\tikzset` 样式、`\node` 节点、正交/弧线/残差 `\draw` 连线以及 `\begin{axis}...\end{axis}` 实验图表，确保含分号的数学公式（如 `$p(x;\theta)$`）或含括号文本绝不误截断语句。
 - **官方 ACP v1 通信实现**：位于 `src-tauri/src/acp/mod.rs`，桌面端通过 `stdio` 启动本地已安装的 ACP 适配器，对初始化握手（`20s`）、会话创建（`20s`）、提示词生成（`180s`）及子进程退出均设有严格超时边界。
-- **当前版本边界**：**v0.8.0** 内置 TeX 编译引擎、Noto Sans CJK SC 字体与常用宏包，桌面版不再要求安装 TeX Live；官方论文作者包替换仿制格式，并支持本地、URL 和 Git 仓库模板导入。项目助手默认自动模式、冲突检查与撤回保留。详见 [v0.8.0 发布说明](docs/releases/v0.8.0.md)、[MCP 服务指南](docs/mcp-guide.zh-CN.md) 和 [Pi 接入说明](docs/pi-runtime.zh-CN.md)。
+- **当前版本边界**：**v0.8.1** 自动模式下每次有效的工具修改立即应用，保留版本冲突检查、连续修改整组撤回和已应用配图的真实 TeX 预览；仍可切换手动审核。继续内置 v0.8.0 引入的 TeX 编译引擎、中文字体、常用宏包及官方论文模板库。详见 [v0.8.1 发布说明](docs/releases/v0.8.1.md)、[MCP 服务指南](docs/mcp-guide.zh-CN.md) 和 [Pi 接入说明](docs/pi-runtime.zh-CN.md)。
 
 ## 论文模板与学术主题
 

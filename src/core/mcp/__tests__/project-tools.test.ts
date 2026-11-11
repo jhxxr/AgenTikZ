@@ -4,6 +4,8 @@ import { currentCanvasTarget, registerMcpRequest, sourceHash } from '../context'
 import { useProjectStore } from '../../../store/useProjectStore';
 import { useAgentStore } from '../../../store/useAgentStore';
 import { useMcpStore } from '../../../store/useMcpStore';
+import { useSettingsStore } from '../../../store/useSettingsStore';
+import { getMcpRequest } from '../context';
 import { usePaperBuildStore } from '../../../store/usePaperBuildStore';
 import { computeCompactLineDiff } from '../../agent/tikz-diff';
 import type { McpToolRequest } from '../../../types/mcp';
@@ -34,6 +36,7 @@ beforeEach(() => {
     })),
   });
   useMcpStore.setState({ config: { schemaVersion: 1, builtinEnabled: true, servers: [] } });
+  useSettingsStore.setState({ agentAutoMode: false });
   useAgentStore.setState({
     isStreaming: false, activeSessionId: 'chat',
     sessions: [{ id: 'chat', title: 'Project test', agentId: 'claude-code', createdAt: '',
@@ -57,6 +60,54 @@ async function editArgs() {
 }
 
 describe('project-scoped manuscript tools', () => {
+  it('applies successive auto-mode file edits while streaming and keeps a cumulative undo record', async () => {
+    getMcpRequest('project-test')!.autoMode = true;
+    useSettingsStore.setState({ agentAutoMode: true });
+    useAgentStore.setState({ isStreaming: true });
+    const first = await call('propose_project_patch', await editArgs());
+    expect(first).toMatchObject({ status: 'applied', applied: true, paperRevision: 8 });
+    expect(useProjectStore.getState().paperFileContents['sections/results.tex']).toContain('fig:model');
+    expect(proposal()).toMatchObject({ status: 'applied', autoApplied: true, appliedRevision: 8 });
+    const main = await call('read_project_file', { relativePath: 'main.tex' });
+    const second = await call('propose_project_patch', { baseRevision: main.paperRevision, summary: 'Refine main', files: [
+      { relativePath: 'main.tex', baseSourceHash: main.sourceHash, newContent: main.source + '\n% Refined' },
+    ] });
+    expect(second).toMatchObject({ status: 'applied', applied: true, paperRevision: 9 });
+    expect(proposal()?.files).toHaveLength(2);
+    expect(proposal()?.files.find((file) => file.relativePath === 'main.tex')?.before).toBe(original['main.tex']);
+    expect(useProjectStore.getState().paperFileContents['main.tex']).toContain('% Refined');
+    // No native file write is needed; the authoritative editor buffers update immediately.
+    expect(invoke).not.toHaveBeenCalled();
+    useAgentStore.setState({ isStreaming: false });
+    expect(useAgentStore.getState().revertProjectProposal('assistant')).toBe(true);
+    expect(useProjectStore.getState().paperFileContents).toEqual(original);
+    expect(useAgentStore.getState().applyProjectProposal('assistant')).toBe(true);
+    expect(useProjectStore.getState().paperFileContents['main.tex']).toContain('% Refined');
+    expect(useProjectStore.getState().paperFileContents['sections/results.tex']).toContain('fig:model');
+  });
+
+  it.each(['not-opted-in', 'disabled'])('keeps manuscript edits pending when auto mode is %s', async (reason) => {
+    getMcpRequest('project-test')!.autoMode = reason !== 'not-opted-in';
+    useSettingsStore.setState({ agentAutoMode: reason !== 'disabled' });
+    useAgentStore.setState({ isStreaming: true });
+    expect(await call('propose_project_patch', await editArgs())).toMatchObject({ status: 'pending', applied: false });
+    expect(useProjectStore.getState().paperFileContents).toEqual(original);
+  });
+
+  it('preserves an applied manuscript record if later manual changes prevent refinement', async () => {
+    getMcpRequest('project-test')!.autoMode = true;
+    useSettingsStore.setState({ agentAutoMode: true });
+    await call('propose_project_patch', await editArgs());
+    const applied = proposal();
+    useProjectStore.getState().updatePaperFileContent('sections/results.tex', 'User edit');
+    const main = await call('read_project_file', { relativePath: 'main.tex' });
+    expect(await call('propose_project_patch', { baseRevision: main.paperRevision, summary: 'Refine main', files: [
+      { relativePath: 'main.tex', baseSourceHash: main.sourceHash, newContent: main.source + '\n% Refined' },
+    ] })).toMatchObject({ error: { code: 'source_changed' } });
+    expect(proposal()).toBe(applied);
+    expect(useProjectStore.getState().paperFileContents['sections/results.tex']).toBe('User edit');
+  });
+
   it('reads dirty editor buffers without changing the selected editor or saving', async () => {
     const result = await call('read_project_file', { relativePath: 'sections/results.tex' });
     expect(result).toMatchObject({ source: original['sections/results.tex'], dirty: true, paperRevision: 7 });

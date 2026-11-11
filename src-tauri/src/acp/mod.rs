@@ -1360,7 +1360,7 @@ pub async fn acp_send_prompt(
     let thought = thought_buf.lock().unwrap().clone();
     if reply.trim().is_empty() && lease.as_ref().is_some_and(|lease| lease.has_proposal()) {
         reply = if auto_mode {
-            "已通过 MCP 工具提交修改提案；本轮成功结束后，应用会检查版本并尝试自动应用最终待处理提案。"
+            "已通过 MCP 工具提交修改；自动模式会在每次有效提交后立即检查版本并应用，实际状态请查看修改卡片。"
         } else {
             "已通过 MCP 工具提交修改提案，请审查后应用。"
         }.into();
@@ -1411,7 +1411,7 @@ fn protocol_error(message: &str) -> agent_client_protocol::Error {
 
 fn proposal_prompt_policy(auto_mode: bool) -> &'static str {
     if auto_mode {
-        "Automatic mode is enabled. Proposals remain pending throughout generation, rendering and refinement. The host attempts to apply only the final pending proposals after a successful turn, with canvas revision/sourceHash and manuscript paperRevision/per-file hash version checks; failed or cancelled turns do not trigger automatic application, and stale proposals must not overwrite newer edits. Do not claim proposals have been applied before the host confirms application. Never duplicate a tool proposal as a replacement code block. Never bypass manuscript proposal tools or their version checks using native file tools, even with full local access."
+        "Automatic mode is enabled. The host immediately applies each complete, valid propose_* tool edit during the turn, with canvas revision/sourceHash and manuscript paperRevision/per-file hash version checks; do not wait for a confirmation click or the turn to finish. The tool result status/applied fields are authoritative: only applied:true confirms application, not saving or compilation. Read the latest source, revision and hash before every further edit. Errors or cancellation preserve already applied, undoable edits. Stale proposals must not overwrite newer edits. Never duplicate a tool proposal as a replacement code block. Never bypass manuscript proposal tools or their version checks using native file tools, even with full local access."
     } else {
         "Proposals require user review; never duplicate a tool proposal as a replacement code block or claim it has been applied. Never bypass manuscript review using native file tools."
     }
@@ -1538,7 +1538,7 @@ fn build_agent_prompt_with_mode(
         parts.push("No current canvas attached. Do not infer an existing figure from the reference library. If the request requires an unseen canvas, ask the user to attach it.".into());
     }
     parts.push(format!("User instruction: {user_prompt}"));
-    parts.push("For a new figure or canvas edit, briefly explain the intended structure and return either: (A) for localized edits on an existing canvas, a fenced tikz/latex code block containing surgical `<<<<<<< SEARCH ... ======= ... >>>>>>> REPLACE` patch hunks, OR (B) exactly one fenced latex code block containing the COMPLETE replacement source, including \\begin{tikzpicture} and \\end{tikzpicture}. Do not include a standalone document preamble. If no edit is needed or essential information is missing, answer normally without a code block.".into());
+    parts.push("For a new figure or canvas edit, prefer the enabled canvas propose_* tools and summarize their actual results without duplicating code blocks. Only if canvas tools are unavailable, briefly explain the intended structure and return either: (A) for localized edits on an existing canvas, a fenced tikz/latex code block containing surgical `<<<<<<< SEARCH ... ======= ... >>>>>>> REPLACE` patch hunks, OR (B) exactly one fenced latex code block containing the COMPLETE replacement source, including \\begin{tikzpicture} and \\end{tikzpicture}. Do not include a standalone document preamble. If no edit is needed or essential information is missing, answer normally without a code block.".into());
     parts.join("\n\n")
 }
 
@@ -1733,15 +1733,15 @@ mod tests {
     }
 
     #[test]
-    fn auto_mode_prompt_preserves_pending_proposals_and_host_version_checks() {
+    fn auto_mode_prompt_applies_each_edit_and_preserves_host_version_checks() {
         let policy = proposal_prompt_policy(true);
-        assert!(policy.contains("Proposals remain pending throughout generation, rendering and refinement"));
-        assert!(policy.contains("only the final pending proposals after a successful turn"));
+        assert!(policy.contains("immediately applies each complete, valid propose_* tool edit during the turn"));
+        assert!(policy.contains("do not wait for a confirmation click or the turn to finish"));
         assert!(policy.contains("canvas revision/sourceHash"));
         assert!(policy.contains("manuscript paperRevision/per-file hash"));
-        assert!(policy.contains("failed or cancelled turns do not trigger automatic application"));
-        assert!(policy.contains("stale proposals must not overwrite newer edits"));
-        assert!(policy.contains("Do not claim proposals have been applied before the host confirms"));
+        assert!(policy.contains("Errors or cancellation preserve already applied, undoable edits"));
+        assert!(policy.contains("Stale proposals must not overwrite newer edits"));
+        assert!(policy.contains("only applied:true confirms application"));
         assert!(policy.contains("Never duplicate a tool proposal"));
         assert!(policy.contains("Never bypass manuscript proposal tools"));
         for paper_mode in [false, true] {

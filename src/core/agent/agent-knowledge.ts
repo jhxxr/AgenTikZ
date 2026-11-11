@@ -123,7 +123,7 @@ export function buildAgentSkillAndLibraryContext(
     '   - Always reference defined node IDs `(node_id)` or `(node_id.anchor)` as the start and end of every `\\draw` statement.',
     '',
     '=== SURGICAL DIFF PROTOCOL / REVIEWABLE TOOL PROPOSALS ===',
-    '- Primary route: read get_canvas_source, then use propose_surgical_diff for targeted edits or propose_tikz_patch for a full figure. Preview/refine the pending proposal. Do not duplicate a successful tool proposal as replacement code.',
+    '- Primary route: read get_canvas_source, then use propose_surgical_diff for targeted edits or propose_tikz_patch for a full figure. Preview/refine the submitted proposal. Manual mode keeps it pending; automatic mode applies each valid edit immediately. Trust returned status/applied and read the latest source/version before further edits. Do not duplicate a successful tool proposal as replacement code.',
     '- The code-fence syntax below is only a fallback when proposal tools are unavailable; clearly report that limitation.',
     '- Mode A (Surgical Diff Patch — PREFERRED when modifying/refining an existing non-empty canvas):',
     '  When the user asks to adjust colors, fix spacing/overlaps, rename labels, add/remove a module, or tweak part of the current canvas, output `SEARCH/REPLACE` blocks inside a ```tikz code fence so only the targeted lines change:',

@@ -28,7 +28,7 @@ pub fn builtin_tools() -> Vec<ToolSpec> {
         "startLine": {"type": "integer", "minimum": 1},
         "lineCount": {"type": "integer", "minimum": 1, "maximum": 160}
     }), vec![]);
-    add("render_canvas_preview", "Compile the current canvas or pending proposal with real TeX and return a PNG image plus layout diagnostics. Does not apply edits. Inspect the image before refining the pending proposal. At most 3 distinct renders per request; identical previews are cached. Compilation is not visual verification. Requires local TeX and a vision-capable model.", json!({
+    add("render_canvas_preview", "Compile the current canvas, pending proposal or automatically applied proposal with real TeX and return a PNG image plus layout diagnostics. Rendering does not apply edits. Inspect the image before refining; read the latest canvas version after an automatically applied edit. At most 3 distinct renders per request; identical previews are cached. Compilation is not visual verification. Requires local TeX and a vision-capable model.", json!({
         "proposalId": {"type": "string", "minLength": 1}
     }), vec![]);
     add("get_canvas_ast", "Parse the target canvas and return nodes, edges, charts and source spans with revision and sourceHash.", json!({}), vec![]);
@@ -66,7 +66,7 @@ pub fn builtin_tools() -> Vec<ToolSpec> {
     });
     let mut complete = base.clone();
     complete["newTikzCode"] = json!({"type":"string", "minLength": 1});
-    add("propose_tikz_patch", "Create or update a pending full-source canvas proposal (returns proposalId and layout report). Must be one complete \\begin{tikzpicture}...\\end{tikzpicture}. Supply revision/hash from the latest read.", complete,
+    add("propose_tikz_patch", "Submit a full-source canvas edit (returns proposalId, status/applied, latest revision/sourceHash and layout report). Manual mode keeps it pending; automatic mode applies valid edits immediately. Must be one complete \\begin{tikzpicture}...\\end{tikzpicture}. Supply revision/hash from the latest read.", complete,
         vec!["baseRevision", "baseSourceHash", "summary", "newTikzCode"]);
     let mut surgical = base.clone();
     surgical["patches"] = json!({
@@ -74,18 +74,18 @@ pub fn builtin_tools() -> Vec<ToolSpec> {
         "items": {"type":"object", "properties":{"search":{"type":"string","minLength":1}, "replace":{"type":"string"}},
                   "required":["search","replace"], "additionalProperties":false}
     });
-    add("propose_surgical_diff", "Create a pending exact SEARCH/REPLACE proposal against the live canvas (returns proposalId and layout report). Every search must match exactly once.", surgical,
+    add("propose_surgical_diff", "Submit exact SEARCH/REPLACE edits against the current live canvas (returns proposalId, status/applied, latest revision/sourceHash and layout report). Manual mode keeps them pending; automatic mode applies valid edits immediately. Read the latest source/version before each edit. Every search must match exactly once.", surgical,
         vec!["baseRevision", "baseSourceHash", "summary", "patches"]);
     let mut repair = base;
     repair["proposalId"] = json!({"type":"string", "minLength": 1});
     repair["themeId"] = json!({"type":"string", "enum":["neurips","cvpr","nature","ieee"]});
-    add("propose_layout_repair", "Create a pending layout-repair proposal. Pass proposalId to repair your pending proposal; omitting proposalId repairs the original live canvas and replaces any pending proposal.", repair,
+    add("propose_layout_repair", "Submit a layout-repair edit. Pass proposalId to repair a pending or automatically applied proposal; omitting it repairs the current live canvas. Manual mode keeps edits pending; automatic mode applies valid edits immediately. Supply the latest canvas revision/hash.", repair,
         vec!["baseRevision", "baseSourceHash", "summary"]);
     add("get_project_context", "Read the current project file index, active manuscript, canvas identity, dirty state and paper revision. Works across paper/figure views of the same project.", json!({}), vec![]);
     add("read_project_file", "Read an indexed project text file without changing the editor tab. Returns current editor source (including unsaved edits), paperRevision and sourceHash. Read every affected file before proposing manuscript changes.", json!({
         "relativePath": {"type":"string", "minLength":1, "maxLength":1024}
     }), vec!["relativePath"]);
-    add("propose_project_patch", "Submit one reviewable change set for existing .tex/.bib/.sty/.cls files. Does not write files or apply edits. Use the paperRevision and hashes from read_project_file; .tikz edits must use canvas proposals.", json!({
+    add("propose_project_patch", "Submit one change set for existing .tex/.bib/.sty/.cls files. Manual mode keeps it pending; automatic mode immediately applies valid edits to editor buffers. Trust returned status/applied. Read every affected file again before further edits and use its latest paperRevision/sourceHash; .tikz edits must use canvas proposals.", json!({
         "baseRevision": {"type":"integer","minimum":0},
         "summary": {"type":"string","minLength":1,"maxLength":2000},
         "rationale": {"type":"string","maxLength":8000},

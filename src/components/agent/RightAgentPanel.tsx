@@ -261,7 +261,7 @@ export const RightAgentPanel: React.FC = () => {
           onNew={() => { actions.createSession(); focusComposer(); }} />
         <button type="button" role="switch" aria-label="自动模式" aria-checked={autoMode} disabled={isStreaming}
           onClick={() => updateSettings({ agentAutoMode: !autoMode })}
-          title={isStreaming ? '本轮运行结束后可切换模式' : '自动模式：免确认应用最终提案，并放行 ACP 本机文件读写与命令权限；Pi 仍仅使用项目工具'}
+          title={isStreaming ? '本轮运行结束后可切换模式' : '自动模式：每次有效修改立即写入编辑器，无需确认，并放行 ACP 本机文件读写与命令权限；Pi 仍仅使用项目工具'}
           className={`inline-flex shrink-0 items-center gap-1 rounded-lg border px-2 py-1 text-[11.5px] font-medium transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-60 ${
             autoMode ? 'border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100' : 'border-slate-200 text-slate-500 hover:bg-slate-100'}`}>
           <Zap className="h-3 w-3" />{autoMode ? '自动模式' : '手动审核'}
@@ -279,8 +279,8 @@ export const RightAgentPanel: React.FC = () => {
       {autoMode && (
         <div role="status" className="shrink-0 border-b border-amber-100 bg-amber-50/60 px-3 py-1.5 text-[11px] leading-relaxed text-amber-800">
           {activeAgentId === 'pi'
-            ? '自动模式 · 本轮成功完成后自动应用提案，可撤回；Pi 仍仅使用项目工具。'
-            : '自动模式 · 自动应用最终提案，并允许本机文件读写、命令执行。仅对信任的 Agent 开启。'}
+            ? '自动模式 · 边写边改，每次有效修改立即应用，无需确认，可撤回；Pi 仍仅使用项目工具。'
+            : '自动模式 · 边写边改，无需确认，可撤回；允许本机文件读写、命令执行。仅对信任的 Agent 开启。'}
         </div>
       )}
 

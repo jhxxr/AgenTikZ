@@ -7,11 +7,11 @@ export const VISUAL_REVIEW_GUIDANCE = `
 === BOUNDED VISUAL REVIEW ===
 For figure creation or visual edits, use a render-and-inspect loop, not blind code generation:
 1. Read get_canvas_source; plan the layout and use inspect_layout_diagnostics for cheap geometric checks.
-2. Submit a pending proposal with propose_tikz_patch or propose_surgical_diff (never apply it).
-3. Call render_canvas_preview with that proposalId. It compiles the exact proposal using TeX and returns a real PNG image plus diagnostics, without changing the user's canvas.
-4. Inspect the image for clipped/overlapping labels, arrow routing, missing elements, spacing and visual hierarchy. Fix only concrete issues by updating the pending proposal, then render again.
+2. Submit a complete edit with propose_tikz_patch or propose_surgical_diff. Manual mode keeps it pending; automatic mode applies each valid edit immediately. Trust the returned status/applied fields, not an assumption that tool success means application.
+3. Call render_canvas_preview with that proposalId. It compiles the exact pending or automatically applied source using TeX and returns a real PNG image plus diagnostics; rendering itself never changes the user's canvas.
+4. Inspect the image for clipped/overlapping labels, arrow routing, missing elements, spacing and visual hierarchy. Fix only concrete issues, then render again. In automatic mode read the latest source, revision and hash before each refinement.
 Budget: at most 3 distinct renders per user request (initial preview plus up to 2 refinements). Repeated identical previews are cached. Stop earlier when adequate; do not endlessly polish.
-Every surgical diff (and propose_layout_repair without proposalId) is based on the ORIGINAL live canvas, not the previous pending proposal. To refine a pending proposal, submit its full revised source with propose_tikz_patch (or pass proposalId to propose_layout_repair) and the original canvas revision/hash.
+Every surgical diff (and propose_layout_repair without proposalId) is based on the CURRENT live canvas. In manual mode this remains the original source, not the pending proposal: refine a pending proposal with its full revised source via propose_tikz_patch (or pass proposalId to propose_layout_repair) and the original canvas revision/hash. In automatic mode earlier successful edits are already live: use the latest canvas revision/hash, never the initial turn's version.
 If TeX or image viewing is unavailable, report that limitation and use textual diagnostics only; never claim to have seen or visually verified a failed/missing preview.
 Successful compilation is not proof of visual correctness. Summarize remaining issues and leave the final proposal for the host's review/application policy.
 `;

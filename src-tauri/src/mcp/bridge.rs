@@ -85,8 +85,10 @@ impl BridgeContext {
             .remove(id)
             .ok_or("MCP 工具请求已过期。")?;
         if value.get("proposalId").is_some_and(Value::is_string)
-            && value.get("status").and_then(Value::as_str) == Some("pending")
-            && value.get("applied").and_then(Value::as_bool) == Some(false)
+            && matches!(
+                (value.get("status").and_then(Value::as_str), value.get("applied").and_then(Value::as_bool)),
+                (Some("pending"), Some(false)) | (Some("applied"), Some(true))
+            )
         {
             self.proposal_created.store(true, Ordering::SeqCst);
         }
@@ -378,6 +380,23 @@ mod tests {
             json!({"source":"real bridge response","revision":1})
         };
         context.complete(&event.tool_request_id, result)
+    }
+
+    #[tokio::test]
+    async fn records_automatically_applied_edits_as_proposals_without_requiring_a_text_reply() {
+        let lease = start(
+            uuid::Uuid::new_v4().to_string(), "window".into(), target(), Arc::new(dispatch),
+        ).await.unwrap();
+        for (status, applied) in [("pending", false), ("applied", true)] {
+            lease.context.proposal_created.store(false, Ordering::SeqCst);
+            let (sender, receiver) = oneshot::channel();
+            lease.context.pending.lock().unwrap().insert("tool".into(), sender);
+            lease.context.complete("tool", json!({
+                "proposalId": "proposal", "status": status, "applied": applied,
+            })).unwrap();
+            assert_eq!(receiver.await.unwrap()["applied"], applied);
+            assert!(lease.has_proposal());
+        }
     }
 
     #[tokio::test]
