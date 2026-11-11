@@ -1,0 +1,10 @@
+{
+  "id": "cvpr",
+  "order": 5,
+  "name": "CVPR / ICCV",
+  "mainFile": "main.tex",
+  "defaultThemeId": "cvpr",
+  "columnLayout": "double",
+  "source": "https://github.com/cvpr-org/author-kit",
+  "description": "CVPR / ICCV 官方作者包（cvpr.sty）。投 ICCV 时把 main.tex 中的 \\confName 改为 ICCV。"
+}

@@ -456,12 +456,44 @@ describe('useProjectStore', () => {
     });
 
     it('creates a paper from a paper template and opens only the paper workspace', async () => {
-      expect(await useProjectStore.getState().initPaperWorkspace('E:/Papers/NewPaper', 'cvpr', 'My Research')).toBe(true);
+      expect(await useProjectStore.getState().initPaperWorkspace('E:/Papers/NewPaper', 'blank', 'My Research')).toBe(true);
       expect(useProjectStore.getState().workbenchMode).toBe('paper');
       expect(useProjectStore.getState().activePaperFilePath).toBe('main.tex');
-      expect(useProjectStore.getState().paperFileContents['main.tex']).toContain('twocolumn');
+      expect(useProjectStore.getState().paperFileContents['main.tex']).toContain('\\documentclass[11pt]{article}');
       expect(useProjectStore.getState().paperFileContents['main.tex']).toContain('My Research');
       expect(useWorkspaceStore.getState().tikzCode).toBe(EMPTY_TIKZ_CODE);
+    });
+
+    it('creates a native official kit and opens its real main file, not main.tex', async () => {
+      enableTauriRuntime();
+      const path = 'E:/Papers/OfficialICML';
+      const canvas = makeCanvasDoc('fig1-architecture.canvas.json', 'Fig 1', EMPTY_TIKZ_CODE);
+      mockInvoke.mockImplementation(async (command: string) => {
+        if (command === 'paper_template_create_project') return { mainFile: 'example_paper.tex', defaultThemeId: 'neurips' };
+        if (command === 'project_open_workspace') return {
+          projectDir: path, projectName: 'OfficialICML', storageDir: `${path}/agentikzfile`, exportDir: `${path}/agentikzfile/export`,
+          meta: { lastActiveCanvas: canvas.fileName, autoSyncTikz: true },
+          canvases: [{ fileName: canvas.fileName, name: canvas.name, sizeBytes: 1, updatedAt: 1 }], assets: [],
+        };
+        if (command === 'project_load_canvas') return JSON.stringify(canvas);
+        if (command === 'project_list_paper_files') return [{
+          relativePath: 'example_paper.tex', fileName: 'example_paper.tex', category: 'main', sizeBytes: 1, modifiedAt: 0,
+        }];
+        if (command === 'project_read_text_file') return '\\documentclass{article}\n% official sample';
+        return true;
+      });
+      expect(await useProjectStore.getState().initPaperWorkspace(path, 'icml', 'My title')).toBe(true);
+      expect(mockInvoke).toHaveBeenCalledWith('paper_template_create_project', expect.objectContaining({
+        templateId: 'icml', projectDir: path, title: 'My title', extraFiles: expect.objectContaining({ 'styles/agentikz-macros.sty': expect.any(String) }),
+      }));
+      expect(mockInvoke).not.toHaveBeenCalledWith('project_init_paper_workspace', expect.anything());
+      expect(useProjectStore.getState().activePaperFilePath).toBe('example_paper.tex');
+      expect(useProjectStore.getState().workbenchMode).toBe('paper');
+    });
+
+    it('does not fake an official author kit in browser mode', async () => {
+      expect(await useProjectStore.getState().initPaperWorkspace('E:/Papers/Official', 'cvpr')).toBe(false);
+      expect(useProjectStore.getState().errorMessage).toContain('桌面版');
     });
 
     it('detects an existing paper on reopen instead of opening its drawing canvas', async () => {
@@ -478,7 +510,8 @@ describe('useProjectStore', () => {
     });
 
     it('keeps paper navigation and insertion independent of canvas visibility', async () => {
-      await useProjectStore.getState().initPaperWorkspace('E:/Papers/FocusedPaper', 'arxiv');
+      await useProjectStore.getState().initPaperWorkspace('E:/Papers/FocusedPaper', 'blank');
+      await useProjectStore.getState().createNewPaperFile('sections/method.tex', '\\section{Method}\n');
       useWorkspaceStore.getState().setTikzCode(CODE_A);
       await useProjectStore.getState().openPaperFile('sections/method.tex');
       expect(useProjectStore.getState().workbenchMode).toBe('paper');

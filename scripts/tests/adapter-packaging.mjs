@@ -67,7 +67,7 @@ test("old node_modules layout is never accepted as a current bundle", (t) => {
   assert.throws(() => inventory(directory), /node_modules/);
 });
 
-test("Tauri resources preserve compact ACP bundles and explicitly include the separate Pi runtime", (t) => {
+test("Tauri resources include compact ACP bundles and separate Pi and TeX runtimes", (t) => {
   const directory = temporary(t);
   const manifest = cachedBundle(directory);
   const config = JSON.parse(fs.readFileSync(
@@ -75,7 +75,7 @@ test("Tauri resources preserve compact ACP bundles and explicitly include the se
   ));
   assert.deepEqual(
     [...config.bundle.resources].sort(),
-    [...["manifest.json", ...Object.keys(manifest.files)].map((name) => `adapters/${name}`), "pi-runtime/"].sort(),
+    [...["manifest.json", ...Object.keys(manifest.files)].map((name) => `adapters/${name}`), "pi-runtime/", "tex-runtime/"].sort(),
   );
   assert.deepEqual(config.bundle.externalBin, ["binaries/agentikz-mcp"]);
 });
@@ -91,6 +91,20 @@ test("Pi dependencies are separately locked and staged before desktop developmen
   }
   assert.match(config.build.beforeDevCommand, /npm run pi:stage.*npm run dev/);
   assert.match(config.build.beforeBuildCommand, /npm run pi:stage.*npm run build/);
+});
+
+test("built-in TeX resources are staged before desktop development, builds and CI", () => {
+  const root = fileURLToPath(new URL("../../", import.meta.url));
+  const config = JSON.parse(fs.readFileSync(path.join(root, "src-tauri/tauri.conf.json"), "utf8"));
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+  assert.equal(pkg.scripts["tex:stage"], "node scripts/prepare-tex.mjs");
+  assert.match(config.build.beforeDevCommand, /npm run tex:stage.*npm run dev/);
+  assert.match(config.build.beforeBuildCommand, /npm run tex:stage.*npm run build/);
+  assert.match(fs.readFileSync(path.join(root, ".github/workflows/ci.yml"), "utf8"), /run: npm run tex:stage/);
+  const stage = fs.readFileSync(path.join(root, "scripts/prepare-tex.mjs"), "utf8");
+  assert.match(stage, /SHA-256 mismatch/);
+  assert.match(stage, /Warmed official template/);
+  assert.match(stage, /NotoSansCJKsc-Regular\.otf/);
 });
 
 test("inventory enforces native/dev file and byte limits", (t) => {

@@ -215,9 +215,8 @@ export const InteractiveCanvas: React.FC = () => {
   const exactPreviewReasons = useMemo(() => getExactPreviewReasons(tikzCode), [tikzCode]);
   const requiresExactPreview = exactPreviewReasons.length > 0;
   const vectorPreview = useMemo(() => requiresExactPreview ? buildVectorPreview(tikzCode) : null, [tikzCode, requiresExactPreview]);
-  const { texEngine, texLiveBinDir, openSettings } = useSettingsStore(useShallow((s) => ({
+  const { texEngine, openSettings } = useSettingsStore(useShallow((s) => ({
     texEngine: s.texEngine,
-    texLiveBinDir: s.texLiveBinDir,
     openSettings: s.openSettings,
   })));
   const { projectDir, activeCanvasFileName } = useProjectStore(useShallow((s) => ({
@@ -248,7 +247,7 @@ export const InteractiveCanvas: React.FC = () => {
       return;
     }
     if (isCompilingTex) return;
-    const key = JSON.stringify([tikzCode, activeThemeId, projectDir, activeCanvasFileName, texEngine, texLiveBinDir]);
+    const key = JSON.stringify([tikzCode, activeThemeId, projectDir, activeCanvasFileName, texEngine]);
     if (lastAttemptRef.current === key) return;
     // A manual compilation has already produced a result for this document.
     if (lastAttemptRef.current === null && texCompilerStatus) {
@@ -260,7 +259,7 @@ export const InteractiveCanvas: React.FC = () => {
       void compileWorkspaceTexPreview();
     }, 650);
     return () => window.clearTimeout(timer);
-  }, [tikzCode, activeThemeId, requiresExactPreview, previewMode, isCompilingTex, projectDir, activeCanvasFileName, texEngine, texLiveBinDir, texCompilerStatus]);
+  }, [tikzCode, activeThemeId, requiresExactPreview, previewMode, isCompilingTex, projectDir, activeCanvasFileName, texEngine, texCompilerStatus]);
 
   // Preload image data URLs for any `\includegraphics` nodes in the parsed AST
   useEffect(() => {
@@ -2096,7 +2095,7 @@ export const InteractiveCanvas: React.FC = () => {
           </g>
         </svg>
 
-        {/* Optional TeX Live Exact Preview Overlay or Split View */}
+        {/* Exact TeX preview overlay or split view */}
         {(requiresExactPreview || previewMode === 'tex_overlay' || previewMode === 'tex_split') && (
           <div
             className={`${
@@ -2131,17 +2130,17 @@ export const InteractiveCanvas: React.FC = () => {
                   <details className="text-xs text-slate-500 shrink-0 mt-3 select-text">
                     <summary className="cursor-pointer">TeX 编译详情</summary>
                     <p className="whitespace-pre-wrap mt-2">{texCompilerStatus}</p>
-                    <button onClick={() => openSettings('editor')} className="text-blue-600 cursor-pointer mt-2">配置 TeX Live</button>
+                    <button onClick={() => openSettings('editor')} className="text-blue-600 cursor-pointer mt-2">查看内置 TeX 引擎状态</button>
                   </details>
                 )}
               </div>
             ) : (
               <div className="text-xs text-slate-600 text-center max-w-md bg-white border border-slate-200 rounded-lg p-5">
-                <p>{requiresExactPreview ? `此图包含${exactPreviewReasons.join('、')}，将通过 TeX 编译显示完整图形。` : '通过本地 TeX 编译显示精确图形。'}</p>
+                <p>{requiresExactPreview ? `此图包含${exactPreviewReasons.join('、')}，将通过 TeX 编译显示完整图形。` : '通过内置 TeX 引擎编译显示精确图形。'}</p>
                 {!isCompilingTex && (
                   <div className="mt-4 flex justify-center gap-3">
                     <button onClick={() => void compileWorkspaceTexPreview()} className="text-blue-600 cursor-pointer">重新编译</button>
-                    <button onClick={() => openSettings('editor')} className="text-blue-600 cursor-pointer">配置 TeX Live</button>
+                    <button onClick={() => openSettings('editor')} className="text-blue-600 cursor-pointer">引擎状态</button>
                   </div>
                 )}
               </div>

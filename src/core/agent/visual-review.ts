@@ -19,21 +19,21 @@ Successful compilation is not proof of visual correctness. Summarize remaining i
 /** Isolated compile: does not alter editor source, undo state or the on-screen preview. */
 export async function renderAgentPreview(
   source: string, themeId: JournalThemeId,
-  settings: { texEngine: string; texLiveBinDir: string; projectDir: string | null },
+  settings: { texEngine: string; projectDir: string | null },
 ): Promise<{ image: { data: string; mimeType: 'image/png' }; message: string }> {
   if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
-    throw new Error('真实预览需要桌面版和本地 TeX Live；尚未进行视觉验证。');
+    throw new Error('真实预览需要桌面版（内置 TeX 引擎）；尚未进行视觉验证。');
   }
   const { invoke } = await import('@tauri-apps/api/core');
   const result = await invoke<TexPreviewResult>('tex_compile_preview', {
     texSource: buildStandaloneLatexDocument(source, themeId), texEngine: settings.texEngine,
-    texLiveBinDir: settings.texLiveBinDir || undefined, projectDir: settings.projectDir,
+    projectDir: settings.projectDir,
   });
   if (!result.ok || !result.svg) throw new Error(result.message || 'TeX 未生成预览，尚未进行视觉验证。');
   return { image: { mimeType: 'image/png', data: await rasterizePreview(result.svg) }, message: result.message };
 }
 
-/** dvisvgm viewBox preserves aspect ratio even when SVG dimensions use pt units. */
+/** The viewBox carries the figure's size in points; width/height may be absent or scaled. */
 export async function rasterizePreview(svg: string): Promise<string> {
   const doc = new DOMParser().parseFromString(svg, 'image/svg+xml');
   const root = doc.documentElement;

@@ -106,7 +106,7 @@ fn sanitize_export_file_name(raw: &str) -> Result<String, String> {
     Ok(trimmed.to_string())
 }
 
-fn normalize_relative_path(rel: &str) -> Result<PathBuf, String> {
+pub(crate) fn normalize_relative_path(rel: &str) -> Result<PathBuf, String> {
     let mut out = PathBuf::new();
     for comp in Path::new(rel).components() {
         match comp {
@@ -1088,6 +1088,33 @@ pub struct PaperFileItem {
     pub modified_at: u64,
 }
 
+/// Written when a paper is created from a template whose main file or
+/// folders differ from the `main.tex` + `sections/` convention.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub(crate) struct PaperMarker {
+    pub template_id: String,
+    pub main_file: String,
+    /// Top-level folders of the template that hold paper sources.
+    pub paper_dirs: Vec<String>,
+}
+
+const PAPER_MARKER_FILE: &str = "paper.json";
+
+pub(crate) fn write_paper_marker(root: &Path, marker: &PaperMarker) -> Result<(), String> {
+    let target = checked_project_output(
+        &root.to_string_lossy(),
+        &format!("{AGENTIKZ_FOLDER_NAME}/{PAPER_MARKER_FILE}"),
+    )?;
+    let text = serde_json::to_string_pretty(marker).map_err(|e| e.to_string())?;
+    fs::write(target, text).map_err(|e| format!("无法写入论文信息: {e}"))
+}
+
+pub(crate) fn read_paper_marker(root: &Path) -> Option<PaperMarker> {
+    let text = fs::read_to_string(root.join(AGENTIKZ_FOLDER_NAME).join(PAPER_MARKER_FILE)).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
 fn classify_paper_file(rel_str: &str) -> String {
     let lower = rel_str.to_ascii_lowercase();
     if lower == "main.tex" || lower == "paper.tex" || lower == "manuscript.tex" {
@@ -1204,11 +1231,59 @@ fn scan_dedicated_paper_files(root: &Path) -> Vec<PaperFileItem> {
     scan_paper_files_in_dir(root, root, 0, 0, &mut visited_budget, &mut list);
 
     // 2. Dedicated paper subdirectories (`sections/`, `styles/`, `figures/`)
-    for sub in DEDICATED_PAPER_SUBDIRS {
+    // 3. Folders that came with the paper's template (for example CVPR's `sec/`).
+    let marker = read_paper_marker(root);
+    let template_dirs: Vec<String> = marker
+        .iter()
+        .flat_map(|marker| marker.paper_dirs.iter())
+        .filter(|dir| {
+            matches!(Path::new(dir).components().collect::<Vec<_>>().as_slice(), [Component::Normal(_)])
+                && !DEDICATED_PAPER_SUBDIRS.contains(&dir.as_str())
+                && !should_skip_dir(dir)
+        })
+        .take(16)
+        .cloned()
+        .collect();
+    for sub in DEDICATED_PAPER_SUBDIRS.iter().copied().chain(template_dirs.iter().map(String::as_str)) {
         let sub_path = root.join(sub);
         if let Ok(meta) = fs::symlink_metadata(&sub_path) {
             if meta.is_dir() && !meta.file_type().is_symlink() {
-                scan_paper_files_in_dir(root, &sub_path, 0, 1, &mut visited_budget, &mut list);
+                let template_folder = template_dirs.iter().any(|dir| dir == sub);
+                scan_paper_files_in_dir(root, &sub_path, 0, if template_folder { 5 } else { 1 }, &mut visited_budget, &mut list);
+            }
+        }
+    }
+
+    // The template's main file is the paper, whatever it is called. Ensure
+    // it is indexed even when a large imported repository hits the scan budget.
+    if let Some(main_file) = marker.map(|marker| marker.main_file).filter(|main| !main.is_empty()) {
+        if !list.iter().any(|item| item.relative_path == main_file) {
+            if let Ok(relative) = normalize_relative_path(&main_file) {
+                let full = root.join(relative);
+                if let (Ok(canonical_root), Ok(canonical_file), Ok(metadata)) =
+                    (fs::canonicalize(root), fs::canonicalize(&full), fs::metadata(&full))
+                {
+                    if canonical_file.starts_with(canonical_root) && metadata.is_file()
+                        && full.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("tex"))
+                    {
+                        list.push(PaperFileItem {
+                            relative_path: main_file.clone(),
+                            file_name: full.file_name().unwrap_or_default().to_string_lossy().into_owned(),
+                            category: "main".into(), size_bytes: metadata.len(),
+                            modified_at: metadata.modified().ok().and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                                .map(|time| time.as_millis() as u64).unwrap_or(0),
+                        });
+                    }
+                }
+            }
+        }
+        if list.iter().any(|item| item.relative_path == main_file) {
+            for item in &mut list {
+                if item.relative_path == main_file {
+                    item.category = "main".into();
+                } else if item.category == "main" {
+                    item.category = "section".into();
+                }
             }
         }
     }
@@ -1259,7 +1334,11 @@ pub async fn project_list_paper_files(project_dir: String) -> Result<Vec<PaperFi
     if !root.is_dir() {
         return Ok(Vec::new());
     }
-    let mut list = scan_dedicated_paper_files(&root);
+    Ok(list_paper_files(&root))
+}
+
+pub(crate) fn list_paper_files(root: &Path) -> Vec<PaperFileItem> {
+    let mut list = scan_dedicated_paper_files(root);
     list.sort_by(|a, b| {
         let rank = |cat: &str| match cat {
             "main" => 0,
@@ -1273,7 +1352,7 @@ pub async fn project_list_paper_files(project_dir: String) -> Result<Vec<PaperFi
             .cmp(&rank(&b.category))
             .then_with(|| a.relative_path.cmp(&b.relative_path))
     });
-    Ok(list)
+    list
 }
 
 /// Reads a UTF-8 text file (`.tex`, `.bib`, `.sty`, `.tikz`) inside `<project_dir>`.

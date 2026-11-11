@@ -1,0 +1,10 @@
+{
+  "id": "blank",
+  "order": 0,
+  "name": "空白论文",
+  "mainFile": "main.tex",
+  "defaultThemeId": "neurips",
+  "columnLayout": "single",
+  "source": "",
+  "description": "仅保留可编译的基础文档（article），自由组织你的论文内容。"
+}

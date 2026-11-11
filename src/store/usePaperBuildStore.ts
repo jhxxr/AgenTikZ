@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { useProjectStore } from './useProjectStore';
-import { useSettingsStore } from './useSettingsStore';
+import { useSettingsStore, type TexBuildMode } from './useSettingsStore';
 
 export interface PaperBuildResult {
   ok: boolean;
@@ -17,16 +17,27 @@ interface PaperBuildState {
   buildId: number;
   compiledRevision: number;
   result: PaperBuildResult | null;
-  run: () => Promise<void>;
+  /** `force` skips the up-to-date check; `clean` removes build files first. */
+  run: (mode?: TexBuildMode) => Promise<void>;
+  /** Removes intermediate build files; sources and the PDF stay. */
+  clean: () => Promise<string>;
 }
 
 let nextBuildId = 0;
 const runningProjects = new Set<string>();
 
+function mainTexFile(): string | undefined {
+  const state = useProjectStore.getState();
+  return state.paperFiles.find((file) => file.category === 'main')?.relativePath
+    || state.paperFiles.find((file) => file.relativePath === 'main.tex')?.relativePath
+    || state.paperFiles.find((file) => file.relativePath === state.activePaperFilePath && /\.tex$/i.test(file.relativePath))?.relativePath
+    || state.paperFiles.find((file) => /\.tex$/i.test(file.relativePath))?.relativePath;
+}
+
 /** Shared by the paper preview and agent review UI; tools only read its diagnostics. */
 export const usePaperBuildStore = create<PaperBuildState>((set, get) => ({
   projectId: null, status: 'idle', buildId: 0, compiledRevision: -1, result: null,
-  run: async () => {
+  run: async (mode = 'normal') => {
     const project = useProjectStore.getState();
     const projectId = project.projectDir;
     if (get().status === 'running' || (projectId && runningProjects.has(projectId))) return;
@@ -36,7 +47,7 @@ export const usePaperBuildStore = create<PaperBuildState>((set, get) => ({
     if (projectId) runningProjects.add(projectId);
     try {
       if (!projectId || typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
-        throw new Error('当前为浏览器预览，未执行 TeX 编译。请在桌面端打开此项目并配置 TeX Live。');
+        throw new Error('当前为浏览器预览，未执行 TeX 编译。请在桌面端打开此项目（已内置 TeX 引擎）。');
       }
       if (!await project.saveAllDirtyPaperFiles()) throw new Error('文件保存失败，已停止编译。');
       if (!isCurrent()) return;
@@ -44,17 +55,14 @@ export const usePaperBuildStore = create<PaperBuildState>((set, get) => ({
       if (state.autoSyncTikz && ['dirty', 'saving', 'error'].includes(state.saveStatus)) {
         throw new Error('配图尚未成功同步到论文文件，请先完成配图保存再编译。');
       }
-      const mainTexFile = state.paperFiles.find((file) => file.relativePath === 'main.tex')?.relativePath
-        || state.paperFiles.find((file) => file.category === 'main')?.relativePath
-        || state.paperFiles.find((file) => file.relativePath === state.activePaperFilePath && /\.tex$/i.test(file.relativePath))?.relativePath
-        || state.paperFiles.find((file) => /\.tex$/i.test(file.relativePath))?.relativePath;
-      if (!mainTexFile) throw new Error('未找到可编译的 .tex 主文件。');
+      const entry = mainTexFile();
+      if (!entry) throw new Error('未找到可编译的 .tex 主文件。');
       const revision = state.paperEditRevision;
-      const { texEngine, texLiveBinDir } = useSettingsStore.getState();
+      const { texEngine } = useSettingsStore.getState();
       const { invoke } = await import('@tauri-apps/api/core');
       if (!isCurrent()) return;
       const result = await invoke<Omit<PaperBuildResult, 'buildId'>>('tex_compile_paper', {
-        projectDir: projectId, mainTexFile, texEngine, texLiveBinDir: texLiveBinDir || undefined,
+        projectDir: projectId, mainTexFile: entry, texEngine, mode,
       });
       if (isCurrent()) set({
         status: result.ok ? 'completed' : 'failed',
@@ -67,6 +75,18 @@ export const usePaperBuildStore = create<PaperBuildState>((set, get) => ({
     } finally {
       if (projectId) runningProjects.delete(projectId);
     }
+  },
+  clean: async () => {
+    const projectId = useProjectStore.getState().projectDir;
+    if (!projectId || typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
+      throw new Error('请先在桌面端打开论文项目。');
+    }
+    if (get().status === 'running' || runningProjects.has(projectId)) throw new Error('正在编译，请稍后再清理。');
+    const { invoke } = await import('@tauri-apps/api/core');
+    const result = await invoke<{ removed: number; message: string }>('tex_clean_artifacts', {
+      projectDir: projectId, mainTexFile: mainTexFile(),
+    });
+    return result.message;
   },
 }));
 

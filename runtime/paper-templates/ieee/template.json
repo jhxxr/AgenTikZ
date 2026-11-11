@@ -1,0 +1,10 @@
+{
+  "id": "ieee",
+  "order": 1,
+  "name": "IEEE (IEEEtran)",
+  "mainFile": "bare_jrnl.tex",
+  "defaultThemeId": "ieee",
+  "columnLayout": "double",
+  "source": "https://ctan.org/pkg/ieeetran",
+  "description": "IEEEtran 官方作者包原件，默认打开期刊示例 bare_jrnl.tex；会议示例为 bare_conf.tex。保留原始类文件与参考文献样式。"
+}

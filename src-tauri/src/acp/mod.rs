@@ -1043,13 +1043,9 @@ pub async fn sys_probe_environment() -> EnvironmentDiagnostics {
 
     let specs = [
         ("node", "Node.js Runtime (ACP 适配器宿主)", "node", "--version"),
-        ("latex", "TeX Live · latex (DVI 编译)", "latex", "--version"),
-        ("pdflatex", "TeX Live · pdflatex (PDF 编译)", "pdflatex", "--version"),
-        ("xelatex", "TeX Live · xelatex (Unicode/CJK 编译)", "xelatex", "--version"),
-        ("dvisvgm", "dvisvgm (DVI/PDF 转矢量 SVG)", "dvisvgm", "--version"),
     ];
 
-    let tools = specs
+    let mut tools: Vec<ToolDiagnostic> = specs
         .into_iter()
         .map(|(id, name, cmd, arg)| {
             if let Some(found) = find_executable_in_paths(Path::new(cmd), &search_paths) {
@@ -1076,6 +1072,23 @@ pub async fn sys_probe_environment() -> EnvironmentDiagnostics {
             }
         })
         .collect();
+
+    // TeX is bundled with the app, so it is reported from the runtime rather than PATH.
+    let tex = crate::tex::engine::tex_engine_status().await;
+    tools.push(ToolDiagnostic {
+        id: "tex-engine".into(),
+        name: "内置 TeX 引擎 · XeLaTeX (Tectonic)".into(),
+        available: tex.ready,
+        path: None,
+        note: tex.version.unwrap_or(tex.message),
+    });
+    tools.push(ToolDiagnostic {
+        id: "tex-cjk-font".into(),
+        name: "内置中文字体 · Noto Sans CJK SC".into(),
+        available: tex.cjk_font.is_some(),
+        path: None,
+        note: if tex.cjk_font.is_some() { "已内置，无需安装系统字体".into() } else { "字体资源缺失".into() },
+    });
 
     EnvironmentDiagnostics {
         node_available: node_bin.is_some(),

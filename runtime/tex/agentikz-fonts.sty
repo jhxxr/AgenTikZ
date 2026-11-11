@@ -1,0 +1,27 @@
+%% AgenTikZ built-in font setup. Shipped inside the app; nothing has to be
+%% installed on the system, and no system font lookup is involved.
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{agentikz-fonts}[2026/11/11 v1.0 AgenTikZ bundled Noto Sans CJK SC]
+
+\RequirePackage{fontspec}
+\RequirePackage{xeCJK}
+
+%% Sans-serif (architecture diagrams, block labels and figure captions).
+\setsansfont{NotoSansCJKsc-Regular.otf}[
+  BoldFont=NotoSansCJKsc-Bold.otf,
+  ItalicFont=NotoSansCJKsc-Regular.otf,
+  BoldItalicFont=NotoSansCJKsc-Bold.otf
+]
+%% CJK text and punctuation spacing in mixed Chinese/English paragraphs.
+\setCJKmainfont{NotoSansCJKsc-Regular.otf}[
+  BoldFont=NotoSansCJKsc-Bold.otf,
+  ItalicFont=NotoSansCJKsc-Regular.otf,
+  BoldItalicFont=NotoSansCJKsc-Bold.otf
+]
+\setCJKsansfont{NotoSansCJKsc-Regular.otf}[BoldFont=NotoSansCJKsc-Bold.otf]
+\setCJKmonofont{NotoSansCJKsc-Regular.otf}
+%% The Latin roman and math fonts stay Latin Modern, matching LaTeX defaults.
+\XeTeXlinebreaklocale "zh"
+\XeTeXlinebreakskip = 0pt plus 1pt
+
+\endinput

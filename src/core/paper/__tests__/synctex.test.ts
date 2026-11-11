@@ -38,7 +38,7 @@ describe('SyncTeX geometry and native bridge', () => {
   it('forwards the actual source cursor and configured TeX binary directory', async () => {
     const target = { page: 3, x: 10, y: 20, width: 100, height: 10 };
     bridge.invoke.mockResolvedValue(target);
-    const options = { projectDir: 'E:/Paper', pdfPath: 'E:/Paper/main.pdf', sourceFile: 'sections/method.tex', line: 42, column: 7, texLiveBinDir: 'E:/texlive/bin' };
+    const options = { projectDir: 'E:/Paper', pdfPath: 'E:/Paper/main.pdf', sourceFile: 'sections/method.tex', line: 42, column: 7 };
     expect(await syncTexForward(options)).toEqual(target);
     expect(bridge.invoke).toHaveBeenCalledWith('tex_synctex_forward', options);
   });

@@ -1,9 +1,10 @@
-//! Project-scoped PDF reads and real SyncTeX CLI queries.
-//! Commands use separate arguments (never a shell command or `-x` editor action).
-use super::compiler::{build_tex_command, run_bounded_command};
+//! Project-scoped PDF reads and SyncTeX lookups.
+//! The `.synctex.gz` map written by the bundled engine is parsed here directly;
+//! no external `synctex` tool is involved.
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -57,7 +58,7 @@ fn paper_pdf(
         && !path.with_extension("synctex.gz").is_file()
         && !path.with_extension("synctex").is_file()
     {
-        return Err("没有 SyncTeX 映射，请重新编译论文（已启用 -synctex=1）".into());
+        return Err("没有 SyncTeX 映射，请重新编译论文".into());
     }
     Ok((root, path))
 }
@@ -77,94 +78,234 @@ pub async fn tex_read_paper_pdf(
         .map_err(|e| format!("读取 PDF 失败: {e}"))
 }
 
-fn records(output: &str) -> Vec<HashMap<&str, &str>> {
-    let mut result = Vec::new();
-    let mut current = HashMap::new();
-    for line in output.lines() {
-        let Some((key, value)) = line.trim().split_once(':') else {
-            continue;
-        };
-        let key = key.trim();
-        if ![
-            "Page", "x", "y", "h", "v", "W", "H", "Input", "Line", "Column",
-        ]
-        .contains(&key)
-        {
-            continue;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    VBox,
+    HBox,
+    Leaf,
+}
+
+#[derive(Debug, Clone)]
+struct Node {
+    kind: Kind,
+    tag: u32,
+    line: u32,
+    page: u32,
+    /// PDF points from the unrotated page's top-left corner; `y` is the baseline.
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    depth: f64,
+    parent: Option<usize>,
+}
+
+#[derive(Debug, Default)]
+struct SyncMap {
+    inputs: HashMap<u32, String>,
+    nodes: Vec<Node>,
+}
+
+/// TeX scaled points per PDF point (72 per inch).
+const SP_PER_BP: f64 = 65781.76;
+
+impl SyncMap {
+    /// Records look like `(tag,line:h,v:W,H,D`; boxes nest, leaves do not.
+    fn parse(text: &str) -> Self {
+        let mut map = SyncMap::default();
+        let (mut unit, mut magnification, mut x_offset, mut y_offset) = (1.0f64, 1000.0f64, 0.0, 0.0);
+        let mut origin = 0.0;
+        let mut in_content = false;
+        let mut page = 0u32;
+        let mut open: Vec<usize> = Vec::new();
+        let number = |value: &str| value.trim().parse::<f64>().ok().filter(|v| v.is_finite());
+        for line in text.lines() {
+            if let Some(rest) = line.strip_prefix("Input:") {
+                if let Some((tag, name)) = rest.split_once(':') {
+                    if let Ok(tag) = tag.trim().parse() {
+                        map.inputs.insert(tag, name.trim().to_string());
+                    }
+                }
+                continue;
+            }
+            if !in_content {
+                if let Some(v) = line.strip_prefix("Unit:").and_then(number) {
+                    unit = v;
+                } else if let Some(v) = line.strip_prefix("Magnification:").and_then(number) {
+                    magnification = v;
+                } else if let Some(v) = line.strip_prefix("X Offset:").and_then(number) {
+                    x_offset = v;
+                } else if let Some(v) = line.strip_prefix("Y Offset:").and_then(number) {
+                    y_offset = v;
+                } else if let Some(format) = line.strip_prefix("Output:") {
+                    // DVI-family output is recorded relative to TeX's one-inch origin.
+                    origin = if format.trim() == "pdf" { 0.0 } else { 72.0 };
+                } else if line.starts_with("Content:") {
+                    in_content = true;
+                }
+                continue;
+            }
+            let mut chars = line.chars();
+            let Some(kind) = chars.next() else { continue };
+            let rest = chars.as_str();
+            match kind {
+                '{' => {
+                    page = rest.trim().parse().unwrap_or(0);
+                    open.clear();
+                }
+                '}' => page = 0,
+                ']' | ')' => {
+                    open.pop();
+                }
+                '[' | '(' | 'h' | 'v' | 'x' | 'k' | 'g' | '$' if page > 0 => {
+                    let mut fields = rest.split(':');
+                    let mut link = fields.next().unwrap_or("").split(',');
+                    let (Some(tag), Some(source_line)) = (
+                        link.next().and_then(|v| v.trim().parse::<u32>().ok()),
+                        link.next().and_then(|v| v.trim().parse::<u32>().ok()),
+                    ) else {
+                        continue;
+                    };
+                    let mut point = fields.next().unwrap_or("").split(',').map(number);
+                    let (Some(Some(h)), Some(Some(v))) = (point.next(), point.next()) else {
+                        continue;
+                    };
+                    let mut size = fields.next().unwrap_or("").split(',').map(number);
+                    let mut dimension = || size.next().flatten().unwrap_or(0.0);
+                    let (width, height, depth) = (dimension(), dimension(), dimension());
+                    let scale = unit * magnification / 1000.0 / SP_PER_BP;
+                    let is_box = matches!(kind, '[' | '(');
+                    map.nodes.push(Node {
+                        kind: match kind {
+                            '[' => Kind::VBox,
+                            '(' => Kind::HBox,
+                            _ => Kind::Leaf,
+                        },
+                        tag,
+                        line: source_line,
+                        page,
+                        x: (h + x_offset) * scale + origin,
+                        y: (v + y_offset) * scale + origin,
+                        width: (width * scale).abs(),
+                        height: (height * scale).abs(),
+                        depth: (depth * scale).abs(),
+                        parent: open.last().copied(),
+                    });
+                    if is_box {
+                        open.push(map.nodes.len() - 1);
+                    }
+                }
+                _ => {}
+            }
         }
-        if (key == "Page" || key == "Input") && current.contains_key(key) {
-            result.push(std::mem::take(&mut current));
+        map
+    }
+
+    /// The line box around `index`, as a top-left rectangle.
+    fn location(&self, index: usize) -> PdfLocation {
+        let mut current = index;
+        while self.nodes[current].kind != Kind::HBox {
+            match self.nodes[current].parent {
+                Some(parent) => current = parent,
+                None => break,
+            }
         }
-        current.insert(key, value.trim());
-    }
-    if !current.is_empty() {
-        result.push(current);
-    }
-    result
-}
-
-fn parse_forward(output: &str) -> Option<PdfLocation> {
-    records(output).iter().find_map(|record| {
-        let number = |key: &str| {
-            record
-                .get(key)?
-                .parse::<f64>()
-                .ok()
-                .filter(|v| v.is_finite())
-        };
-        let page = record.get("Page")?.parse::<u32>().ok().filter(|p| *p > 0)?;
-        let width = number("W").unwrap_or(6.0).max(2.0);
-        let height = number("H").unwrap_or(10.0).max(2.0);
-        // `v` is the enclosing box's bottom/baseline, not its top edge.
-        let x = number("h").or_else(|| number("x"))?.max(0.0);
-        let y = number("v")
-            .map(|v| v - height)
-            .or_else(|| number("y"))?
-            .max(0.0);
-        Some(PdfLocation {
-            page,
-            x,
-            y,
-            width,
-            height,
-        })
-    })
-}
-
-fn parse_backward(output: &str) -> Option<(String, u32, u32)> {
-    records(output).iter().find_map(|record| {
-        let path = record.get("Input")?.to_string();
-        let line = record.get("Line")?.parse::<u32>().ok().filter(|n| *n > 0)?;
-        // Some engines report -1 when a column is unavailable.
-        let column = record
-            .get("Column")
-            .and_then(|s| s.parse::<i64>().ok())
-            .unwrap_or(1)
-            .clamp(1, u32::MAX as i64) as u32;
-        Some((path, line, column))
-    })
-}
-
-async fn query(root: &Path, bin_dir: Option<&str>, args: &[String]) -> Result<String, String> {
-    let mut cmd = build_tex_command("synctex", bin_dir);
-    cmd.args(args).current_dir(root);
-    let out = run_bounded_command(&mut cmd, 15).await.map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            "找不到 synctex，请在 TeX 设置中选择包含 synctex 的 TeX Live / MiKTeX bin 目录".into()
+        // A page-level vertical box is not a useful highlight for a leaf.
+        let node = if self.nodes[current].kind == Kind::HBox {
+            &self.nodes[current]
         } else {
-            format!("SyncTeX 定位失败: {e}")
+            &self.nodes[index]
+        };
+        PdfLocation {
+            page: node.page,
+            x: node.x.max(0.0),
+            y: (node.y - node.height).max(0.0),
+            width: node.width.max(6.0),
+            height: (node.height + node.depth).max(10.0),
         }
-    })?;
-    if !out.status.success() {
-        return Err(format!(
-            "SyncTeX 定位失败，请重新编译论文。{}",
-            String::from_utf8_lossy(&out.stderr)
-                .chars()
-                .take(400)
-                .collect::<String>()
-        ));
     }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+
+    /// Source line to PDF: the requested line, else the next typeset line, else the previous one.
+    fn forward(&self, tags: &[u32], line: u32) -> Option<PdfLocation> {
+        self.nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| node.line > 0 && tags.contains(&node.tag))
+            .min_by_key(|(index, node)| {
+                (node.line < line, node.line.abs_diff(line), node.kind != Kind::HBox, *index)
+            })
+            .map(|(index, _)| self.location(index))
+    }
+
+    /// PDF point to source: the closest record on the page, preferring the line
+    /// box under the point.
+    fn backward(&self, page: u32, x: f64, y: f64) -> Option<(&str, u32)> {
+        let gap = |node: &Node| {
+            let dx = (node.x - x).max(x - (node.x + node.width)).max(0.0);
+            let dy = (node.y - node.height - y)
+                .max(y - (node.y + node.depth))
+                .max(0.0);
+            dx.hypot(dy)
+        };
+        let inside = |node: &Node| {
+            x >= node.x && x <= node.x + node.width && y >= node.y - node.height && y <= node.y + node.depth
+        };
+        let (line_box, _) = self
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| node.page == page && node.kind == Kind::HBox && node.line > 0)
+            .min_by(|(_, a), (_, b)| {
+                // The tightest box containing the point wins; otherwise the nearest one.
+                let key = |n: &Node| (!inside(n), gap(n), n.width * (n.height + n.depth));
+                key(a).partial_cmp(&key(b)).unwrap_or(std::cmp::Ordering::Equal)
+            })?;
+        let hit = self
+            .nodes
+            .iter()
+            .filter(|node| node.parent == Some(line_box) && node.line > 0)
+            .min_by(|a, b| {
+                let key = |n: &Node| (n.x > x, (n.x - x).abs());
+                key(a).partial_cmp(&key(b)).unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap_or(&self.nodes[line_box]);
+        Some((self.inputs.get(&hit.tag)?.as_str(), hit.line))
+    }
+
+    /// Input records may be absolute, project-relative or `./`-prefixed.
+    fn tags_for(&self, relative_source: &str) -> Vec<u32> {
+        let normalize = |path: &str| path.replace('\\', "/").trim_start_matches("./").to_lowercase();
+        let wanted = normalize(relative_source);
+        let mut tags: Vec<u32> = self
+            .inputs
+            .iter()
+            .filter(|(_, name)| {
+                let name = normalize(name);
+                name == wanted || name.ends_with(&format!("/{wanted}"))
+            })
+            .map(|(tag, _)| *tag)
+            .collect();
+        tags.sort_unstable();
+        tags
+    }
+}
+
+fn load_map(pdf: &Path) -> Result<SyncMap, String> {
+    const LIMIT: u64 = 256 * 1024 * 1024;
+    let unreadable = |e: std::io::Error| format!("读取 SyncTeX 映射失败，请重新编译论文: {e}");
+    let mut text = Vec::new();
+    let packed = pdf.with_extension("synctex.gz");
+    if packed.is_file() {
+        let file = fs::File::open(&packed).map_err(unreadable)?;
+        flate2::read::GzDecoder::new(file)
+            .take(LIMIT)
+            .read_to_end(&mut text)
+            .map_err(unreadable)?;
+    } else {
+        let file = fs::File::open(pdf.with_extension("synctex")).map_err(unreadable)?;
+        file.take(LIMIT).read_to_end(&mut text).map_err(unreadable)?;
+    }
+    Ok(SyncMap::parse(&String::from_utf8_lossy(&text)))
 }
 
 #[tauri::command]
@@ -174,35 +315,25 @@ pub async fn tex_synctex_forward(
     source_file: String,
     line: u32,
     column: u32,
-    tex_live_bin_dir: Option<String>,
 ) -> Result<PdfLocation, String> {
     if line == 0 || column == 0 {
         return Err("源码行列必须大于 0".into());
     }
     let (root, pdf) = paper_pdf(&project_dir, &pdf_path, true)?;
     let (_, source) = project_file(&project_dir, &source_file)?;
-    // Canonical Windows paths may contain the \\?\ prefix, which SyncTeX does
-    // not match against its input records. A relative source avoids that prefix
-    // and drive-letter colons in the line:column:file argument.
+    // SyncTeX records the path the engine was invoked with, not the canonical one.
     let source = source
         .strip_prefix(&root)
         .map_err(|e| e.to_string())?
         .to_string_lossy()
         .replace('\\', "/");
-    let output = query(
-        &root,
-        tex_live_bin_dir.as_deref(),
-        &[
-            "view".into(),
-            "-i".into(),
-            format!("{line}:{column}:{source}"),
-            "-o".into(),
-            display_path(&pdf),
-        ],
-    )
-    .await?;
-    parse_forward(&output)
-        .ok_or_else(|| "当前源码行没有 PDF 对应位置，请选择正文或重新编译论文".into())
+    tokio::task::spawn_blocking(move || {
+        let map = load_map(&pdf)?;
+        map.forward(&map.tags_for(&source), line)
+            .ok_or_else(|| "当前源码行没有 PDF 对应位置，请选择正文或重新编译论文".to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -212,81 +343,84 @@ pub async fn tex_synctex_backward(
     page: u32,
     x: f64,
     y: f64,
-    tex_live_bin_dir: Option<String>,
 ) -> Result<SourceLocation, String> {
     if page == 0 || !x.is_finite() || !y.is_finite() || x < 0.0 || y < 0.0 {
         return Err("无效的 PDF 页码或坐标".into());
     }
     let (root, pdf) = paper_pdf(&project_dir, &pdf_path, true)?;
-    let output = query(
-        &root,
-        tex_live_bin_dir.as_deref(),
-        &[
-            "edit".into(),
-            "-o".into(),
-            format!("{page}:{x}:{y}:{}", display_path(&pdf)),
-        ],
-    )
-    .await?;
-    let (source, line, column) = parse_backward(&output)
-        .ok_or_else(|| "此 PDF 位置没有源码映射，请选择正文区域".to_string())?;
-    let (_, source) = project_file(&project_dir, &source)?;
+    let (source, line) = tokio::task::spawn_blocking(move || {
+        let map = load_map(&pdf)?;
+        map.backward(page, x, y)
+            .map(|(source, line)| (source.to_string(), line))
+            .ok_or_else(|| "此 PDF 位置没有源码映射，请选择正文区域".to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    // Positions inside the engine's own files are not openable in the editor.
+    let (_, source) = project_file(&project_dir, &source)
+        .map_err(|_| "此 PDF 位置对应的源码不在当前论文项目内".to_string())?;
     let relative = source.strip_prefix(&root).map_err(|e| e.to_string())?;
     Ok(SourceLocation {
         relative_path: relative.to_string_lossy().replace('\\', "/"),
         line,
-        column,
+        column: 1,
     })
-}
-
-fn display_path(path: &Path) -> String {
-    // TeX utilities use ordinary Windows paths, not NT extended-length prefixes.
-    let path = path.to_string_lossy();
-    if let Some(unc) = path.strip_prefix(r"\\?\UNC\") {
-        format!(r"\\{unc}")
-    } else {
-        path.strip_prefix(r"\\?\").unwrap_or(&path).to_string()
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Every length below is PDF points * 65781.76 sp, so 1.9734528e7 sp = 300 pt.
+    const SAMPLE: &str = "SyncTeX Version:1\nInput:1:C:/My Paper/./main.tex\nInput:2:sections/method.tex\nOutput:pdf\nMagnification:1000\nUnit:1\nX Offset:0\nY Offset:0\nContent:\n!100\n{1\n[1,3:6578176,65781760:19734528,59203584,0\n(1,5:6578176,13156352:19734528,657818,131564\nx1,5:6578176,13156352\ng1,5:9867264,13156352\n)\n(2,9:6578176,19734528:19734528,657818,0\nx2,9:6578176,19734528\nx2,10:13156352,19734528\n)\n]\n}1\n{2\n(2,40:6578176,13156352:6578176,657818,0\n)\n}2\nPostamble:\nCount:9\n";
+
     #[test]
-    fn reads_pdf_boxes_in_points_and_converts_the_baseline_to_top_left() {
-        let out = "SyncTeX result begin\nPage:2\nx:120\ny:300\nh:100\nv:310\nW:250\nH:12\nSyncTeX result end";
-        assert_eq!(
-            parse_forward(out),
-            Some(PdfLocation {
-                page: 2,
-                x: 100.0,
-                y: 298.0,
-                width: 250.0,
-                height: 12.0
-            })
-        );
-        assert!(parse_forward("Page:0\nx:NaN\ny:2").is_none());
-        assert!(parse_forward("Page:1\nx:NaN\ny:2").is_none());
+    fn maps_source_lines_to_line_boxes_in_top_left_points() {
+        let map = SyncMap::parse(SAMPLE);
+        assert_eq!(map.tags_for("main.tex"), vec![1]);
+        let hit = map.forward(&[1], 5).unwrap();
+        assert_eq!(hit.page, 1);
+        assert!((hit.x - 100.0).abs() < 0.01 && (hit.y - 190.0).abs() < 0.01, "{hit:?}");
+        assert!((hit.width - 300.0).abs() < 0.01, "{hit:?}");
+        assert!((hit.height - 12.0).abs() < 0.01, "{hit:?}");
+        // Windows separators, `./` prefixes and nesting all resolve to the same tag.
+        let method = map.tags_for("sections\\method.tex");
+        assert_eq!(method, vec![2]);
+        assert_eq!(map.forward(&method, 20).unwrap().page, 2);
+        assert_eq!(map.forward(&method, 9).unwrap().page, 1);
+        assert!(map.forward(&[], 5).is_none());
     }
 
     #[test]
-    fn handles_windows_paths_spaces_and_missing_columns() {
-        assert_eq!(
-            parse_backward("Input:C:/My Paper/sections/method.tex\nLine:42\nColumn:-1"),
-            Some(("C:/My Paper/sections/method.tex".into(), 42, 1))
-        );
-        assert!(parse_backward("Input:main.tex\nLine:0").is_none());
-        assert_eq!(
-            display_path(Path::new(r"\\?\C:\My Paper\main.pdf")),
-            r"C:\My Paper\main.pdf"
-        );
+    fn maps_pdf_points_back_to_the_nearest_record() {
+        let map = SyncMap::parse(SAMPLE);
+        assert_eq!(map.backward(1, 120.0, 195.0), Some(("C:/My Paper/./main.tex", 5)));
+        assert_eq!(map.backward(1, 150.0, 295.0), Some(("sections/method.tex", 9)));
+        assert_eq!(map.backward(1, 250.0, 295.0), Some(("sections/method.tex", 10)));
+        // Clicks outside every box snap to the closest line instead of failing.
+        assert_eq!(map.backward(2, 400.0, 400.0), Some(("sections/method.tex", 40)));
+        assert!(map.backward(3, 10.0, 10.0).is_none());
     }
 
     #[test]
-    fn skips_invalid_matches_instead_of_returning_bad_coordinates() {
-        let out = "Page:0\nx:4\ny:5\nPage:3\nx:10\ny:20\n";
-        assert_eq!(parse_forward(out).unwrap().page, 3);
+    fn dvi_family_output_is_shifted_by_the_one_inch_origin() {
+        let map = SyncMap::parse(&SAMPLE.replace("Output:pdf", "Output:xdv"));
+        let hit = map.forward(&[1], 5).unwrap();
+        assert!((hit.x - 172.0).abs() < 0.01 && (hit.y - 262.0).abs() < 0.01, "{hit:?}");
+        assert!(SyncMap::parse("garbage\n(1,2:x").nodes.is_empty());
+    }
+
+    #[test]
+    fn reads_gzip_maps_next_to_the_pdf() {
+        use std::io::Write;
+        let root = std::env::temp_dir().join(format!("agentikz_syncmap_{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        gz.write_all(SAMPLE.as_bytes()).unwrap();
+        fs::write(root.join("main.synctex.gz"), gz.finish().unwrap()).unwrap();
+        assert_eq!(load_map(&root.join("main.pdf")).unwrap().nodes.len(), 8);
+        assert!(load_map(&root.join("other.pdf")).is_err());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

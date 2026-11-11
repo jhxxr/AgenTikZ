@@ -11,8 +11,13 @@ src-tauri/adapters/
 src-tauri/.adapters-build-*/
 src-tauri/pi-runtime/
 src-tauri/.pi-runtime-build-*/
+src-tauri/tex-runtime/
+src-tauri/.tex-runtime-build-*/
 src-tauri/binaries/
 crates/*/target/
+
+# Isolated agent checkouts
+.claude/worktrees/
 
 # IDE
 .vscode/

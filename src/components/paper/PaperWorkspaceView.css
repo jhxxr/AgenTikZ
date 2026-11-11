@@ -150,3 +150,9 @@
   .paper-empty-workspace { padding: 24px 14px; }
   .paper-empty-workspace h1 { font-size: 17px; }
 }
+
+/* Compile split button: the main action plus an engine/options arrow. */
+.paper-compile-group { display: inline-flex; flex-shrink: 0; }
+.paper-compile-group > .paper-compile-button { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.paper-compile-caret { padding: 7px 6px; border-radius: 0 5px 5px 0; border-left-color: rgba(255, 255, 255, 0.28); }
+.paper-compile-button:disabled { opacity: 0.55; cursor: not-allowed; }

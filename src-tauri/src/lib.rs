@@ -4,8 +4,10 @@ pub mod image_gen;
 pub mod mcp;
 pub mod pi;
 pub mod project;
+pub mod templates;
 pub mod tex {
     pub mod compiler;
+    pub mod engine;
     pub mod synctex;
 }
 
@@ -14,6 +16,8 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             acp::init_bundled_adapters(app.handle());
+            tex::engine::init(app.handle());
+            templates::init(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -40,11 +44,18 @@ pub fn run() {
             image_gen::img_generate_illustration,
             image_gen::img_save_processed_asset,
             tex::compiler::tex_compile_preview,
-            tex::compiler::tex_scan_installations,
+            tex::compiler::tex_clean_artifacts,
+            tex::engine::tex_engine_status,
             tex::compiler::tex_compile_paper,
             tex::synctex::tex_read_paper_pdf,
             tex::synctex::tex_synctex_forward,
             tex::synctex::tex_synctex_backward,
+            templates::paper_templates_list,
+            templates::paper_template_import,
+            templates::paper_template_remove,
+            templates::paper_template_set_main,
+            templates::paper_template_verify,
+            templates::paper_template_create_project,
             project::project_pick_directory,
             project::project_open_workspace,
             project::project_load_canvas,

@@ -47,6 +47,33 @@ describe('shared paper compilation', () => {
     expect(getPaperBuildDiagnostics()).toMatchObject({ stale: true });
   });
 
+  it('passes the build mode to the bundled engine and cleans only when idle', async () => {
+    invoke.mockResolvedValue({ ok: true, pdfPath: 'E:/Paper/main.pdf', message: 'Compiled' });
+    await usePaperBuildStore.getState().run();
+    expect(invoke).toHaveBeenLastCalledWith('tex_compile_paper', {
+      projectDir: 'E:/Paper', mainTexFile: 'main.tex', texEngine: 'xelatex', mode: 'normal',
+    });
+    for (const mode of ['force', 'clean'] as const) {
+      await usePaperBuildStore.getState().run(mode);
+      expect(invoke).toHaveBeenLastCalledWith('tex_compile_paper', expect.objectContaining({ mode }));
+    }
+    invoke.mockResolvedValue({ removed: 4, message: '已清理 4 个中间产物（PDF 与源码保留）' });
+    await expect(usePaperBuildStore.getState().clean()).resolves.toContain('4');
+    expect(invoke).toHaveBeenLastCalledWith('tex_clean_artifacts', { projectDir: 'E:/Paper', mainTexFile: 'main.tex' });
+    usePaperBuildStore.setState({ status: 'running' });
+    await expect(usePaperBuildStore.getState().clean()).rejects.toThrow('正在编译');
+  });
+
+  it('uses the template-marked main file even when another main.tex exists', async () => {
+    useProjectStore.setState({ paperFiles: [
+      { relativePath: 'main.tex', fileName: 'main.tex', category: 'section', sizeBytes: 1, modifiedAt: 0 },
+      { relativePath: 'latex/paper.tex', fileName: 'paper.tex', category: 'main', sizeBytes: 1, modifiedAt: 0 },
+    ] });
+    invoke.mockResolvedValue({ ok: true, pdfPath: 'E:/Paper/paper.pdf', message: 'Compiled' });
+    await usePaperBuildStore.getState().run();
+    expect(invoke).toHaveBeenLastCalledWith('tex_compile_paper', expect.objectContaining({ mainTexFile: 'latex/paper.tex' }));
+  });
+
   it('does not validate a paper while its canvas-backed figure is still awaiting synchronization', async () => {
     useProjectStore.setState({ saveStatus: 'saving' });
     await usePaperBuildStore.getState().run();

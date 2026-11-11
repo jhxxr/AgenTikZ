@@ -1,0 +1,10 @@
+{
+  "id": "acl",
+  "order": 6,
+  "name": "ACL / EMNLP",
+  "mainFile": "acl_latex.tex",
+  "defaultThemeId": "neurips",
+  "columnLayout": "double",
+  "source": "https://github.com/acl-org/acl-style-files",
+  "description": "ACL 系列会议官方样式（acl.sty）。包内的 acl_lualatex.tex 需要 LuaLaTeX，内置引擎不支持。"
+}

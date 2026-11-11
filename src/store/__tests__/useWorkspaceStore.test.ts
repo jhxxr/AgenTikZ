@@ -33,7 +33,7 @@ describe('independent, template-free figure workspace', () => {
 
   it('invalidates compiled output when source, theme or undo history changes', () => {
     const store = useWorkspaceStore;
-    const compile = () => store.getState().setCompiledSvg('<svg/>', '本地 TeX Live');
+    const compile = () => store.getState().setCompiledSvg('<svg/>', '内置 TeX 引擎');
     const expectInvalidated = () => {
       expect(store.getState().compiledSvg).toBeNull();
       expect(store.getState().texCompilerStatus).toBeNull();

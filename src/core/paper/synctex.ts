@@ -44,7 +44,7 @@ export function pdfHighlightBox(target: PdfLocation, geometry: PageGeometry) {
 
 export async function syncTexForward(options: {
   projectDir: string; pdfPath: string; sourceFile: string;
-  line: number; column: number; texLiveBinDir?: string;
+  line: number; column: number;
 }): Promise<PdfLocation> {
   const { invoke } = await import('@tauri-apps/api/core');
   const target = await invoke<PdfLocation>('tex_synctex_forward', options);
@@ -53,7 +53,7 @@ export async function syncTexForward(options: {
 }
 
 export async function syncTexBackward(options: {
-  projectDir: string; pdfPath: string; page: number; x: number; y: number; texLiveBinDir?: string;
+  projectDir: string; pdfPath: string; page: number; x: number; y: number;
 }): Promise<SourceLocation> {
   const { invoke } = await import('@tauri-apps/api/core');
   const target = await invoke<SourceLocation>('tex_synctex_backward', options);

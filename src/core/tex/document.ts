@@ -32,10 +32,16 @@ export function buildStandaloneLatexDocument(
     .map((hex) => `\\definecolor{hex_${hex}}{HTML}{${hex}}`)
     .join('\n');
 
-  const hasCjk = /[\u4e00-\u9fff]/.test(tikzCode);
-  const cjkPreamble = hasCjk
-    ? '\\IfFileExists{ctex.sty}{\\usepackage[UTF8]{ctex}}{}'
-    : '';
+  // The bundled Noto Sans CJK SC is the only CJK font used in figures; loading
+  // it only when needed keeps Latin-only figures fast to compile.
+  const hasCjk = /[\u3000-\u30ff\u3400-\u9fff\uff00-\uffef]/.test(tikzCode);
+  const cjkPreamble = hasCjk ? '\\usepackage{agentikz-fonts}' : '';
+  const optionalLibraries = [
+    /blur shadow|shadows\.blur/.test(tikzCode) ? 'shadows.blur' : '',
+    /\\matrix|matrix of/.test(tikzCode) ? 'matrix' : '',
+    /canvas is [xyz]{2} plane/.test(tikzCode) ? '3d' : '',
+  ].filter(Boolean);
+  const tdplotPreamble = /\\tdplot/.test(tikzCode) ? '\\usepackage{tikz-3dplot}' : '';
 
   return [
     '\\documentclass[border=4pt]{standalone}',
@@ -43,7 +49,8 @@ export function buildStandaloneLatexDocument(
     '\\usepackage{tikz}',
     '\\usepackage{pgfplots}',
     '\\usepackage{graphicx}',
-    '\\usepackage{amsmath,amssymb}',
+    '\\usepackage{amsmath,mathtools,amssymb,bm}',
+    tdplotPreamble,
     '\\pgfplotsset{',
     '  compat=1.18,',
     '  id/.code={},',
@@ -58,7 +65,7 @@ export function buildStandaloneLatexDocument(
     '  legend/.code={}',
     '}',
     '\\usepgfplotslibrary{statistics}',
-    '\\usetikzlibrary{arrows.meta,positioning,calc,fit,backgrounds,shadings,shapes.geometric}',
+    `\\usetikzlibrary{${['arrows.meta', 'positioning', 'calc', 'fit', 'backgrounds', 'shadings', 'shapes.geometric', ...optionalLibraries].join(',')}}`,
     '',
     `% --- Publication Theme Color Palette (${theme.venueBadge}) ---`,
     allPreambleColors,

@@ -14,8 +14,20 @@ export type SettingsSection =
   | 'about';
 
 export type AgentResponseLanguage = 'auto' | 'zh-CN' | 'en';
-export type TexEngineId = 'latex' | 'pdflatex' | 'xelatex';
-export type PaperCompileEngineId = 'xelatex' | 'pdflatex';
+export type TexEngineId = 'xelatex' | 'lualatex' | 'pdflatex';
+export type TexBuildMode = 'normal' | 'force' | 'clean';
+
+/** Engines offered in the compile menu. Only bundled engines can be selected. */
+export const TEX_ENGINES: ReadonlyArray<{ id: TexEngineId; label: string; builtin: boolean; note: string }> = [
+  { id: 'xelatex', label: 'XeLaTeX', builtin: true, note: '内置 · 默认 · 中文与 OpenType 字体' },
+  { id: 'lualatex', label: 'LuaLaTeX', builtin: false, note: '未内置' },
+  { id: 'pdflatex', label: 'pdfLaTeX', builtin: false, note: '未内置' },
+];
+
+/** Settings saved by releases that used a system TeX Live fall back to the bundled engine. */
+export function sanitizeTexEngine(value: unknown): TexEngineId {
+  return TEX_ENGINES.find((engine) => engine.builtin && engine.id === value)?.id ?? 'xelatex';
+}
 export type UserAgentPreset = 'default' | 'claude-cli' | 'codex-cli' | 'custom';
 
 export interface PersistedSettings {
@@ -30,12 +42,10 @@ export interface PersistedSettings {
   enforcePublicationStyleGuide: boolean;
   requireFigureContract: boolean;
 
-  // Code Editor, Custom TeX Live Path & Paper Compiler
+  // Code Editor & built-in TeX engine
   codeFontSize: number;
   showLineNumbers: boolean;
   texEngine: TexEngineId;
-  texLiveBinDir: string;
-  paperCompileEngine: PaperCompileEngineId;
 
   // Multi-Provider AI Cutout Illustration Engine (OpenAI gpt-image-2 / Gemini / OpenRouter)
   imageGenProvider: ImageGenProviderId;
@@ -87,9 +97,7 @@ export const DEFAULT_SETTINGS: PersistedSettings = {
 
   codeFontSize: 12,
   showLineNumbers: true,
-  texEngine: 'latex',
-  texLiveBinDir: '',
-  paperCompileEngine: 'xelatex',
+  texEngine: 'xelatex',
 
   imageGenProvider: 'openai',
   imageGenBaseUrl: 'https://api.openai.com/v1',
@@ -130,9 +138,13 @@ function loadInitialSettings(): PersistedSettings {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return DEFAULT_SETTINGS;
     const parsed = JSON.parse(raw);
+    // Paths and engines of a system TeX Live are no longer settings.
+    delete parsed.texLiveBinDir;
+    delete parsed.paperCompileEngine;
     return {
       ...DEFAULT_SETTINGS,
       ...parsed,
+      texEngine: sanitizeTexEngine(parsed.texEngine),
       agentAutoMode: typeof parsed.agentAutoMode === 'boolean' ? parsed.agentAutoMode : DEFAULT_SETTINGS.agentAutoMode,
       piThinkingLevel: sanitizePiThinkingLevel(parsed.piThinkingLevel),
       piChannels: sanitizePiChannels(parsed.piChannels),
@@ -258,9 +270,7 @@ export const useSettingsStore = create<SettingsState>((set) => {
             patch.requireFigureContract ?? state.requireFigureContract,
           codeFontSize: patch.codeFontSize ?? state.codeFontSize,
           showLineNumbers: patch.showLineNumbers ?? state.showLineNumbers,
-          texEngine: patch.texEngine ?? state.texEngine,
-          texLiveBinDir: patch.texLiveBinDir ?? state.texLiveBinDir,
-          paperCompileEngine: patch.paperCompileEngine ?? state.paperCompileEngine,
+          texEngine: sanitizeTexEngine(patch.texEngine ?? state.texEngine),
           imageGenProvider: patch.imageGenProvider ?? state.imageGenProvider,
           imageGenBaseUrl: patch.imageGenBaseUrl ?? state.imageGenBaseUrl,
           imageGenApiKey: patch.imageGenApiKey ?? state.imageGenApiKey,

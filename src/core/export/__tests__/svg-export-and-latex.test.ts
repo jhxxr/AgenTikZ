@@ -49,7 +49,10 @@ describe('LatexLabel & KaTeX Formula Rendering (renderMixedLatexToHtml)', () => 
     const sampleTikz = `${FIGURE_PARSER_FIXTURES[0].tikzCode}\n% 中文节点测试: 线性输出头 $\\hat{Y}$`;
     const standalone = buildStandaloneLatexDocument(sampleTikz, 'neurips');
 
-    expect(standalone).toContain('\\IfFileExists{ctex.sty}{\\usepackage[UTF8]{ctex}}{}');
+    // CJK figures use the bundled font package instead of a system TeX Live's ctex.
+    expect(standalone).toContain('\\usepackage{agentikz-fonts}');
+    expect(standalone).not.toContain('ctex');
+    expect(buildStandaloneLatexDocument('\\begin{tikzpicture}\\node {A};\\end{tikzpicture}', 'neurips')).not.toContain('agentikz-fonts');
     expect(standalone).toContain('\\definecolor{hex_2B5B84}{HTML}{2B5B84}');
     expect(standalone).toContain('color=hex_2B5B84');
     expect(standalone).not.toContain('color=#2B5B84');

@@ -103,6 +103,22 @@ describe('agent access preferences', () => {
     });
   });
 
+  it('drops system TeX Live settings and falls back to the bundled engine', async () => {
+    storage.set(STORAGE_KEY, JSON.stringify({
+      texEngine: 'latex', texLiveBinDir: 'D:/texlive/2025/bin/windows', paperCompileEngine: 'pdflatex',
+    }));
+    const { useSettingsStore, sanitizeTexEngine, TEX_ENGINES } = await import('../useSettingsStore');
+    expect(useSettingsStore.getState().texEngine).toBe('xelatex');
+    expect(useSettingsStore.getState()).not.toHaveProperty('texLiveBinDir');
+    expect(useSettingsStore.getState()).not.toHaveProperty('paperCompileEngine');
+    // Engines that are not bundled can be listed but never selected.
+    expect(TEX_ENGINES.filter((engine) => engine.builtin).map((engine) => engine.id)).toEqual(['xelatex']);
+    useSettingsStore.getState().updateSettings({ texEngine: 'lualatex' });
+    expect(useSettingsStore.getState().texEngine).toBe('xelatex');
+    expect(sanitizeTexEngine('pdflatex')).toBe('xelatex');
+    expect(JSON.parse(storage.get(STORAGE_KEY)!)).not.toHaveProperty('texLiveBinDir');
+  });
+
   it('persists access and directory across restarts, and clears them on reset', async () => {
     const { useSettingsStore } = await import('../useSettingsStore');
     useSettingsStore.getState().updateSettings({

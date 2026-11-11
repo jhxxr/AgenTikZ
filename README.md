@@ -47,7 +47,7 @@ Instead of locking you into a proprietary cloud model or asking for raw API keys
 
 An optional **embedded Pi SDK backend** now shares the same project tools and proposal review workflow. Select it under **Settings → Agent**, load the pinned model catalog and store a provider API key in the OS credential store. Pi retains tool history in a long-lived process, without requiring Pi CLI. Node.js 22.19+ is still user-provided; model usage is billed by the selected provider. Pi currently exposes only AgenTikZ tools, not native shell/file tools or third-party MCP servers. Cancellation, project switches, runtime resets and restarts discard runtime history; the visible chat is replayed on recovery. See [Pi runtime notes](docs/pi-runtime.zh-CN.md).
 
-**Image references and visual review:** paste screenshots into Agent chat, inspect removable thumbnails, or send an image without text. Pi and ACP receive actual image blocks. The `render_canvas_preview` tool returns a real TeX rendering of a pending figure proposal so a vision-capable agent can inspect and refine it before human review. Each request allows up to three distinct renders and caches identical inputs. Local TeX Live and dvisvgm are required; a successful compile or layout score is not visual verification.
+**Image references and visual review:** paste screenshots into Agent chat, inspect removable thumbnails, or send an image without text. Pi and ACP receive actual image blocks. The `render_canvas_preview` tool returns a real TeX rendering of a pending figure proposal so a vision-capable agent can inspect and refine it before human review. Each request allows up to three distinct renders and caches identical inputs. The desktop app is required (built-in TeX engine, no TeX Live installation); a successful compile or layout score is not visual verification.
 
 **Built-in scientific drawing skill:** `tikz-diagram-reproduction` guides composition, data-state shapes, semantic colors and faithful reference reproduction. Its four reference families (SWSA, multi-stream GNN, masked autoencoders, and Riemannian/temporal pipelines) are available through paged `get_diagram_design_skill` calls. Complete templates are not injected into every prompt. Reference colors/layouts are protected from automatic repair, and complex shapes/macros use exact TeX preview. See [v0.6.0 release notes](docs/releases/v0.6.0.md).
 
@@ -67,7 +67,7 @@ Manage manuscript files (`main.tex`, `sections/*.tex`), multi-canvas figures (`f
 ![Nature Multi-Panel PGFPlots Dashboard & Interactive Data Series Inspector](docs/screenshots/nature-pgfplots-dashboard.png)
 
 ### 4. Dedicated Paper Workspace: Files, Outline, Source & PDF
-Writing and drawing have separate workspaces. The paper workspace includes a file tree, section outline, CodeMirror editor, and resizable PDF preview. Creating papers, opening chapters, or inserting figures never opens the drawing canvas automatically. Paper starters remain available (blank, Nature, NeurIPS, CVPR, IEEE, arXiv). PDF compilation requires the desktop app and local TeX Live; browser mode does not simulate compilation.
+Writing and drawing have separate workspaces. The paper workspace includes a file tree, section outline, CodeMirror editor, and resizable PDF preview. Creating papers, opening chapters, or inserting figures never opens the drawing canvas automatically. New papers can use a blank manuscript or original IEEEtran, NeurIPS, ICML, ICLR, CVPR/ICCV and ACL/EMNLP author kits. Additional templates can be imported from folders, archives, URLs or Git repositories. PDF compilation requires the desktop app, which ships its own TeX engine; browser mode does not simulate compilation.
 
 The divider includes source → PDF and PDF → source SyncTeX controls; `Ctrl/⌘ + click` on the PDF also returns to the corresponding source line. Desktop builds enable `-synctex=1` and require the `synctex` binary from your TeX installation. Recompile after source edits to refresh the map.
 
@@ -82,7 +82,7 @@ Configure local ACP agents (**Claude Code**, **OpenCode**, **Codex CLI**, **Gemi
 | --- | --- |
 | **Surgical Span Patching**: Depth-aware CST/AST parser tracks exact `SourceSpan` offsets for coordinates, option brackets, labels, and `axis` blocks—zero formatting drift or whitespace inflation across continuous 60fps dragging. | **Native ACP v1 over `stdio`**: Built on the official Rust `agent-client-protocol` SDK. Streams live reasoning (`thought`), tool calls, and text chunks from local agent CLIs without third-party cloud relays. |
 | **Venue-Calibrated Aesthetics**: Built-in color tokens, line widths, arrow tips, and typography presets tailored for **NeurIPS / ICLR**, **CVPR / ICCV**, **Nature (NPG)**, and **IEEE / ACM**. | **Review-First Patch Proposals**: Agent responses never overwrite your figure blindly. Complete `\begin{tikzpicture}...\end{tikzpicture}` blocks are extracted as pending proposals with one-click apply and revert. |
-| **Deep Learning & PGFPlots Primitives**: First-class support for Pre-LN Transformer blocks, 3D feature map cuboids ($C\times H\times W$), $\oplus/\otimes$ operators, dashed stage containers, error-band scaling curves, grouped ablation bars, heatmaps, and boxplots. | **Dual-Engine Rendering & Export**: Instant interactive SVG + KaTeX canvas paired with local TeX Live (`latex` + `dvisvgm`) compilation preview and one-click export to `.tikz`, `\begin{figure}`, standalone `.tex`, `.svg`, or `.pdf`. |
+| **Deep Learning & PGFPlots Primitives**: First-class support for Pre-LN Transformer blocks, 3D feature map cuboids ($C\times H\times W$), $\oplus/\otimes$ operators, dashed stage containers, error-band scaling curves, grouped ablation bars, heatmaps, and boxplots. | **Dual-Engine Rendering & Export**: Instant interactive SVG + KaTeX canvas paired with the built-in XeLaTeX engine (Tectonic core + bundled Noto Sans CJK SC) compilation preview and one-click export to `.tikz`, `\begin{figure}`, standalone `.tex`, `.svg`, or `.pdf`. |
 
 ## Architecture
 
@@ -97,7 +97,7 @@ flowchart TB
 
     subgraph Backend["Tauri v2 Rust Core"]
         AcpBridge["ACP v1 Client Bridge (stdio)\nBounded Timeouts · Fail-Closed Permissions"]
-        TexEngine["Async Local TeX Compiler\n(latex + dvisvgm · Isolated Temp Dir)"]
+        TexEngine["Built-in TeX Compiler\n(XeLaTeX · Tectonic core · Isolated Temp Dir)"]
         McpManifest["Canvas MCP Bridge\nScoped Targets · Reviewed Proposals"]
     end
 
@@ -114,13 +114,19 @@ flowchart TB
 
 - **Lossless CST/AST Engine**: Located in `src/core/parser/`, the parser resolves `\tikzset` style definitions, `\node` statements, orthogonal/curved/residual `\draw` edges, and `\begin{axis}...\end{axis}` PGFPlots environments using depth-aware bracket `[]` and brace `{}` matching so math expressions like `$p(x;\theta)$` never truncate statement boundaries.
 - **Official ACP v1 Transport**: Located in `src-tauri/src/acp/mod.rs`, the desktop backend launches locally installed ACP adapters over `stdio` with bounded initialization (`20s`), session creation (`20s`), prompt execution (`180s`), and transport shutdown timeouts.
-- **Release Scope**: **v0.7.5** adds a default automatic mode to the project assistant: the final canvas or manuscript proposal is applied after a successful turn, with version checks and undo, and ACP native file and command permissions are approved. The side panel now keeps conversations, model choice, skills, and reviewable diffs together. Pi still exposes AgenTikZ tools only. See [v0.7.5 release notes](docs/releases/v0.7.5.md).
+- **Release Scope**: **v0.8.0** bundles a TeX engine, Noto Sans CJK SC and common packages, removing the need to install TeX Live. Original official author kits replace imitation paper formats, and the desktop template library supports local, URL and Git imports. Default assistant auto mode, conflict checks and undo remain available. See [v0.8.0 release notes](docs/releases/v0.8.0.md).
 
 ## Paper Templates & Themes
 
 ### Paper Starters
 
-Blank, Nature, NeurIPS, CVPR, IEEE, and arXiv writing starters are retained. They generate manuscript sources and chapters without example figures or fabricated experiment data. These generic article-based starters are not official submission styles; use the venue's official style before submission.
+The desktop app ships **original IEEEtran, NeurIPS 2026, ICML 2026, ICLR 2027, CVPR/ICCV and ACL/EMNLP author kits**, preserving their styles, examples, bibliography and figures instead of imitating a venue with generic `article` layouts. A minimal blank manuscript remains available. Nature's figure palette is retained, but it is no longer presented as an official paper template.
+
+Use **New paper → Import template** to add a local folder, `.zip` / `.tar.gz` / `.tar` archive, archive download URL (including extensionless endpoints), or HTTPS Git repository. GitHub, GitLab and Gitee use archive downloads; other Git hosts require a local `git` executable. You can specify a repository subtree and choose the main file when several documents are found. Imported templates live in the app data directory and can be reused across projects; deleting a template does not delete papers already created from it.
+
+Importing only downloads/copies and inspects source files: **it does not compile them or run repository scripts by default**. Once you trust the source, choose *Trial build* or explicitly enable a trial after import to check bundled-engine compatibility and inspect real diagnostics. The main file and template-specific folders (such as `sec/`) are remembered in the project. Official sample titles and authors are unchanged; edit them in the main document.
+
+These official kits generally target pdfLaTeX. They have been tested to produce PDFs with the bundled XeTeX core, but final submissions should be checked with the venue's required toolchain. ECCV 2026 is not bundled because its `axessibility` dependency is incompatible with this engine. See [`runtime/paper-templates/SOURCES.md`](runtime/paper-templates/SOURCES.md) for provenance and licenses. Remote imports currently support public HTTP(S) sources, not SSH or private-repository login. For branch names containing `/`, use an explicit archive download URL.
 
 ### 4 Journal Color & Typography Presets
 
@@ -133,7 +139,7 @@ Blank, Nature, NeurIPS, CVPR, IEEE, and arXiv writing starters are retained. The
 
 | Mode | Best For | Requirements |
 | --- | --- | --- |
-| **Desktop App (`tauri dev` / build)** | Full experience: Visual Canvas + Embedded Pi / Local ACP Agents + Local TeX Live compilation | **Node.js >= 22.19.0**, **Rust (stable)**, WebView2 (Windows) / webkit2gtk (Linux) |
+| **Desktop App (`tauri dev` / build)** | Full experience: Visual Canvas + Embedded Pi / Local ACP Agents + Built-in TeX compilation | **Node.js >= 22.19.0**, **Rust (stable)**, WebView2 (Windows) / webkit2gtk (Linux) |
 | **Web Studio (`npm run dev`)** | Instant browser trial of the visual TikZ/PGFPlots canvas, lossless code sync, and exports | **Node.js >= 22.19.0** and npm |
 
 ### 1. Clone & Install Dependencies
@@ -154,13 +160,14 @@ Open `http://localhost:1420` in your browser. You can edit paper sources, start 
 
 > **Note**: Browser mode intentionally does not connect to local `stdio` processes or generate simulated AI responses. Use the Tauri desktop app below to connect real local ACP agents.
 
-### 3. Run the Desktop App (BYOA ACP + Local TeX Live)
+### 3. Run the Desktop App (BYOA ACP + Built-in TeX Engine)
 
 ```sh
 npm run tauri dev
 ```
 
-- **Local TeX Live Preview (Optional)**: If `latex` and `dvisvgm` (from TeX Live or MiKTeX) are on your system `PATH`, clicking **TeX** in the top toolbar compiles your standalone document asynchronously in an isolated temp directory and opens a side-by-side vector comparison view.
+- **Built-in TeX engine (zero install)**: the app ships Tectonic (XeTeX core) and Noto Sans CJK SC. TeX Live, MiKTeX and MacTeX are **not** required and the system `PATH` is not consulted. The arrow next to a compile button switches engines and offers *force rebuild*, *clean and rebuild* and *remove build files*. TikZ figures are compiled to path-only SVG (all glyphs outlined, so no installed font is needed) and papers compile to PDF with a SyncTeX map.
+- **Packages**: TikZ, PGFPlots, tikz-3dplot, pgf-blur, xcolor, standalone, geometry, preview, varwidth, amsmath, mathtools, amssymb, bm, fontspec and xeCJK are pre-installed for offline use; other packages download once on first use and are cached locally. Very large figures (tens of thousands of cells or thousands of nodes) can hit the engine's fixed memory limit — prefer PGFPlots `matrix plot` or split subfigures.
 - **Production Desktop Bundle**:
   ```sh
   npm run tauri build
@@ -263,7 +270,7 @@ src-tauri/
   src/
     acp/            # Official ACP v1 stdio client bridge, executable resolution, and unit tests
     mcp/            # MCP configuration, credentials, authenticated bridge and canvas tool routing
-    tex/            # Async local TeX Live (latex + dvisvgm) preview compiler
+    tex/            # Built-in TeX runtime: engine resolution, package cache, PDF/SVG builds
 ```
 
 ## Development & Verification

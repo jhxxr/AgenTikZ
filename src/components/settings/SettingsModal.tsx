@@ -33,8 +33,6 @@ import {
   SettingsSection,
   useSettingsStore,
   AgentResponseLanguage,
-  TexEngineId,
-  PaperCompileEngineId,
   UserAgentPreset,
   DEFAULT_SETTINGS,
   buildCustomAcpCommandSpec,
@@ -45,6 +43,7 @@ import {
 } from '../../core/agent/illustration-prompt';
 import { useAgentStore } from '../../store/useAgentStore';
 import { McpSettingsPane } from './McpSettingsPane';
+import { TexRuntimePane } from './TexRuntimePane';
 import { useWorkspaceStore } from '../../store/useWorkspaceStore';
 import { JOURNAL_THEMES } from '../../core/themes/journal-presets';
 import { JournalThemeId } from '../../types/theme';
@@ -90,14 +89,14 @@ const NAV_ITEMS: Array<{
   },
   {
     id: 'editor',
-    label: '代码与 TeX Live',
-    sublabel: 'TeX 安装路径与论文编译',
+    label: '代码与内置 TeX 引擎',
+    sublabel: '内置引擎、字体与宏包',
     icon: <Code2 className="w-4 h-4" />,
   },
   {
     id: 'doctor',
     label: '环境诊断',
-    sublabel: 'Node / ACP / TeX 检测',
+    sublabel: 'Node / ACP / 内置引擎检测',
     icon: <Stethoscope className="w-4 h-4" />,
   },
   {
@@ -129,9 +128,6 @@ export const SettingsModal: React.FC = () => {
     requireFigureContract,
     codeFontSize,
     showLineNumbers,
-    texEngine,
-    texLiveBinDir,
-    paperCompileEngine,
     imageGenProvider,
     imageGenBaseUrl,
     imageGenApiKey,
@@ -170,9 +166,6 @@ export const SettingsModal: React.FC = () => {
     requireFigureContract: s.requireFigureContract,
     codeFontSize: s.codeFontSize,
     showLineNumbers: s.showLineNumbers,
-    texEngine: s.texEngine,
-    texLiveBinDir: s.texLiveBinDir,
-    paperCompileEngine: s.paperCompileEngine,
     imageGenProvider: s.imageGenProvider,
     imageGenBaseUrl: s.imageGenBaseUrl,
     imageGenApiKey: s.imageGenApiKey,
@@ -243,10 +236,6 @@ export const SettingsModal: React.FC = () => {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [diagnostics, setDiagnostics] = useState<EnvironmentDiagnostics | null>(null);
   const [isLoadingDiag, setIsLoadingDiag] = useState(false);
-  const [scannedTexDirs, setScannedTexDirs] = useState<
-    Array<{ binDir: string; label: string; hasXelatex: boolean; hasDvisvgm: boolean }>
-  >([]);
-  const [isScanningTex, setIsScanningTex] = useState(false);
   const [isPickingAgentDirectory, setIsPickingAgentDirectory] = useState(false);
   const [agentDirectoryError, setAgentDirectoryError] = useState('');
 
@@ -1320,168 +1309,11 @@ export const SettingsModal: React.FC = () => {
             {activeSection === 'editor' && (
               <div>
                 <SettingsPageTitle
-                  title="代码编辑器与本地 TeX Live 路径配置"
-                  subtitle="支持手动指定或自动扫描自定义位置的 TeX Live / MiKTeX / MacTeX 安装目录，解决未加入系统 PATH 导致无法编译论文与预览的问题。"
+                  title="代码编辑器与内置 TeX 引擎"
+                  subtitle="TeX 引擎与中文字体随应用分发，无需安装 TeX Live / MiKTeX / MacTeX，也不需要配置任何路径。"
                 />
 
-                <SettingsSectionLabel
-                  title="自定义 TeX Live 安装目录 (Custom TeX Live Bin Path)"
-                  description="若您的 TeX Live 安装在自定义磁盘（如 D:\texlive\2025\bin\windows 或 /usr/local/texlive/2025/bin/x86_64-linux），请在此指定或点击自动扫描。编译时将自动注入子进程 PATH 首部。"
-                />
-                <SettingsGroup>
-                  <div className="p-4 space-y-3">
-                    <div>
-                      <label className="block text-[11px] font-medium text-slate-700 mb-1">
-                        TeX Live 可执行文件目录 (bin 目录路径，留空则使用系统默认 PATH)
-                      </label>
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="text"
-                          value={texLiveBinDir}
-                          onChange={(e) =>
-                            updateSettings({ texLiveBinDir: e.target.value })
-                          }
-                          placeholder="例如: D:\texlive\2025\bin\windows 或 /usr/local/texlive/2025/bin/x86_64-linux"
-                          className="flex-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[12px] font-mono text-slate-800 outline-none focus:border-blue-500 focus:bg-white"
-                        />
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            if (
-                              typeof window !== 'undefined' &&
-                              '__TAURI_INTERNALS__' in window
-                            ) {
-                              const { invoke } = await import(
-                                '@tauri-apps/api/core'
-                              );
-                              const picked = await invoke<string | null>(
-                                'project_pick_directory',
-                                { initialDir: texLiveBinDir || null }
-                              );
-                              if (picked) {
-                                updateSettings({ texLiveBinDir: picked });
-                              }
-                            }
-                          }}
-                          className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11.5px] font-medium text-slate-700 hover:bg-slate-50 cursor-pointer shrink-0"
-                        >
-                          📂 浏览目录
-                        </button>
-                        <button
-                          type="button"
-                          disabled={isScanningTex}
-                          onClick={async () => {
-                            setIsScanningTex(true);
-                            try {
-                              if (
-                                typeof window !== 'undefined' &&
-                                '__TAURI_INTERNALS__' in window
-                              ) {
-                                const { invoke } = await import(
-                                  '@tauri-apps/api/core'
-                                );
-                                const list = await invoke<
-                                  Array<{
-                                    binDir: string;
-                                    label: string;
-                                    hasXelatex: boolean;
-                                    hasDvisvgm: boolean;
-                                  }>
-                                >('tex_scan_installations');
-                                setScannedTexDirs(list || []);
-                                if (list && list.length > 0 && !texLiveBinDir) {
-                                  updateSettings({
-                                    texLiveBinDir: list[0].binDir,
-                                  });
-                                }
-                              }
-                            } catch {
-                              // ignore
-                            } finally {
-                              setIsScanningTex(false);
-                            }
-                          }}
-                          className="inline-flex items-center gap-1 rounded-lg bg-blue-600 px-3 py-1.5 text-[11.5px] font-medium text-white hover:bg-blue-700 disabled:opacity-50 cursor-pointer shrink-0"
-                        >
-                          <RefreshCw
-                            className={`h-3 w-3 ${isScanningTex ? 'animate-spin' : ''}`}
-                          />
-                          <span>自动扫描 TeX Live</span>
-                        </button>
-                      </div>
-                    </div>
-
-                    {scannedTexDirs.length > 0 && (
-                      <div className="space-y-1.5 pt-1">
-                        <div className="text-[11px] font-medium text-slate-600">
-                          扫描到的本机 TeX 安装位置（点击即可选用）：
-                        </div>
-                        <div className="flex flex-wrap gap-1.5">
-                          {scannedTexDirs.map((item) => {
-                            const active = texLiveBinDir === item.binDir;
-                            return (
-                              <button
-                                key={item.binDir}
-                                type="button"
-                                onClick={() =>
-                                  updateSettings({ texLiveBinDir: item.binDir })
-                                }
-                                className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] cursor-pointer ${
-                                  active
-                                    ? 'border-blue-600 bg-blue-50 text-blue-700 font-semibold'
-                                    : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
-                                }`}
-                              >
-                                <span className="font-mono">{item.binDir}</span>
-                                <span className="rounded bg-emerald-50 px-1.5 py-0.2 text-[9.5px] text-emerald-700">
-                                  {item.label}
-                                </span>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  <SettingsRow
-                    label="单图画布实时预览编译器"
-                    description="点击顶栏「TeX」按钮时调用的 standalone + dvisvgm 矢量编译器"
-                  >
-                    <select
-                      value={texEngine}
-                      onChange={(e) =>
-                        updateSettings({
-                          texEngine: e.target.value as TexEngineId,
-                        })
-                      }
-                      className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[12px] font-medium text-slate-800 outline-none focus:border-blue-500"
-                    >
-                      <option value="latex">latex + dvisvgm (DVI 极速模式 · 默认)</option>
-                      <option value="pdflatex">pdflatex + dvisvgm --pdf (PDF 标准模式)</option>
-                      <option value="xelatex">xelatex -no-pdf + dvisvgm (Unicode / CJK 支持)</option>
-                    </select>
-                  </SettingsRow>
-
-                  <SettingsRow
-                    label="一站式论文主文档编译器 (main.tex)"
-                    description="在「论文写作台」编译完整论文 PDF 时使用的主引擎"
-                  >
-                    <select
-                      value={paperCompileEngine}
-                      onChange={(e) =>
-                        updateSettings({
-                          paperCompileEngine: e.target
-                            .value as PaperCompileEngineId,
-                        })
-                      }
-                      className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[12px] font-medium text-slate-800 outline-none focus:border-blue-500"
-                    >
-                      <option value="xelatex">xelatex (推荐 · 原生支持 UTF-8 / 中英文学术模板)</option>
-                      <option value="pdflatex">pdflatex (英文顶会标准 arXiv / IEEE / NeurIPS)</option>
-                    </select>
-                  </SettingsRow>
-                </SettingsGroup>
+                <TexRuntimePane />
 
                 <SettingsSectionLabel
                   title="TikZ 与 LaTeX 源码编辑器 (CodeMirror 6)"
@@ -1529,7 +1361,7 @@ export const SettingsModal: React.FC = () => {
               <div>
                 <SettingsPageTitle
                   title="系统环境诊断 (Environment Doctor)"
-                  subtitle="检测本机 Node.js 运行时、内置 ACP 适配器资源包及 TeX Live 编译工具链状态。"
+                  subtitle="检测本机 Node.js 运行时、内置 ACP 适配器资源包及内置 TeX 引擎状态。"
                   action={
                     <button
                       type="button"

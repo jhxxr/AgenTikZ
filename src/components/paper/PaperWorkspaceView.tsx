@@ -6,8 +6,9 @@ import {
   ArrowLeft, ArrowRight, BookOpen, Check, ChevronDown, ChevronRight, FileCode2, FilePlus2, FileText, Folder, FolderOpen, ImagePlus, ListTree, Loader2, PanelLeftClose, PanelLeftOpen, Play, Plus, RefreshCw, Settings, X,
 } from 'lucide-react';
 import { useProjectStore, type PaperFileItem } from '../../store/useProjectStore';
-import { useSettingsStore } from '../../store/useSettingsStore';
+import { TEX_ENGINES, useSettingsStore, type TexBuildMode } from '../../store/useSettingsStore';
 import { usePaperBuildStore } from '../../store/usePaperBuildStore';
+import { CompileMenu, type CompileMenuAction } from '../tex/CompileMenu';
 import { syncTexBackward, syncTexForward, type PdfPoint, type SourceLocation } from '../../core/paper/synctex';
 import type { PaperPdfPreviewHandle } from './PaperPdfPreview';
 import './PaperWorkspaceView.css';
@@ -44,8 +45,8 @@ function fileTree(files: PaperFileItem[]): FileNode[] {
     });
   }
   const sort = (nodes: FileNode[]): FileNode[] => nodes.sort((a, b) => {
-    if (a.path === 'main.tex') return -1;
-    if (b.path === 'main.tex') return 1;
+    if (a.file?.category === 'main') return -1;
+    if (b.file?.category === 'main') return 1;
     if (!!a.file !== !!b.file) return a.file ? 1 : -1;
     return a.name.localeCompare(b.name);
   }).map((node) => ({ ...node, children: sort(node.children) }));
@@ -69,7 +70,7 @@ const FileBranch: React.FC<{
         {!isFile ? (expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />) : <span className="paper-tree-spacer" />}
         <Icon size={14} className={isFile ? '' : 'paper-folder-icon'} />
         <span className="paper-truncate">{node.name}</span>
-        {node.path === 'main.tex' && <span className="paper-main-label">主文件</span>}
+        {node.file?.category === 'main' && <span className="paper-main-label">主文件</span>}
         {dirty[node.path] && <span className="paper-dirty-dot" aria-label="未保存" />}
       </button>
       {!isFile && expanded && <ul>{node.children.map((child) => (
@@ -102,8 +103,8 @@ export const PaperWorkspaceView: React.FC = () => {
     openPaperFile: s.openPaperFile, updatePaperFileContent: s.updatePaperFileContent,
     createNewPaperFile: s.createNewPaperFile,
   })));
-  const { texEngine, texLiveBinDir, openSettings } = useSettingsStore(useShallow((s) => ({
-    texEngine: s.texEngine, texLiveBinDir: s.texLiveBinDir, openSettings: s.openSettings,
+  const { texEngine, openSettings } = useSettingsStore(useShallow((s) => ({
+    texEngine: s.texEngine, openSettings: s.openSettings,
   })));
   const editorRef = useRef<EditorView | null>(null);
   const splitRef = useRef<HTMLDivElement | null>(null);
@@ -124,12 +125,13 @@ export const PaperWorkspaceView: React.FC = () => {
   const [showNewFile, setShowNewFile] = useState(false);
   const [fileError, setFileError] = useState('');
   const [showLogs, setShowLogs] = useState(false);
+  const [cleanNotice, setCleanNotice] = useState<string | null>(null);
   const [cursor, setCursor] = useState({ line: 1, column: 1 });
-  const { compileResult, compiledRevision, isCompiling, runBuild } = usePaperBuildStore(useShallow((s) => ({
+  const { compileResult, compiledRevision, isCompiling, runBuild, cleanBuild } = usePaperBuildStore(useShallow((s) => ({
     compileResult: s.projectId === projectDir ? s.result : null,
     compiledRevision: s.projectId === projectDir ? s.compiledRevision : -1,
     isCompiling: s.projectId === projectDir && s.status === 'running',
-    runBuild: s.run,
+    runBuild: s.run, cleanBuild: s.clean,
   })));
 
   const source = paperFileContents[activePaperFilePath] ?? '';
@@ -201,6 +203,7 @@ export const PaperWorkspaceView: React.FC = () => {
     return () => clearTimeout(timer);
   }, [syncNotice]);
 
+  const engineLabel = TEX_ENGINES.find((engine) => engine.id === texEngine)?.label ?? 'XeLaTeX';
   const pdfStale = compiledRevision !== paperEditRevision;
   const canSync = Boolean(projectDir && compileResult?.ok && compileResult.pdfPath && pdfReady && !isCompiling && !pdfStale);
   const syncUnavailable = isCompiling ? '正在编译，请稍候'
@@ -223,7 +226,7 @@ export const PaperWorkspaceView: React.FC = () => {
     try {
       const target = await syncTexForward({
         projectDir, pdfPath: compileResult.pdfPath, sourceFile: file,
-        line: line.number, column: offset - line.from + 1, texLiveBinDir: texLiveBinDir || undefined,
+        line: line.number, column: offset - line.from + 1,
       });
       const current = useProjectStore.getState();
       if (request !== navigationId.current || current.activePaperFilePath !== file || current.paperEditRevision !== revision) return;
@@ -247,7 +250,6 @@ export const PaperWorkspaceView: React.FC = () => {
     try {
       const target = await syncTexBackward({
         projectDir, pdfPath: compileResult.pdfPath, page: position.page, x: position.x, y: position.y,
-        texLiveBinDir: texLiveBinDir || undefined,
       });
       const current = useProjectStore.getState();
       if (request !== navigationId.current || current.paperEditRevision !== revision || current.activePaperFilePath !== file) return;
@@ -291,11 +293,20 @@ export const PaperWorkspaceView: React.FC = () => {
     } else setFileError(useProjectStore.getState().errorMessage || '文件创建失败');
   };
 
-  const compilePaper = async () => {
+  const compilePaper = async (mode: TexBuildMode = 'normal') => {
     if (isCompiling) return;
     navigationId.current += 1; setSyncBusy(false); setSyncNotice(null);
     if (viewMode === 'source') setViewMode('both');
-    await runBuild();
+    await runBuild(mode);
+  };
+
+  const handleCompileMenu = async (action: CompileMenuAction) => {
+    if (action !== 'clean_only') return compilePaper(action);
+    try {
+      setCleanNotice(await cleanBuild());
+    } catch (error) {
+      setCleanNotice(error instanceof Error ? error.message : String(error));
+    }
   };
 
   return (
@@ -356,9 +367,14 @@ export const PaperWorkspaceView: React.FC = () => {
             ))}
           </div>
           <button type="button" className="paper-secondary-button paper-insert-button" disabled={!hasPaper} onClick={() => setInsertFigureModalOpen(true)} title="选择配图并插入论文，不打开绘图画布"><ImagePlus size={14} />插入配图</button>
-          <button type="button" className="paper-compile-button" disabled={isCompiling || !hasPaper} onClick={() => void compilePaper()}>
-            {isCompiling ? <Loader2 size={13} className="animate-spin" /> : <Play size={12} fill="currentColor" />}{isCompiling ? '编译中' : '编译 PDF'}
-          </button>
+          <div className="paper-compile-group">
+            <button type="button" className="paper-compile-button" disabled={isCompiling || !hasPaper} onClick={() => void compilePaper()}
+              title={`使用内置 ${engineLabel} 引擎编译`}>
+              {isCompiling ? <Loader2 size={13} className="animate-spin" /> : <Play size={12} fill="currentColor" />}{isCompiling ? '编译中' : '编译 PDF'}
+            </button>
+            <CompileMenu buttonClassName="paper-compile-button paper-compile-caret" disabled={isCompiling || !hasPaper}
+              onAction={(action) => void handleCompileMenu(action)} />
+          </div>
         </div>
         {errorMessage && <div className="paper-error" role="alert">{errorMessage}</div>}
         {syncNotice && <div className={`paper-sync-notice ${syncNotice.error ? 'is-error' : ''}`} role={syncNotice.error ? 'alert' : 'status'}>{syncNotice.message}</div>}
@@ -415,7 +431,7 @@ export const PaperWorkspaceView: React.FC = () => {
                 onClick={() => void locateSource()}><ArrowLeft size={14} /></button>
             </div>}
             <div className="paper-preview" style={{ display: viewMode === 'source' ? 'none' : undefined }}>
-              <div className="paper-preview-header"><FileText size={14} /><span>PDF 预览</span><span className="paper-command-spacer" /><button type="button" className="paper-icon-button" title="TeX 编译设置" onClick={() => openSettings('general')}><Settings size={14} /></button></div>
+              <div className="paper-preview-header"><FileText size={14} /><span>PDF 预览</span><span className="paper-command-spacer" /><button type="button" className="paper-icon-button" title="内置 TeX 引擎" onClick={() => openSettings('editor')}><Settings size={14} /></button></div>
               <div className="paper-preview-content">
                 {compileResult?.ok && compileResult.pdfPath && projectDir ? <Suspense fallback={<div className="paper-preview-empty">正在加载 PDF…</div>}>
                   <PaperPdfPreview key={`${compileResult.pdfPath}:${compileResult.buildId}`} ref={pdfRef} projectDir={projectDir} pdfPath={compileResult.pdfPath}
@@ -423,14 +439,15 @@ export const PaperWorkspaceView: React.FC = () => {
                 </Suspense> : <div className="paper-preview-empty">
                   <div className="paper-preview-page"><FileText size={30} strokeWidth={1.2} /><span /><span /><span /></div>
                   <h2>{isCompiling ? '正在编译论文' : '在这里预览你的论文'}</h2>
-                  <p>{isCompiling ? '正在调用本地 TeX 引擎，请稍候。' : '点击「编译 PDF」，查看完整排版。'}</p>
-                  <button type="button" onClick={() => openSettings('general')}>配置 TeX Live <ChevronRight size={12} /></button>
+                  <p>{isCompiling ? '正在调用内置 TeX 引擎，请稍候。' : '点击「编译 PDF」，查看完整排版。'}</p>
+                  <button type="button" onClick={() => openSettings('editor')}>内置 TeX 引擎状态 <ChevronRight size={12} /></button>
                 </div>}
               </div>
               {compileResult && <div className={`paper-build-result ${compileResult.ok ? 'is-success' : 'is-error'}`} role="status">{compileResult.message}</div>}
+              {cleanNotice && !isCompiling && <div className="paper-build-result is-success" role="status">{cleanNotice}</div>}
               {showLogs && compileResult?.logExcerpt && <pre className="paper-build-log">{compileResult.logExcerpt}</pre>}
               <div className="paper-preview-status"><span className={isCompiling ? 'paper-dirty-dot' : 'paper-status-dot'} /><span>{isCompiling ? '正在编译' : compileResult ? (compileResult.ok ? (pdfStale ? '源码已更改 · 请重新编译' : '编译完成') : '未生成 PDF') : '等待编译'}</span><span className="paper-command-spacer" />
-                <button type="button" disabled={!compileResult?.logExcerpt} onClick={() => setShowLogs(!showLogs)}>{showLogs ? '收起日志' : '编译日志'}</button><span>{texEngine}</span></div>
+                <button type="button" disabled={!compileResult?.logExcerpt} onClick={() => setShowLogs(!showLogs)}>{showLogs ? '收起日志' : '编译日志'}</button><span>{engineLabel}</span></div>
             </div>
           </div>
         )}

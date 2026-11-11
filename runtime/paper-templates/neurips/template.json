@@ -1,0 +1,10 @@
+{
+  "id": "neurips",
+  "order": 2,
+  "name": "NeurIPS 2026",
+  "mainFile": "neurips_2026.tex",
+  "defaultThemeId": "neurips",
+  "columnLayout": "single",
+  "source": "https://media.neurips.cc/Conferences/NeurIPS2026/Formatting_Instructions_For_NeurIPS_2026.zip",
+  "description": "NeurIPS 2026 官方作者包（neurips_2026.sty 与 checklist），文件未作任何修改。"
+}

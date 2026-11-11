@@ -14,6 +14,8 @@ import {
 } from '../../core/tex/document';
 import { getExactPreviewReasons } from '../../core/tex/source';
 import { compileWorkspaceTexPreview } from '../../core/tex/preview';
+import { CompileMenu, type CompileMenuAction } from '../tex/CompileMenu';
+import { usePaperBuildStore } from '../../store/usePaperBuildStore';
 import { hasDrawableFigure } from '../../core/paper/figure-insertion';
 import {
   exportCleanCanvasSvg,
@@ -242,6 +244,21 @@ const FigureTopToolbar: React.FC = () => {
     await compileWorkspaceTexPreview();
   };
 
+  const handleCompileMenu = async (action: CompileMenuAction) => {
+    const workspace = useWorkspaceStore.getState();
+    if (workspace.isCompilingTex) return;
+    if (action !== 'force') {
+      // Figure previews build in a throwaway folder; the paper's build files are what persists.
+      workspace.setCompiledSvg(null, null);
+      const cleaned = await usePaperBuildStore.getState().clean().catch(() => null);
+      if (action === 'clean_only') {
+        workspace.setCompiledSvg(null, cleaned ?? '已清理 TeX 预览。');
+        return;
+      }
+    }
+    await compileWorkspaceTexPreview();
+  };
+
   const getFigureSvg = (): string | null => {
     const compiled = useWorkspaceStore.getState().compiledSvg;
     if (compiled) return compiled;
@@ -448,8 +465,9 @@ const FigureTopToolbar: React.FC = () => {
           </select>
         </div>
 
-          <button onClick={handleCompileTex} disabled={isCompilingTex}
-            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-medium border transition-all cursor-pointer ${
+        <div className="flex items-stretch">
+          <button onClick={handleCompileTex} disabled={isCompilingTex} title="使用内置 TeX 引擎编译精确预览"
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-l-lg text-[11px] font-medium border transition-all cursor-pointer ${
               previewMode !== 'interactive'
                 ? 'bg-emerald-50 text-emerald-700 border-emerald-200 shadow-sm'
                 : 'bg-white/70 text-slate-600 border-slate-200/70 hover:bg-white shadow-sm'
@@ -457,6 +475,9 @@ const FigureTopToolbar: React.FC = () => {
             {previewMode !== 'interactive' ? <Eye className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
             <span>{isCompilingTex ? '编译中…' : requiresExactPreview ? '重新编译 TeX' : previewMode !== 'interactive' ? '退出预览' : 'TeX'}</span>
           </button>
+          <CompileMenu disabled={isCompilingTex} onAction={(action) => void handleCompileMenu(action)}
+            buttonClassName="flex h-full items-center px-1.5 rounded-r-lg border border-l-0 border-slate-200/70 bg-white/70 text-slate-600 hover:bg-white shadow-sm cursor-pointer" />
+        </div>
 
         <button
           onClick={() => openSettings('agent')}

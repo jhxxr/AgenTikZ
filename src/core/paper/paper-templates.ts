@@ -1,31 +1,13 @@
 /**
- * @fileoverview Built-in Academic Paper Templates & Figure-as-Package Macro Generator
- *   Provides clean, self-contained LaTeX paper scaffolds (Nature, NeurIPS, CVPR, IEEE, arXiv),
- *   auto-maintained `styles/agentikz-macros.sty` (with all theme color tokens and TikZ styles),
- *   and one-click Figure insertion snippet generators.
+ * @fileoverview Figure-as-Package macro generator and figure insertion snippets.
+ *   Paper templates (official author kits and imported ones) live in the desktop
+ *   template library, see `template-library.ts`; only the blank manuscript used
+ *   by the browser preview is built here.
  */
 
 import { JournalThemeId } from '../../types/theme';
 import { JOURNAL_THEMES } from '../themes/journal-presets';
 import { figurePathArgument, validateFigureOptions } from './figure-insertion';
-
-export type PaperVenueTemplateId =
-  | 'blank'
-  | 'nature'
-  | 'neurips'
-  | 'cvpr'
-  | 'ieee'
-  | 'arxiv';
-
-export interface PaperVenueTemplate {
-  id: PaperVenueTemplateId;
-  name: string;
-  badge: string;
-  defaultThemeId: JournalThemeId;
-  description: string;
-  columnLayout: 'single' | 'double';
-  files: Record<string, string>;
-}
 
 /**
  * Generates `styles/agentikz-macros.sty` containing all journal color tokens
@@ -91,141 +73,50 @@ export function generateAgentikzMacrosSty(_activeThemeId?: JournalThemeId): stri
   ].join('\n');
 }
 
-function buildStarterSections() {
-  return Object.fromEntries([
-    ['introduction', 'Introduction'], ['method', 'Method'], ['experiments', 'Experiments'],
-  ].map(([file, title]) => [
-    `sections/${file}.tex`,
-    `\\section{${title}}\n\\label{sec:${file}}\n\n% Write your ${title.toLowerCase()} here.\n`,
-  ]));
+/** Template ids come from the template library; only the blank one exists in the frontend. */
+export type PaperVenueTemplateId = string;
+
+export interface PaperVenueTemplate {
+  id: PaperVenueTemplateId;
+  name: string;
+  badge: string;
+  defaultThemeId: JournalThemeId;
+  description: string;
+  columnLayout: 'single' | 'double';
+  files: Record<string, string>;
 }
 
-function escapeTitle(title: string): string {
+export const BLANK_TEMPLATE_ID = 'blank';
+
+export function escapeTitle(title: string): string {
   const escapes: Record<string, string> = { '\\': '\\textbackslash{}', '&': '\\&', '%': '\\%', '$': '\\$', '#': '\\#', '_': '\\_', '{': '\\{', '}': '\\}', '~': '\\textasciitilde{}', '^': '\\textasciicircum{}' };
   return title.replace(/[\\&%$#_{}~^]/g, (char) => escapes[char]);
 }
 
-export function buildPaperTemplateFiles(
-  templateId: PaperVenueTemplateId,
+/**
+ * Blank manuscript for browser preview, where the desktop template library
+ * (official author kits and imported templates) is not available.
+ */
+export function buildBlankPaperFiles(
   paperTitle: string = 'Title of Your Scientific Paper'
 ): Record<string, string> {
-  if (templateId === 'blank') {
-    return {
-      'main.tex': [
-        '\\documentclass[11pt]{article}', '\\usepackage[margin=2.4cm]{geometry}',
-        '\\usepackage{graphicx}', '\\usepackage{amsmath}',
-        `\\title{${escapeTitle(paperTitle)}}`, '\\author{}', '\\date{}', '',
-        '\\begin{document}', '\\maketitle', '', '% Start writing here.', '', '\\end{document}', '',
-      ].join('\n'),
-      'references.bib': '% Add your BibTeX references here.\n',
-    };
-  }
-  const sections = buildStarterSections();
-  const macrosSty = generateAgentikzMacrosSty();
-
-  const isTwoColumn = templateId === 'cvpr' || templateId === 'ieee';
-  const docClassOptions = isTwoColumn ? '[10pt,twocolumn]' : '[11pt]';
-
-  const venueHeaderComment: Record<PaperVenueTemplateId, string> = {
-    blank: '% Blank manuscript',
-    nature: '% Nature / Science Portfolio Manuscript Template (AgenTikZ One-Stop Workspace)',
-    neurips: '% NeurIPS / ICLR / ICML Manuscript Template (AgenTikZ One-Stop Workspace)',
-    cvpr: '% CVPR / ICCV / ECCV Two-Column Manuscript Template (AgenTikZ One-Stop Workspace)',
-    ieee: '% IEEE Transactions Two-Column Manuscript Template (AgenTikZ One-Stop Workspace)',
-    arxiv: '% Clean arXiv Preprint Manuscript Template (AgenTikZ One-Stop Workspace)',
-  };
-
-  const mainTex = [
-    venueHeaderComment[templateId],
-    `\\documentclass${docClassOptions}{article}`,
-    '\\usepackage[utf8]{inputenc}',
-    '\\usepackage[T1]{fontenc}',
-    isTwoColumn
-      ? '\\usepackage[margin=1.75cm,columnsep=0.7cm]{geometry}'
-      : '\\usepackage[margin=2.4cm]{geometry}',
-    '\\usepackage{hyperref}',
-    '\\usepackage{styles/agentikz-macros}',
-    '',
-    `\\title{${escapeTitle(paperTitle)}}`,
-    '\\author{Your Name}',
-    '\\date{\\today}',
-    '',
-    '\\begin{document}',
-    '\\maketitle',
-    '',
-    '\\begin{abstract}',
-    '% Write your abstract here.',
-    '\\end{abstract}',
-    '',
-    '\\input{sections/introduction.tex}',
-    '\\input{sections/method.tex}',
-    '\\input{sections/experiments.tex}',
-    '',
-    '\\bibliographystyle{plain}',
-    '\\bibliography{references}',
-    '',
-    '\\end{document}',
-    '',
-  ].join('\n');
-
   return {
-    'main.tex': mainTex,
-    ...sections,
+    'main.tex': [
+      '\\documentclass[11pt]{article}', '\\usepackage[margin=2.4cm]{geometry}',
+      '\\usepackage{graphicx}', '\\usepackage{amsmath}',
+      `\\title{${escapeTitle(paperTitle)}}`, '\\author{}', '\\date{}', '',
+      '\\begin{document}', '\\maketitle', '', '% Start writing here.', '', '\\end{document}', '',
+    ].join('\n'),
     'references.bib': '% Add your BibTeX references here.\n',
-    'styles/agentikz-macros.sty': macrosSty,
   };
 }
 
+/** Browser-mode choices only; the desktop app lists templates from the library. */
 export const PAPER_VENUE_TEMPLATES: PaperVenueTemplate[] = [
   {
-    id: 'blank', name: '空白论文', badge: '空白论文', defaultThemeId: 'neurips',
+    id: BLANK_TEMPLATE_ID, name: '空白论文', badge: '空白论文', defaultThemeId: 'neurips',
     description: '仅保留可编译的基础文档，自由组织你的论文内容。',
-    columnLayout: 'single', files: buildPaperTemplateFiles('blank'),
-  },
-  {
-    id: 'nature',
-    name: 'Nature / Science 顶刊标准手稿',
-    badge: 'Nature',
-    defaultThemeId: 'nature',
-    description: '单栏写作起点，包含章节与参考文献；不是期刊官方投稿样式。',
-    columnLayout: 'single',
-    files: buildPaperTemplateFiles('nature'),
-  },
-  {
-    id: 'neurips',
-    name: 'NeurIPS / ICLR / ICML 机器学习手稿',
-    badge: 'NeurIPS',
-    defaultThemeId: 'neurips',
-    description: '机器学习论文的章节结构，单栏写作起点；投稿前请替换为会议官方样式。',
-    columnLayout: 'single',
-    files: buildPaperTemplateFiles('neurips'),
-  },
-  {
-    id: 'cvpr',
-    name: 'CVPR / ICCV / ECCV 视觉双栏手稿',
-    badge: 'CVPR',
-    defaultThemeId: 'cvpr',
-    description: '双栏写作起点，支持单栏和跨栏配图；不是会议官方投稿样式。',
-    columnLayout: 'double',
-    files: buildPaperTemplateFiles('cvpr'),
-  },
-  {
-    id: 'ieee',
-    name: 'IEEE Transactions 期刊双栏手稿',
-    badge: 'IEEE',
-    defaultThemeId: 'ieee',
-    description: '双栏写作起点，包含章节与参考文献；投稿前请替换为期刊官方样式。',
-    columnLayout: 'double',
-    files: buildPaperTemplateFiles('ieee'),
-  },
-  {
-    id: 'arxiv',
-    name: 'arXiv 预印本清爽通用模板',
-    badge: 'arXiv',
-    defaultThemeId: 'neurips',
-    description: '通用 article 单栏文档，适合预印本和技术报告。',
-    columnLayout: 'single',
-    files: buildPaperTemplateFiles('arxiv'),
+    columnLayout: 'single', files: buildBlankPaperFiles(),
   },
 ];
 

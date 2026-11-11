@@ -15,7 +15,7 @@ export async function compileWorkspaceTexPreview(): Promise<void> {
   if (workspace.isCompilingTex) return;
   const { tikzCode, activeThemeId, sourceRevision } = workspace;
   const { projectDir, activeCanvasFileName } = useProjectStore.getState();
-  const { texEngine, texLiveBinDir } = useSettingsStore.getState();
+  const { texEngine } = useSettingsStore.getState();
   const isCurrent = () => {
     const current = useWorkspaceStore.getState();
     const project = useProjectStore.getState();
@@ -23,16 +23,16 @@ export async function compileWorkspaceTexPreview(): Promise<void> {
     return current.sourceRevision === sourceRevision &&
       current.tikzCode === tikzCode && current.activeThemeId === activeThemeId &&
       project.projectDir === projectDir && project.activeCanvasFileName === activeCanvasFileName &&
-      settings.texEngine === texEngine && settings.texLiveBinDir === texLiveBinDir;
+      settings.texEngine === texEngine;
   };
   workspace.setIsCompilingTex(true);
-  workspace.setCompiledSvg(null, '正在使用本地 TeX 编译…');
+  workspace.setCompiledSvg(null, '正在使用内置 TeX 引擎编译…');
   try {
     let result: TexPreviewResult;
     if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
       result = {
         ok: false,
-        message: '浏览器模式无法调用本地 TeX。请在 AgenTikZ 桌面版中打开，并在设置 → 编辑器与 TeX中配置 TeX Live（需要 latex 和 dvisvgm）。',
+        message: '浏览器模式不包含 TeX 引擎。请在 AgenTikZ 桌面版中打开，桌面版已内置 XeLaTeX，无需安装 TeX Live。',
       };
     } else {
       const { invoke } = await import('@tauri-apps/api/core');
@@ -40,7 +40,6 @@ export async function compileWorkspaceTexPreview(): Promise<void> {
         texSource: buildStandaloneLatexDocument(tikzCode, activeThemeId),
         texEngine,
         projectDir,
-        texLiveBinDir: texLiveBinDir || undefined,
       });
     }
     if (!isCurrent()) return;

@@ -3,12 +3,13 @@ import { JournalThemeId } from '../types/theme';
 import { EMPTY_TIKZ_CODE } from '../core/templates/blank-document';
 import {
   buildFigureLaTeXSnippet,
-  buildPaperTemplateFiles,
+  buildBlankPaperFiles,
   generateAgentikzMacrosSty,
-  PAPER_VENUE_TEMPLATES,
+  BLANK_TEMPLATE_ID,
   PaperVenueTemplateId,
 } from '../core/paper/paper-templates';
 import { useWorkspaceStore } from './useWorkspaceStore';
+import { createPaperFromTemplate } from '../core/paper/template-library';
 import { isEditablePaperPath, isPaperFilePath, type PaperFileChange } from '../types/project-agent';
 import {
   canvasFigurePath, canInsertGraphic, defaultFigureLabel, defaultFigureSpan, ensureFigurePackages,
@@ -849,21 +850,18 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     initPaperWorkspace: async (dirPath, templateId, paperTitle) => {
       const trimmed = dirPath.trim();
       if (!trimmed) return false;
-      const tpl =
-        PAPER_VENUE_TEMPLATES.find((t) => t.id === templateId) ||
-        PAPER_VENUE_TEMPLATES[0];
-      const filesMap = buildPaperTemplateFiles(
-        tpl.id,
-        paperTitle?.trim() || 'Title of Your Scientific Paper'
-      );
+      const title = paperTitle?.trim() || 'Title of Your Scientific Paper';
+      let mainFile = 'main.tex';
 
       if (isTauriRuntime()) {
         try {
-          const { invoke } = await import('@tauri-apps/api/core');
-          await invoke('project_init_paper_workspace', {
-            projectDir: trimmed,
-            files: filesMap,
-          });
+          const created = await createPaperFromTemplate(
+            templateId || BLANK_TEMPLATE_ID,
+            trimmed,
+            title,
+            { 'styles/agentikz-macros.sty': generateAgentikzMacrosSty() }
+          );
+          mainFile = created.mainFile;
         } catch (err) {
           set({ errorMessage: String(err) });
           return false;
@@ -872,7 +870,11 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         const cleanDir = trimmed.replace(/\\/g, '/').replace(/\/+$/, '');
         const vfs = readVirtualProject(cleanDir);
         // Match native initialization: never overwrite an existing manuscript.
-        vfs.paperFiles = { ...filesMap, ...(vfs.paperFiles || {}) };
+        if (templateId !== BLANK_TEMPLATE_ID) {
+          set({ errorMessage: '官方模板与导入模板需要桌面版，浏览器预览只提供空白论文。' });
+          return false;
+        }
+        vfs.paperFiles = { ...buildBlankPaperFiles(title), ...(vfs.paperFiles || {}) };
         const result = writeVirtualProject(cleanDir, vfs);
         if (!result.ok) {
           set({ errorMessage: `论文创建失败: ${result.error}` });
@@ -883,7 +885,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       const opened = await get().openProjectDirectory(trimmed);
       if (opened) {
         await get().refreshPaperFiles();
-        await get().openPaperFile('main.tex');
+        await get().openPaperFile(mainFile);
         get().setWorkbenchMode('paper');
       }
       return opened;
@@ -1196,8 +1198,8 @@ export const useProjectStore = create<ProjectState>((set, get) => {
           const code = manuscriptCode(get().paperFileContents[file.relativePath] || '');
           return /\\documentclass\b/.test(code) && /\\begin\s*\{document\}/.test(code);
         });
-        const entry = candidates.find((file) => file.relativePath === 'main.tex')
-          || candidates.find((file) => file.category === 'main') || candidates[0];
+        const entry = candidates.find((file) => file.category === 'main')
+          || candidates.find((file) => file.relativePath === 'main.tex') || candidates[0];
         if (!entry) throw new Error('未找到完整论文主文件；不会用整篇模板替换空章节。');
         ensureFigurePackages(get().paperFileContents[entry.relativePath], opts.mode);
 
@@ -1337,8 +1339,8 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         set({ figureInsertionError: message });
         return { ok: false, snippet: '', targetFile: s.activePaperFilePath, error: message };
       }
-      const entryFile = texFiles.find((file) => file.relativePath === 'main.tex')
-        || texFiles.find((file) => file.category === 'main') || texFiles[0];
+      const entryFile = texFiles.find((file) => file.category === 'main')
+        || texFiles.find((file) => file.relativePath === 'main.tex') || texFiles[0];
       const targetTex = texFiles.some((file) => file.relativePath === s.activePaperFilePath)
         ? s.activePaperFilePath : entryFile.relativePath;
       const contractClaim = ws.parsedDoc.contract?.claim;

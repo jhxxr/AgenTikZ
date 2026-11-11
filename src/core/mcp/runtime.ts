@@ -177,15 +177,15 @@ export async function executeMcpTool(event: McpToolRequest): Promise<unknown> {
       }
       const previewSource = args.proposalId ? currentProposal!.newTikzCode : source;
       const previewSourceHash = await sourceHash(previewSource);
-      const { texEngine, texLiveBinDir } = useSettingsStore.getState();
+      const { texEngine } = useSettingsStore.getState();
       const { projectDir } = useProjectStore.getState();
-      const key = JSON.stringify([previewSourceHash, themeId, texEngine, texLiveBinDir, projectDir]);
+      const key = JSON.stringify([previewSourceHash, themeId, texEngine, projectDir]);
       const cache = context.previewCache ??= new Map();
       const cached = cache.has(key);
       if (!cached) {
         if ((context.previewAttempts ?? 0) >= 3) fail('preview_budget_exceeded', '本轮已达 3 次渲染上限，请总结待审提案和剩余问题。');
         context.previewAttempts = (context.previewAttempts ?? 0) + 1;
-        cache.set(key, renderAgentPreview(previewSource, themeId, { texEngine, texLiveBinDir, projectDir }));
+        cache.set(key, renderAgentPreview(previewSource, themeId, { texEngine, projectDir }));
       }
       // Capture failures before checking identity: an ended request must not publish even an old diagnostic.
       let preview: Awaited<ReturnType<typeof renderAgentPreview>> | undefined;
@@ -198,7 +198,6 @@ export async function executeMcpTool(event: McpToolRequest): Promise<unknown> {
       if (getMcpRequest(event.requestId) !== context || !useMcpStore.getState().config.builtinEnabled ||
           !sameCanvas(context.target) || live.sourceRevision !== revision || live.tikzCode !== source ||
           (live.activeThemeId ?? 'neurips') !== themeId || liveSettings.texEngine !== texEngine ||
-          liveSettings.texLiveBinDir !== texLiveBinDir ||
           (args.proposalId && (liveProposal !== currentProposal || liveProposal?.status !== 'pending'))) {
         fail('source_changed', '渲染期间画布、提案或请求已变化，结果已丢弃。');
       }

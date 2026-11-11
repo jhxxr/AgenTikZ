@@ -1,0 +1,10 @@
+{
+  "id": "iclr",
+  "order": 4,
+  "name": "ICLR 2027",
+  "mainFile": "iclr2027_conference.tex",
+  "defaultThemeId": "neurips",
+  "columnLayout": "single",
+  "source": "https://github.com/ICLR/Master-Template",
+  "description": "ICLR 2027 官方样式文件（iclr2027_conference.sty），文件未作任何修改。"
+}

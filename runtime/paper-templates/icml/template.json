@@ -1,0 +1,10 @@
+{
+  "id": "icml",
+  "order": 3,
+  "name": "ICML 2026",
+  "mainFile": "example_paper.tex",
+  "defaultThemeId": "neurips",
+  "columnLayout": "double",
+  "source": "https://media.icml.cc/Conferences/ICML2026/Styles/icml2026.zip",
+  "description": "ICML 2026 官方作者包（icml2026.sty 与 example_paper.tex），文件未作任何修改。"
+}

@@ -41,7 +41,7 @@ describe('real TeX preview results', () => {
     const original = useWorkspaceStore.getState().tikzCode;
     useWorkspaceStore.getState().setTikzCode(`${original}\n% edit`);
     useWorkspaceStore.getState().setTikzCode(original);
-    finish({ ok: true, svg: '<svg id="stale"/>', message: '本地 TeX Live' });
+    finish({ ok: true, svg: '<svg id="stale"/>', message: '内置 xelatex 引擎编译成功' });
     await pending;
     expect(useWorkspaceStore.getState().compiledSvg).toBeNull();
     expect(useWorkspaceStore.getState().texCompilerStatus).toBeNull();
@@ -51,7 +51,7 @@ describe('real TeX preview results', () => {
   it('passes normalized full documents to the backend and publishes actual SVG', async () => {
     const source = '\\documentclass{article}\\begin{document}\\begin{tikzpicture}\\draw (0,0)--(1,1);\\end{tikzpicture}\\end{document}';
     useWorkspaceStore.getState().setTikzCode(source);
-    invoke.mockResolvedValue({ ok: true, svg: '<svg/>', message: '本地 TeX Live' });
+    invoke.mockResolvedValue({ ok: true, svg: '<svg/>', message: '内置 xelatex 引擎编译成功' });
     await compileWorkspaceTexPreview();
     expect(invoke.mock.calls[0][1].texSource).toBe(source);
     expect(useWorkspaceStore.getState().compiledSvg).toBe('<svg/>');

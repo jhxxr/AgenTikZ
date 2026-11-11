@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   tests:
-    timeout-minutes: 20
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
@@ -83,6 +83,9 @@ jobs:
         run: |
           npm run mcp:stage
           npm run test:mcp
+
+      - name: Stage bundled TeX engine, fonts, packages and official paper templates
+        run: npm run tex:stage
 
       - name: Run Tauri Rust backend unit tests
         # Tauri embeds the staged runtime as an application resource.

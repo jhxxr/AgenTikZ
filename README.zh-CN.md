@@ -45,7 +45,7 @@
 
 在 AI 协同方面，AgenTikZ 采用 **自带智能体（BYOA, Bring Your Own Agent）** 架构，基于官方 [Agent Client Protocol (ACP)](https://agentclientprotocol.com)（`stdio`）直接连接你本机已安装并登录的 **Claude Code**、**Codex CLI**、**OpenCode**、**Gemini CLI**、**Cursor Agent** 或 **Kimi Code**。无需在软件内配置模型 API Key，无需经过第三方云端中继；支持一键附加 `@canvas` 与 `@选中` 图元上下文，所有 AI 生成的 TikZ 代码均需人工预览确认后才会应用到画布。
 
-**图片参考与视觉复核**：Agent 输入框支持 Ctrl+V 粘贴截图、缩略图预览与移除，也可仅发送图片。Pi 和 ACP 接收原生图片块；`render_canvas_preview` 可返回待审配图的真实 TeX 渲染，让支持视觉的 Agent 看图后修正。每轮最多 3 次不同输入的渲染，相同输入复用结果，最终仍由用户审核。需要本地 TeX Live、dvisvgm 和支持图片的模型；布局评分或编译成功不等于完成视觉检查。
+**图片参考与视觉复核**：Agent 输入框支持 Ctrl+V 粘贴截图、缩略图预览与移除，也可仅发送图片。Pi 和 ACP 接收原生图片块；`render_canvas_preview` 可返回待审配图的真实 TeX 渲染，让支持视觉的 Agent 看图后修正。每轮最多 3 次不同输入的渲染，相同输入复用结果，最终仍由用户审核。需要桌面版（内置 XeLaTeX 引擎，无需安装 TeX Live）和支持图片的模型；布局评分或编译成功不等于完成视觉检查。
 
 **内置论文绘图 skill**：`tikz-diagram-reproduction` 先规划构图分层、数据形态、语义配色与箭头语法，再生成代码。四组论文参考（SWSA、多流 GNN、掩码自编码器、黎曼/时序流程）通过 `get_diagram_design_skill` 按需分页读取，不逐轮注入整套模板。复刻图保护原有颜色与布局，复杂形状和宏使用真实 TeX 预览。详见 [v0.6.0 发布说明](docs/releases/v0.6.0.md)。
 
@@ -65,7 +65,7 @@
 ![Nature 多面板科研实验图表与交互式数据表编辑](docs/screenshots/nature-pgfplots-dashboard.png)
 
 ### 4. 独立论文工作区：文件、大纲、源码与 PDF
-论文与绘图使用独立入口。论文区提供文件树、大纲导航、CodeMirror 源码编辑器与可调整宽度的 PDF 预览；新建论文、切换章节和插入配图均不会自动打开绘图画布。新建论文保留空白、Nature、NeurIPS、CVPR、IEEE 与 arXiv 写作起点。浏览器模式不执行本地 TeX 编译；生成 PDF 需要桌面端与 TeX Live。
+论文与绘图使用独立入口。论文区提供文件树、大纲导航、CodeMirror 源码编辑器与可调整宽度的 PDF 预览；新建论文、切换章节和插入配图均不会自动打开绘图画布。新建论文提供空白文档及 IEEEtran、NeurIPS、ICML、ICLR、CVPR/ICCV、ACL/EMNLP 官方作者包，并支持从本地文件夹、压缩包、URL 或 Git 仓库导入其它模板。浏览器模式不执行 TeX 编译；生成 PDF 需要桌面端，桌面端已内置 TeX 引擎，无需任何额外安装。
 
 分隔线中提供源码 → PDF、PDF → 源码双向定位，也支持 `Ctrl/⌘ + 点击 PDF` 返回对应源码行。桌面端编译启用 `-synctex=1`，需要 TeX 安装目录内的 `synctex` 可执行文件；修改源码后须重新编译以更新映射。
 
@@ -84,7 +84,7 @@
 | --- | --- |
 | **外科手术级 AST 双向同步**：深度感知括号/花括号解析器精准定位每个节点坐标、样式参数、文本标签与 `axis` 图表区间，连续拖拽 50+ 帧零空格膨胀、零注释丢失。 | **官方 ACP v1 协议直连（`stdio`）**：Rust 后端集成官方 `agent-client-protocol` SDK，实时流式展示本地 Agent 的推理过程（`thought`）、工具状态与回复文本。 |
 | **四大顶会/顶刊视觉规范**：内置 **NeurIPS / ICLR**、**CVPR / ICCV**、**Nature (NPG)** 与 **IEEE / ACM** 专属色板、线宽（`0.55pt`–`0.75pt`）、箭头样式与字体规范。 | **先审阅后应用的补丁机制**：Agent 返回的完整 `\begin{tikzpicture}...\end{tikzpicture}` 代码自动提取为待确认卡片，支持源码折叠预览、一键应用与随时撤回。 |
-| **深度学习与 PGFPlots 原生图元**：内置 Pre-LN 注意力块、3D 特征立方体、$\oplus/\otimes$ 算子、虚线 Stage 容器，以及带误差带折线图、消融分组柱状图、热力图与箱线图。 | **双引擎渲染与全格式导出**：内置 60fps 交互式 SVG + KaTeX 矢量画布，支持调用本机 TeX Live（`latex` + `dvisvgm`）分屏对比编译，一键导出 `.tikz`、`figure` 环境、Standalone `.tex`、`.svg` 与 `.pdf`。 |
+| **深度学习与 PGFPlots 原生图元**：内置 Pre-LN 注意力块、3D 特征立方体、$\oplus/\otimes$ 算子、虚线 Stage 容器，以及带误差带折线图、消融分组柱状图、热力图与箱线图。 | **双引擎渲染与全格式导出**：内置 60fps 交互式 SVG + KaTeX 矢量画布，支持内置 XeLaTeX 引擎（Tectonic 内核 + 内置 Noto Sans CJK SC 字体）分屏对比编译，一键导出 `.tikz`、`figure` 环境、Standalone `.tex`、`.svg` 与 `.pdf`。 |
 
 ## 工作原理与架构
 
@@ -99,7 +99,7 @@ flowchart TB
 
     subgraph Backend["Tauri v2 Rust 桌面核心"]
         AcpBridge["ACP v1 客户端桥接 (stdio)\n严格超时控制 · 权限默认拒绝 (Fail-Closed)"]
-        TexEngine["异步本地 TeX 编译引擎\n(latex + dvisvgm · 独立临时目录隔离)"]
+        TexEngine["内置 TeX 编译引擎\n(XeLaTeX · Tectonic 内核 · 独立临时目录隔离)"]
         McpManifest["内置 MCP 工具契约定义\n(AST / 选中图元 / 补丁 Schema)"]
     end
 
@@ -112,13 +112,19 @@ flowchart TB
 
 - **无损 CST/AST 解析引擎**：位于 `src/core/parser/`，通过深度感知括号 `[]` 与花括号 `{}` 匹配解析 `\tikzset` 样式、`\node` 节点、正交/弧线/残差 `\draw` 连线以及 `\begin{axis}...\end{axis}` 实验图表，确保含分号的数学公式（如 `$p(x;\theta)$`）或含括号文本绝不误截断语句。
 - **官方 ACP v1 通信实现**：位于 `src-tauri/src/acp/mod.rs`，桌面端通过 `stdio` 启动本地已安装的 ACP 适配器，对初始化握手（`20s`）、会话创建（`20s`）、提示词生成（`180s`）及子进程退出均设有严格超时边界。
-- **当前版本边界**：当前版本 **v0.7.5** 默认开启项目助手「自动模式」：本轮成功结束后自动应用最终画布或论文提案，保留版本冲突检查与撤回，并为 ACP 放行本机文件读写和命令权限。侧边栏同时收拢对话历史、模型选择、技能与可审核差异。Pi 仍仅使用 AgenTikZ 内置工具。详见 [v0.7.5 发布说明](docs/releases/v0.7.5.md)、[MCP 服务指南](docs/mcp-guide.zh-CN.md) 和 [Pi 接入说明](docs/pi-runtime.zh-CN.md)。
+- **当前版本边界**：**v0.8.0** 内置 TeX 编译引擎、Noto Sans CJK SC 字体与常用宏包，桌面版不再要求安装 TeX Live；官方论文作者包替换仿制格式，并支持本地、URL 和 Git 仓库模板导入。项目助手默认自动模式、冲突检查与撤回保留。详见 [v0.8.0 发布说明](docs/releases/v0.8.0.md)、[MCP 服务指南](docs/mcp-guide.zh-CN.md) 和 [Pi 接入说明](docs/pi-runtime.zh-CN.md)。
 
 ## 论文模板与学术主题
 
 ### 论文模板
 
-保留空白论文、Nature、NeurIPS、CVPR、IEEE 和 arXiv 写作起点，仅生成文档与章节，不插入示例绘图或虚构实验数据。这些通用 article 起点并非期刊/会议官方投稿样式；投稿前请使用对应官方样式。
+桌面版内置 **IEEEtran、NeurIPS 2026、ICML 2026、ICLR 2027、CVPR/ICCV、ACL/EMNLP 官方作者包原件**，保留作者包的样式、示例、参考文献与图片，不再以普通 `article` 仿制期刊格式。空白论文仍可从零开始；Nature 配色主题保留，但不再冒充官方论文模板。
+
+在「新建论文 → 导入模板」中，可导入本地文件夹、`.zip` / `.tar.gz` / `.tar` 压缩包、压缩包下载 URL（包括无扩展名的下载接口）或 HTTPS Git 仓库。GitHub、GitLab 和 Gitee 优先下载仓库压缩包；其它 Git 服务使用本机 `git`。可指定仓库分支页 / 子目录，自动识别主文件；多个主文件时可手动选择。模板保存到应用数据目录，所有新项目均可复用，删除模板不会删除已创建的论文。
+
+导入只复制和识别文件，**默认不编译、不执行仓库脚本**。确认来源可信后，可手动点击「试编译」或勾选「导入后试编译」，查看内置引擎兼容性与真实日志。论文主文件及模板自己的目录（如 `sec/`）会记录到项目中，重开项目仍可识别。官方示例中的标题与作者保持原样，请在主文件中修改。
+
+官方模板通常面向 pdfLaTeX；当前内置 XeTeX 内核已验证这些作者包能生成 PDF，但正式投稿前仍应使用会议要求的工具链复核版式。ECCV 2026 的 `axessibility` 依赖与内置引擎不兼容，暂不内置。模板出处与许可见 [`runtime/paper-templates/SOURCES.md`](runtime/paper-templates/SOURCES.md)。当前远程导入仅支持公开 HTTP(S) 来源，不支持 SSH / 私有仓库登录；分支名带 `/` 时请使用明确的压缩包下载链接。
 
 ### 4 套学术期刊配色与排版预设
 
@@ -131,7 +137,7 @@ flowchart TB
 
 | 运行模式 | 适用场景 | 环境要求 |
 | --- | --- | --- |
-| **Tauri 桌面应用 (`tauri dev` / build)** | 完整功能体验：可视化画布 + 内置 Pi / 本地 ACP 智能体 + 本机 TeX Live 编译对比 | **Node.js >= 22.19.0**、**Rust (stable)**、WebView2 (Windows) / webkit2gtk (Linux) |
+| **Tauri 桌面应用 (`tauri dev` / build)** | 完整功能体验：可视化画布 + 内置 Pi / 本地 ACP 智能体 + 内置 TeX 引擎编译 | **Node.js >= 22.19.0**、**Rust (stable)**、WebView2 (Windows) / webkit2gtk (Linux) |
 | **Web 浏览器模式 (`npm run dev`)** | 快速体验可视化 TikZ/PGFPlots 画布、双向无损源码同步与多格式插图导出 | **Node.js >= 22.19.0** 与 npm |
 
 ### 1. 克隆仓库并安装依赖
@@ -150,15 +156,16 @@ npm run dev
 
 浏览器打开 `http://localhost:1420` 即可使用独立论文编辑区、基础绘图与 PGFPlots 组件、实时代码行高亮对比以及 `.tikz` / `.tex` / `.svg` / `.pdf` 导出。
 
-> **说明**：纯浏览器环境无法直接调用本机 `stdio` 子进程，且 AgenTikZ 坚持**不生成假冒模拟回复**。如需连接本地 ACP 智能体或调用本机 TeX Live 编译，请使用下方的 Tauri 桌面模式。
+> **说明**：纯浏览器环境无法直接调用本机 `stdio` 子进程，且 AgenTikZ 坚持**不生成假冒模拟回复**。如需连接本地 ACP 智能体或使用内置 TeX 引擎编译，请使用下方的 Tauri 桌面模式。
 
-### 3. 启动 Tauri 桌面应用（支持本地 ACP 智能体与 TeX Live）
+### 3. 启动 Tauri 桌面应用（支持本地 ACP 智能体与内置 TeX 引擎）
 
 ```sh
 npm run tauri dev
 ```
 
-- **本机 TeX Live 矢量编译对比（可选）**：若本机 `PATH` 中已安装 `latex` 与 `dvisvgm`（来自 TeX Live 或 MiKTeX），点击顶部工具栏的 **TeX** 按钮即可在独立临时目录中异步编译完整文档，并开启左右分屏对比预览。
+- **内置 TeX 引擎（零安装）**：应用自带 Tectonic（XeTeX 内核）与 Noto Sans CJK SC 字体，**不需要安装 TeX Live / MiKTeX / MacTeX，也不读取系统 `PATH`**。点击顶部工具栏或论文写作台的编译按钮旁的下拉箭头，可以切换引擎并选择「强制重新编译 / 清理后重新编译 / 清理中间产物」。TikZ 图形经引擎编译为纯路径 SVG（字形全部转轮廓，不依赖任何已安装字体），论文编译产出 PDF 与 SyncTeX 映射。
+- **宏包策略**：TikZ、PGFPlots、tikz-3dplot、pgf-blur、xcolor、standalone、geometry、preview、varwidth、amsmath、mathtools、amssymb、bm、fontspec、xeCJK 等已随安装包预置，可直接离线编译；其它宏包在首次使用时自动下载并缓存到本机。大型热力图或上千节点的整页大图可能触及引擎内存上限，建议改用 PGFPlots `matrix plot` 或拆分子图。
 - **复杂 TikZ 图形预览**：常用的 `\newcommand` / `\def` 宏、坐标表达式、矩形、圆、贝塞尔曲线、旋转文字及作用域裁剪可使用 SVG 兼容预览。遇到这类图形会自动尝试 TeX 精确编译；失败时保留真实诊断并明确标注兼容预览。超出兼容语法范围的图形仍需本机 TeX。
 - **完整文档导入**：粘贴含 `\documentclass` 的完整 LaTeX 时，保留原有导言区、字体和页面设置；自动恢复旧版导出造成的重复文档包装。
 - **构建桌面端安装包**：
@@ -262,7 +269,7 @@ src-tauri/
   src/
     acp/            # 官方 ACP v1 stdio 客户端桥接、PATH 可执行文件解析与 Rust 单元测试
     mcp/            # 内置 MCP 画布工具契约定义（AST 查询、选中元素与补丁 Schema）
-    tex/            # 异步本地 TeX Live (latex + dvisvgm) 独立临时目录编译模块
+    tex/            # 内置 TeX 运行时：引擎定位、宏包缓存与 PDF/SVG 编译模块
 ```
 
 ## 开发与验证
