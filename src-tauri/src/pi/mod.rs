@@ -296,7 +296,9 @@ fn worker_path(app: &AppHandle) -> Result<PathBuf, String> {
 
 fn node_version_supported(version: &str) -> bool {
     let trimmed = version.trim().trim_start_matches('v');
-    let parts: Vec<&str> = trimmed.split('.').collect();
+    // Drop the pre-release/build suffix first: it may contain dots itself (e.g. "-rc.1").
+    let core = trimmed.split(['-', '+']).next().unwrap_or("");
+    let parts: Vec<&str> = core.split('.').collect();
     if parts.len() != 3 {
         return false;
     }
@@ -306,8 +308,7 @@ fn node_version_supported(version: &str) -> bool {
     let Ok(minor) = parts[1].parse::<u32>() else {
         return false;
     };
-    let patch_part = parts[2].split(['-', '+']).next().unwrap_or("");
-    if patch_part.parse::<u32>().is_err() {
+    if parts[2].parse::<u32>().is_err() {
         return false;
     }
     major > 20 || (major == 20 && minor >= 12)
@@ -1023,6 +1024,9 @@ mod tests {
         assert!(node_version_supported("v20.12.0"));
         assert!(node_version_supported("v22.14.0"));
         assert!(node_version_supported("v22.19.0-rc.1"));
+        assert!(node_version_supported("v23.0.0-nightly20241001abc+build.5"));
+        assert!(!node_version_supported("v20.11.1-rc.1"));
+        assert!(!node_version_supported("v22.19"));
         assert!(node_version_supported("v24.14.1\n"));
         assert!(!node_version_supported("not node"));
         assert!(!node_version_supported("v22.foo.19"));
