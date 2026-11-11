@@ -103,6 +103,8 @@ export interface TikzPatchProposal {
   newTikzCode: string;
   affectedElementIds: string[];
   status: 'pending' | 'applied' | 'rejected';
+  /** Applied by auto mode rather than by a click on the card. */
+  autoApplied?: boolean;
   previousTikzCode?: string;
   mode?: 'surgical_diff' | 'full_replace' | 'agent_skill';
   semanticItems?: TikzSemanticDiffItem[];
@@ -126,10 +128,18 @@ export interface AgentImageAttachment {
   data: string;
 }
 
+/** How a system message should be presented; absent on ordinary chat turns. */
+export type AgentMessageKind = 'notice' | 'warning' | 'error' | 'cancelled';
+
 export interface AgentChatMessage {
   id: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
+  kind?: AgentMessageKind;
+  /** Epoch milliseconds; `timestamp` remains the short display label. */
+  createdAt?: number;
+  /** Wall-clock time of the agent run that produced this assistant message. */
+  durationMs?: number;
   images?: AgentImageAttachment[];
   thoughtProcess?: string;
   timestamp: string;
@@ -156,4 +166,8 @@ export interface AgentSession {
   createdAt: string;
   messages: AgentChatMessage[];
   projectId?: string;
+  /** Epoch milliseconds of the last user turn, for ordering the history list. */
+  updatedAt?: number;
+  /** Set once the user renames the conversation, so auto-titling leaves it alone. */
+  customTitle?: boolean;
 }

@@ -15,6 +15,8 @@ export interface ProjectPatchProposal {
   status: 'pending' | 'applied' | 'rejected';
   files: Array<PaperFileChange & { diffLines: TikzDiffLine[] }>;
   appliedRevision?: number;
+  /** Applied by auto mode rather than by a click on the card. */
+  autoApplied?: boolean;
 }
 
 /** Reject aliases and traversal before looking a path up in the project's file index. */

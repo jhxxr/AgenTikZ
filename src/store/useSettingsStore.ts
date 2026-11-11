@@ -59,6 +59,8 @@ export interface PersistedSettings {
   defaultAttachSelection: boolean;
   autoSelectAffectedNodes: boolean;
   agentFullAccess: boolean;
+  /** Applies agent proposals without a review click and approves the agent's tool permission requests. */
+  agentAutoMode: boolean;
   agentWorkingDirectory: string;
   proxyEnabled: boolean;
   proxyUrl: string;
@@ -109,6 +111,7 @@ export const DEFAULT_SETTINGS: PersistedSettings = {
   defaultAttachSelection: true,
   autoSelectAffectedNodes: true,
   agentFullAccess: false,
+  agentAutoMode: true,
   agentWorkingDirectory: '',
   proxyEnabled: false,
   proxyUrl: 'http://127.0.0.1:7890',
@@ -130,6 +133,7 @@ function loadInitialSettings(): PersistedSettings {
     return {
       ...DEFAULT_SETTINGS,
       ...parsed,
+      agentAutoMode: typeof parsed.agentAutoMode === 'boolean' ? parsed.agentAutoMode : DEFAULT_SETTINGS.agentAutoMode,
       piThinkingLevel: sanitizePiThinkingLevel(parsed.piThinkingLevel),
       piChannels: sanitizePiChannels(parsed.piChannels),
       acpModelSelections: sanitizeAcpSelections(parsed.acpModelSelections),
@@ -172,6 +176,11 @@ export function resolveEffectiveUserAgent(
     default:
       return undefined;
   }
+}
+
+/** Auto mode approves tool permission requests, which is what the full-access setting does. */
+export function agentHasFullAccess(settings: Pick<PersistedSettings, 'agentFullAccess' | 'agentAutoMode'>): boolean {
+  return settings.agentFullAccess || settings.agentAutoMode;
 }
 
 export function buildCustomAcpCommandSpec(
@@ -273,6 +282,7 @@ export const useSettingsStore = create<SettingsState>((set) => {
           defaultAttachSelection: patch.defaultAttachSelection ?? state.defaultAttachSelection,
           autoSelectAffectedNodes: patch.autoSelectAffectedNodes ?? state.autoSelectAffectedNodes,
           agentFullAccess: patch.agentFullAccess ?? state.agentFullAccess,
+          agentAutoMode: patch.agentAutoMode ?? state.agentAutoMode,
           agentWorkingDirectory: patch.agentWorkingDirectory ?? state.agentWorkingDirectory,
           proxyEnabled: patch.proxyEnabled ?? state.proxyEnabled,
           proxyUrl: patch.proxyUrl ?? state.proxyUrl,

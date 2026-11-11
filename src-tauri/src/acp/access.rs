@@ -18,13 +18,20 @@ pub(super) fn client_capabilities(full_access: bool) -> ClientCapabilities {
 pub(super) fn permission_response(
     request: &RequestPermissionRequest,
     full_access: bool,
+    auto_mode: bool,
 ) -> RequestPermissionResponse {
-    let option = full_access
+    let option = (full_access || auto_mode)
         .then(|| {
             request
                 .options
                 .iter()
                 .find(|option| option.kind == PermissionOptionKind::AllowOnce)
+                // Persistent consent requires the explicit automatic-mode opt-in.
+                .or_else(|| {
+                    request.options.iter().find(|option| {
+                        auto_mode && option.kind == PermissionOptionKind::AllowAlways
+                    })
+                })
         })
         .flatten();
     RequestPermissionResponse::new(match option {
@@ -147,8 +154,10 @@ pub(super) fn write_text_file(full_access: bool, path: &Path, content: &str) -> 
     std::fs::write(path, content).map_err(|error| error.to_string())
 }
 
-pub(super) fn prompt_instructions(full_access: bool) -> &'static str {
-    if full_access {
+pub(super) fn prompt_instructions(full_access: bool, auto_mode: bool) -> &'static str {
+    if auto_mode {
+        "You are assisting in AgenTikZ, a TikZ & PGFPlots editor. The user enabled automatic mode for this run, which grants full local access and automatic approval of native tool permission requests. You may read and modify local files, including files outside the working directory, and use the agent's native command tools as needed for the user's task. Use absolute paths for files outside the working directory. Inspect relevant local sources when the user supplies a file or folder path; report actual tool errors accurately. Canvas and manuscript changes must remain proposals until the host attempts to apply them after the successful turn."
+    } else if full_access {
         "You are assisting in AgenTikZ, a TikZ & PGFPlots editor. The user enabled full local access in settings. You may read and modify local files, including files outside the working directory, and use the agent's native command tools as needed for the user's task. Use absolute paths for files outside the working directory. Tool permission requests are approved for this run. Inspect relevant local sources when the user supplies a file or folder path; report actual tool errors accurately. For canvas changes, return proposed TikZ for review."
     } else {
         "You are assisting in AgenTikZ, a TikZ & PGFPlots editor. Native filesystem and command permission requests are denied in restricted mode; do not use native file or command tools. Independently enabled MCP tools are authorized and may be used for the user's task. Return canvas changes as proposals for review. If the required local access is unavailable through enabled tools, tell the user to enable Full local access in Settings > Agent."
@@ -177,23 +186,63 @@ mod tests {
             PermissionOption::new("always", "Always", PermissionOptionKind::AllowAlways),
             PermissionOption::new("once", "Once", PermissionOptionKind::AllowOnce),
         ]);
-        assert_eq!(
-            permission_response(&request, false).outcome,
-            RequestPermissionOutcome::Cancelled
-        );
-        assert_eq!(
-            permission_response(&request, true).outcome,
-            RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new("once"))
-        );
+        for full_access in [false, true] {
+            for auto_mode in [false, true] {
+                let expected = if full_access || auto_mode {
+                    RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new("once"))
+                } else {
+                    RequestPermissionOutcome::Cancelled
+                };
+                assert_eq!(
+                    permission_response(&request, full_access, auto_mode).outcome,
+                    expected,
+                    "full_access={full_access}, auto_mode={auto_mode}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn permissions_allow_persistent_consent_only_in_auto_mode() {
         let always_only = permission_request(vec![PermissionOption::new(
             "always",
             "Always",
             PermissionOptionKind::AllowAlways,
         )]);
-        assert_eq!(
-            permission_response(&always_only, true).outcome,
-            RequestPermissionOutcome::Cancelled
-        );
+        for full_access in [false, true] {
+            for auto_mode in [false, true] {
+                let expected = if auto_mode {
+                    RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new("always"))
+                } else {
+                    RequestPermissionOutcome::Cancelled
+                };
+                assert_eq!(
+                    permission_response(&always_only, full_access, auto_mode).outcome,
+                    expected,
+                    "full_access={full_access}, auto_mode={auto_mode}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn permissions_cancel_reject_only_or_empty_options_in_every_mode() {
+        let reject_only = permission_request(vec![
+            PermissionOption::new("reject", "Reject", PermissionOptionKind::RejectOnce),
+            PermissionOption::new("never", "Never", PermissionOptionKind::RejectAlways),
+        ]);
+        let empty = permission_request(vec![]);
+        for request in [&reject_only, &empty] {
+            for full_access in [false, true] {
+                for auto_mode in [false, true] {
+                    assert_eq!(
+                        permission_response(request, full_access, auto_mode).outcome,
+                        RequestPermissionOutcome::Cancelled,
+                        "full_access={full_access}, auto_mode={auto_mode}",
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -272,8 +321,16 @@ mod tests {
             assert_eq!(capabilities.fs.write_text_file, full_access);
             assert!(!capabilities.terminal);
         }
-        assert!(prompt_instructions(true).contains("outside the working directory"));
-        assert!(!prompt_instructions(true).contains("do not execute"));
-        assert!(prompt_instructions(false).contains("denied"));
+        assert!(prompt_instructions(true, false).contains("outside the working directory"));
+        assert!(!prompt_instructions(true, false).contains("do not execute"));
+        assert!(prompt_instructions(false, false).contains("denied"));
+        for full_access in [false, true] {
+            let instructions = prompt_instructions(full_access, true);
+            assert!(instructions.contains("automatic mode"));
+            assert!(instructions.contains("full local access"));
+            assert!(instructions.contains("automatic approval of native tool permission requests"));
+            assert!(instructions.contains("remain proposals"));
+            assert!(!instructions.contains("denied"));
+        }
     }
 }

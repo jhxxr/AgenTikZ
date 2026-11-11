@@ -144,6 +144,7 @@ export const SettingsModal: React.FC = () => {
     defaultAttachSelection,
     autoSelectAffectedNodes,
     agentFullAccess,
+    agentAutoMode,
     agentWorkingDirectory,
     proxyEnabled,
     proxyUrl,
@@ -184,6 +185,7 @@ export const SettingsModal: React.FC = () => {
     defaultAttachSelection: s.defaultAttachSelection,
     autoSelectAffectedNodes: s.autoSelectAffectedNodes,
     agentFullAccess: s.agentFullAccess,
+    agentAutoMode: s.agentAutoMode,
     agentWorkingDirectory: s.agentWorkingDirectory,
     proxyEnabled: s.proxyEnabled,
     proxyUrl: s.proxyUrl,
@@ -235,6 +237,8 @@ export const SettingsModal: React.FC = () => {
     setSnapToGrid: s.setSnapToGrid,
   })));
 
+  const isAgentStreaming = useAgentStore((s) => s.isStreaming);
+  const effectiveFullAccess = agentFullAccess || agentAutoMode;
   const [isProbingAll, setIsProbingAll] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [diagnostics, setDiagnostics] = useState<EnvironmentDiagnostics | null>(null);
@@ -568,15 +572,24 @@ export const SettingsModal: React.FC = () => {
                 />
                 <SettingsGroup>
                   <SettingsRow
+                    label="自动模式"
+                    description="免确认应用本轮最终提案，并自动放行 ACP 文件读写与命令权限。保留冲突检查和撤回；Pi 仍仅使用项目工具。运行期间不可切换。"
+                    badge={<StatusBadge tone={agentAutoMode ? 'amber' : 'slate'}>{agentAutoMode ? '已开启' : '手动审核'}</StatusBadge>}
+                  >
+                    <SettingsToggle label="自动模式" checked={agentAutoMode} disabled={isAgentStreaming}
+                      onChange={(checked) => updateSettings({ agentAutoMode: checked })} />
+                  </SettingsRow>
+                  <SettingsRow
                     label="完整本机访问"
                     description="开启后，Agent 可跨文件夹读取和修改本机文件，并执行命令；工具权限请求会自动批准。请仅为信任的本地 Agent 开启。"
-                    badge={<StatusBadge tone={agentFullAccess ? 'amber' : 'slate'}>
-                      {agentFullAccess ? '已开启' : '受限模式'}
+                    badge={<StatusBadge tone={effectiveFullAccess ? 'amber' : 'slate'}>
+                      {agentAutoMode ? '自动模式已授权' : agentFullAccess ? '已开启' : '受限模式'}
                     </StatusBadge>}
                   >
                     <SettingsToggle
                       label="完整本机访问"
-                      checked={agentFullAccess}
+                      checked={effectiveFullAccess}
+                      disabled={agentAutoMode}
                       onChange={(checked) => updateSettings({ agentFullAccess: checked })}
                     />
                   </SettingsRow>
@@ -591,7 +604,7 @@ export const SettingsModal: React.FC = () => {
                       <input
                         id="agent-working-directory"
                         value={agentWorkingDirectory}
-                        disabled={!agentFullAccess}
+                        disabled={!effectiveFullAccess}
                         onChange={(e) => {
                           updateSettings({ agentWorkingDirectory: e.target.value });
                           setAgentDirectoryError('');
@@ -601,7 +614,7 @@ export const SettingsModal: React.FC = () => {
                       />
                       <button
                         type="button"
-                        disabled={!agentFullAccess || isPickingAgentDirectory}
+                        disabled={!effectiveFullAccess || isPickingAgentDirectory}
                         onClick={async () => {
                           setAgentDirectoryError('');
                           if (!('__TAURI_INTERNALS__' in window)) {

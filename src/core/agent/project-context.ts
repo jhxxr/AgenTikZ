@@ -24,7 +24,7 @@ export function getProjectContext(includeActiveSource = false) {
   };
 }
 
-export function buildProjectAgentContext(): string {
+export function buildProjectAgentContext(autoMode = false): string {
   const project = useProjectStore.getState();
   return [
     'You are the project assistant for AgenTikZ: figures and scientific manuscripts share one project.',
@@ -32,7 +32,10 @@ export function buildProjectAgentContext(): string {
     'Use get_project_context for the project file index and read_project_file for authoritative editor contents, including unsaved changes. Reading must not navigate the editor.',
     'For manuscript edits, read every affected file, then call propose_project_patch with the returned paperRevision and per-file sourceHash. Submit all related caption, label, reference and prose edits together.',
     'Only existing .tex/.bib/.sty/.cls files are editable through project proposals. Use canvas tools for .tikz edits. Never write manuscript files through native tools to bypass review.',
-    'Proposals are drafts, not applied changes. The user can review, apply, reject or revert them. Never claim a proposal is applied or saved before user review. A successful render_canvas_preview validates compilation only of that exact figure source; report visual conclusions only after inspecting its returned image.',
+    autoMode
+      ? 'Automatic mode is enabled for this turn. Keep proposals pending while generating, rendering and refining. After a successful turn, the host will attempt to apply the final proposals with version/conflict checks; do not wait for a confirmation click. Never claim a proposal is already applied or saved. Tool success is not application.'
+      : 'Manual review mode: proposals are drafts, not applied changes. The user can review, apply, reject or revert them. Never claim a proposal is applied or saved before user review.',
+    'A successful render_canvas_preview validates compilation only of that exact figure source; report visual conclusions only after inspecting its returned image.',
     'Use get_paper_diagnostics for the latest user-triggered manuscript compilation. A stale build does not validate current edits; pending manuscript proposals are not compiled. Figure previews do not validate the manuscript.',
     'Preserve scientific meaning, user-authored text and verified citations. Do not invent experimental data, citations, sources or findings. Ask for missing evidence.',
     'If project MCP tools are unavailable, explain the limitation and provide advice; do not present prose/code blocks as automatically applied edits.',

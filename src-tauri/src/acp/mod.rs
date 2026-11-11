@@ -1109,6 +1109,7 @@ pub async fn acp_send_prompt(
     agent_context: Option<String>,
     workbench_mode: Option<String>,
     full_access: Option<bool>,
+    auto_mode: Option<bool>,
     working_directory: Option<String>,
     mcp_target: Option<crate::mcp::bridge::CanvasTarget>,
 ) -> Result<AcpPromptResponse, String> {
@@ -1121,7 +1122,8 @@ pub async fn acp_send_prompt(
         running.insert(request_id.clone(), RunningPrompt { window: window.label().into(), cancel });
     }
     let _prompt_guard = PromptGuard(request_id.clone());
-    let full_access = full_access.unwrap_or(false);
+    let auto_mode = auto_mode.unwrap_or(false);
+    let full_access = full_access.unwrap_or(false) || auto_mode;
     let (base_config, _) = resolve_agent_command(&agent_id, custom_command.as_deref())?;
     let agent_config = apply_runtime_env_overrides(
         base_config,
@@ -1169,10 +1171,12 @@ pub async fn acp_send_prompt(
         agent_context.as_deref(),
         full_access,
         workbench_mode.as_deref() == Some("paper"),
+        auto_mode,
     );
     let structured_prompt = format!(
-        "{structured_prompt}\n\nAgent working directory: {}\n\nMCP policy: Enabled MCP tools are authorized independently of native filesystem permissions. Use get_project_context to discover project files. For manuscript changes, read each target with read_project_file and submit propose_project_patch using paperRevision and the per-file hashes. For canvas changes, read get_canvas_source first and pass its revision and sourceHash to canvas proposal tools. If canvas source was omitted, read it with the tool instead of asking the user to attach it. Proposals require user review; never duplicate a tool proposal as a replacement code block or claim it has been applied. Never bypass manuscript review using native file tools.",
-        cwd.display()
+        "{structured_prompt}\n\nAgent working directory: {}\n\nMCP policy: Enabled MCP tools are authorized independently of native filesystem permissions. Use get_project_context to discover project files. For manuscript changes, read each target with read_project_file and submit propose_project_patch using paperRevision and the per-file hashes. For canvas changes, read get_canvas_source first and pass its revision and sourceHash to canvas proposal tools. If canvas source was omitted, read it with the tool instead of asking the user to attach it. {}",
+        cwd.display(),
+        proposal_prompt_policy(auto_mode),
     );
 
     let permission_app = app_handle.clone();
@@ -1197,9 +1201,13 @@ pub async fn acp_send_prompt(
                         })
                     })
                 });
-                let response = access::permission_response(&request, full_access || mcp_authorized);
+                let response = access::permission_response(
+                    &request, full_access || mcp_authorized, auto_mode,
+                );
                 if response.outcome == RequestPermissionOutcome::Cancelled {
-                    let message = if full_access {
+                    let message = if auto_mode {
+                        "Agent 未提供允许授权选项，权限请求已取消。"
+                    } else if full_access {
                         "Agent 未提供单次授权选项，权限请求已取消。"
                     } else {
                         "请在设置 → Agent 中开启「完整本机访问」，允许跨文件夹读写和执行命令。"
@@ -1338,7 +1346,11 @@ pub async fn acp_send_prompt(
     let mut reply = message_buf.lock().unwrap().clone();
     let thought = thought_buf.lock().unwrap().clone();
     if reply.trim().is_empty() && lease.as_ref().is_some_and(|lease| lease.has_proposal()) {
-        reply = "已通过 MCP 工具提交修改提案，请审查后应用。".into();
+        reply = if auto_mode {
+            "已通过 MCP 工具提交修改提案；本轮成功结束后，应用会检查版本并尝试自动应用最终待处理提案。"
+        } else {
+            "已通过 MCP 工具提交修改提案，请审查后应用。"
+        }.into();
     }
     if reply.trim().is_empty() {
         return Err(
@@ -1382,6 +1394,14 @@ pub(crate) fn protocol_workspace_path(path: PathBuf) -> PathBuf {
 
 fn protocol_error(message: &str) -> agent_client_protocol::Error {
     agent_client_protocol::Error::new(agent_client_protocol::ErrorCode::INTERNAL_ERROR, message)
+}
+
+fn proposal_prompt_policy(auto_mode: bool) -> &'static str {
+    if auto_mode {
+        "Automatic mode is enabled. Proposals remain pending throughout generation, rendering and refinement. The host attempts to apply only the final pending proposals after a successful turn, with canvas revision/sourceHash and manuscript paperRevision/per-file hash version checks; failed or cancelled turns do not trigger automatic application, and stale proposals must not overwrite newer edits. Do not claim proposals have been applied before the host confirms application. Never duplicate a tool proposal as a replacement code block. Never bypass manuscript proposal tools or their version checks using native file tools, even with full local access."
+    } else {
+        "Proposals require user review; never duplicate a tool proposal as a replacement code block or claim it has been applied. Never bypass manuscript review using native file tools."
+    }
 }
 
 #[allow(dead_code)]
@@ -1429,7 +1449,7 @@ fn build_tikz_prompt_with_agent_context(
     full_access: bool,
 ) -> String {
     build_agent_prompt_with_mode(user_prompt, canvas_tikz, selected_ids, history,
-        response_language, personal_prompt, template_references, agent_context, full_access, false)
+        response_language, personal_prompt, template_references, agent_context, full_access, false, false)
 }
 
 fn build_agent_prompt_with_mode(
@@ -1443,8 +1463,9 @@ fn build_agent_prompt_with_mode(
     agent_context: Option<&str>,
     full_access: bool,
     paper_mode: bool,
+    auto_mode: bool,
 ) -> String {
-    let mut parts = vec![access::prompt_instructions(full_access).to_string()];
+    let mut parts = vec![access::prompt_instructions(full_access, auto_mode).to_string()];
     if let Some(lang) = response_language.map(str::trim).filter(|l| !l.is_empty() && *l != "auto") {
         let lang_instruction = match lang {
             "zh-CN" => "Respond in Simplified Chinese (简体中文) for explanations and rationale while keeping LaTeX/TikZ identifiers in standard ASCII.",
@@ -1685,7 +1706,7 @@ mod tests {
         let prompt = build_agent_prompt_with_mode(
             "Update the caption and references", "unused canvas", &[], &history,
             Some("zh-CN"), Some("Preserve terminology"), None,
-            Some("main.tex; sections/results.tex; unsaved edits"), false, true,
+            Some("main.tex; sections/results.tex; unsaved edits"), false, true, false,
         );
         assert!(prompt.contains("manuscript workspace"));
         assert!(prompt.contains("get_paper_diagnostics"));
@@ -1696,6 +1717,38 @@ mod tests {
         assert!(!prompt.contains("COMPLETE replacement source"));
         assert!(!prompt.contains("explicit numeric at (x,y)"));
         assert!(!prompt.contains("unused canvas"));
+    }
+
+    #[test]
+    fn auto_mode_prompt_preserves_pending_proposals_and_host_version_checks() {
+        let policy = proposal_prompt_policy(true);
+        assert!(policy.contains("Proposals remain pending throughout generation, rendering and refinement"));
+        assert!(policy.contains("only the final pending proposals after a successful turn"));
+        assert!(policy.contains("canvas revision/sourceHash"));
+        assert!(policy.contains("manuscript paperRevision/per-file hash"));
+        assert!(policy.contains("failed or cancelled turns do not trigger automatic application"));
+        assert!(policy.contains("stale proposals must not overwrite newer edits"));
+        assert!(policy.contains("Do not claim proposals have been applied before the host confirms"));
+        assert!(policy.contains("Never duplicate a tool proposal"));
+        assert!(policy.contains("Never bypass manuscript proposal tools"));
+        for paper_mode in [false, true] {
+            let prompt = build_agent_prompt_with_mode(
+                "Update the project", "", &[], &[], None, None, None, None,
+                false, paper_mode, true,
+            );
+            assert!(prompt.contains("automatic mode"));
+            assert!(prompt.contains("full local access"));
+            assert!(!prompt.contains("Proposals require user review"));
+            assert!(!prompt.contains("Native filesystem and command permission requests are denied"));
+        }
+    }
+
+    #[test]
+    fn non_auto_proposal_policy_keeps_explicit_user_review() {
+        assert_eq!(
+            proposal_prompt_policy(false),
+            "Proposals require user review; never duplicate a tool proposal as a replacement code block or claim it has been applied. Never bypass manuscript review using native file tools.",
+        );
     }
 
     #[test]

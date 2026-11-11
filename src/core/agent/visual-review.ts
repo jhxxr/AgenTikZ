@@ -13,7 +13,7 @@ For figure creation or visual edits, use a render-and-inspect loop, not blind co
 Budget: at most 3 distinct renders per user request (initial preview plus up to 2 refinements). Repeated identical previews are cached. Stop earlier when adequate; do not endlessly polish.
 Every surgical diff (and propose_layout_repair without proposalId) is based on the ORIGINAL live canvas, not the previous pending proposal. To refine a pending proposal, submit its full revised source with propose_tikz_patch (or pass proposalId to propose_layout_repair) and the original canvas revision/hash.
 If TeX or image viewing is unavailable, report that limitation and use textual diagnostics only; never claim to have seen or visually verified a failed/missing preview.
-Successful compilation is not proof of visual correctness. Summarize remaining issues and leave the final proposal for human review.
+Successful compilation is not proof of visual correctness. Summarize remaining issues and leave the final proposal for the host's review/application policy.
 `;
 
 /** Isolated compile: does not alter editor source, undo state or the on-screen preview. */

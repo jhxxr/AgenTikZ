@@ -1,1273 +1,345 @@
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import React, { useEffect, useRef, useState } from 'react';
+import {
+  AlertCircle, FileText, Layers, Loader2, MousePointer2, PanelRightClose, PanelRightOpen, Sparkles, SquarePen, Zap,
+} from 'lucide-react';
 import { useAgentStore } from '../../store/useAgentStore';
 import { useWorkspaceStore } from '../../store/useWorkspaceStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
-import { getPaperWorkspaceVersion, useProjectStore } from '../../store/useProjectStore';
-import { JOURNAL_THEMES } from '../../core/themes/journal-presets';
-import { PUBLICATION_WORKFLOW_TEMPLATES } from '../../core/agent/figure-contract';
-import { parseTikzDocument } from '../../core/parser/parser';
-import { generateScientificIllustration } from '../../core/agent/illustration-prompt';
-import { AcpAgentId } from '../../types/acp';
-import { currentCanvasTarget, sameCanvas } from '../../core/mcp/context';
-import { ProjectPatchCard } from './ProjectPatchCard';
+import { useProjectStore } from '../../store/useProjectStore';
 import { usePaperBuildStore } from '../../store/usePaperBuildStore';
-import { useMcpStore } from '../../store/useMcpStore';
-import { AgentComposer } from './AgentComposer';
-import { AgentModelSelector } from './AgentModelSelector';
-import { imageDataUrl } from '../../core/agent/image-attachments';
-import {
-  AlertCircle,
-  Bot,
-  Check,
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
-  Code2,
-  Cpu,
-  GitCompare,
-  History,
-  Image as ImageIcon,
-  Layers,
-  Loader2,
-  Palette,
-  PanelRightClose,
-  PanelRightOpen,
-  Plus,
-  Plug,
-  RotateCcw,
-  ScanSearch,
-  Settings,
-  Sparkles,
-  Square,
-  Terminal,
-  Wand2,
-  Wrench,
-} from 'lucide-react';
+import { PUBLICATION_WORKFLOW_TEMPLATES } from '../../core/agent/figure-contract';
+import { AgentComposer, EMPTY_DRAFT, type ComposerDraft } from './AgentComposer';
+import { AgentPicker } from './AgentPicker';
+import { MessageList, type Suggestion } from './MessageList';
+import { SessionMenu } from './SessionMenu';
+import { SkillMenu, type SkillItem } from './SkillMenu';
+import { formatElapsed, isDesktop, shortAgentName, useElapsedSeconds } from './agent-ui';
 
-function formatElapsed(seconds: number): string {
-  const safe = Math.max(0, Math.floor(seconds));
-  const mins = String(Math.floor(safe / 60)).padStart(2, '0');
-  const secs = String(safe % 60).padStart(2, '0');
-  return `${mins}:${secs}`;
-}
+const WIDTH_KEY = 'agentikz.agentPanelWidth';
+const DEFAULT_WIDTH = 380;
+const MIN_WIDTH = 320;
+const MAX_WIDTH = 720;
+const clampWidth = (width: number) => {
+  const room = typeof window === 'undefined' ? MAX_WIDTH : Math.max(MIN_WIDTH, window.innerWidth - 480);
+  return Math.round(Math.min(Math.max(width, MIN_WIDTH), Math.min(MAX_WIDTH, room)));
+};
+const readWidth = () => {
+  try {
+    const stored = Number(window.localStorage.getItem(WIDTH_KEY));
+    return Number.isFinite(stored) && stored > 0 ? clampWidth(stored) : DEFAULT_WIDTH;
+  } catch {
+    return DEFAULT_WIDTH;
+  }
+};
+
+const PAPER_PROMPTS: Suggestion[] = [
+  { title: '润色当前章节', detail: '保留科学含义、数值与引用，生成待审核的修改集',
+    prompt: '请先读取当前论文章节，在保留科学含义、数值和引用的前提下润色，生成待审核的论文修改集。' },
+  { title: '同步图注与正文', detail: '检查图注、label 与正文引用是否一致',
+    prompt: '请读取当前项目的配图和相关论文章节，检查图注、label 与正文引用是否一致，将有依据的修正合并为一个待审核修改集。不要编造结论。' },
+  { title: '分析编译诊断', detail: '定位报错对应的源码并给出修改建议',
+    prompt: '请读取最近的论文编译诊断，先确认是否过期，再定位相关源码；如需修改，请生成待审核修改集，不要声称已修复或已编译。' },
+];
+const NEW_FIGURE_PROMPTS: Suggestion[] = [
+  { title: '绘制模型架构图', detail: '双流 Encoder-Decoder，分组清晰、配色符合投稿规范',
+    prompt: '绘制双流 Encoder-Decoder 架构图，使用 stage_box 分组与顶刊语义配色。' },
+  { title: '绘制视觉主干网络', detail: '包含 3D 特征张量与多头注意力模块',
+    prompt: '画一个带 3D 特征张量 (feature_cube) 与多头注意力 (mha_block) 的视觉主干图。' },
+  { title: '架构图 + 实验曲线组合面板', detail: '左侧机制图，右侧 PGFPlots 消融对比',
+    prompt: '绘制左侧架构图 + 右侧 PGFPlots 消融实验折线对比图的组合面板。' },
+];
+const EDIT_FIGURE_PROMPTS: Suggestion[] = [
+  { title: '修复重叠并统一配色', detail: '用增量补丁调整当前画布，不重画整张图',
+    prompt: '用 SEARCH/REPLACE 增量补丁修复当前画布重叠并应用顶刊语义配色。' },
+  { title: '为选中模块添加残差连接', detail: '右侧正交跳线与 Add & Norm 模块',
+    prompt: '为当前选中模块添加右侧正交残差跳线与 Add & Norm 模块。' },
+  { title: '补充特征张量示意', detail: '在选中模块旁添加 3D 立方体并连线',
+    prompt: '在选中模块旁添加 3D 特征张量立方体 (feature_cube) 并连接箭头。' },
+];
+
+/** Template labels carry decorative emoji for other surfaces; this list is text-only. */
+const plainLabel = (label: string) => label.replace(/^[^\p{L}\p{N}]+/u, '').trim();
+
+const ContextChip: React.FC<{
+  active: boolean; icon: React.ReactNode; label: string; title: string; onToggle?: () => void;
+}> = ({ active, icon, label, title, onToggle }) => {
+  const className = `inline-flex max-w-full items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] transition-colors ${
+    active ? 'border-blue-200 bg-blue-50 text-blue-800' : 'border-slate-200 bg-white text-slate-400 line-through decoration-slate-300'}`;
+  return onToggle
+    ? <button type="button" aria-pressed={active} title={title} onClick={onToggle} className={`${className} cursor-pointer hover:border-blue-300`}>
+        {icon}<span className="truncate">{label}</span>
+      </button>
+    : <span title={title} className={className}>{icon}<span className="truncate">{label}</span></span>;
+};
 
 export const RightAgentPanel: React.FC = () => {
   const {
-    providers,
-    activeAgentId,
-    customCommand,
-    setCustomCommand,
-    attachCanvasContext,
-    attachSelectionContext,
-    autoLayoutRepairEnabled,
-    visualReviewEnabled,
-    setVisualReviewEnabled,
-    isStreaming,
-    streamingStartedAt,
-    activeRequestId,
-    cancelPrompt,
-    sessions,
-    activeSessionId,
-    setActiveAgentId,
-    setAttachCanvasContext,
-    setAttachSelectionContext,
-    setAutoLayoutRepairEnabled,
-    createNewSession,
-    switchSession,
-    probeLocalAgents,
-    sendPromptToAgent,
-    runLocalAgentSkill,
-    applyPatchProposal,
-    revertPatchProposal,
+    providers, activeAgentId, sessions, activeSessionId, isStreaming, streamingStartedAt, streamingSessionId,
+    streamingMessageId, activeRequestId, attachCanvasContext, attachSelectionContext,
   } = useAgentStore(useShallow((s) => ({
-    providers: s.providers,
-    activeAgentId: s.activeAgentId,
-    customCommand: s.customCommand,
-    setCustomCommand: s.setCustomCommand,
-    attachCanvasContext: s.attachCanvasContext,
-    attachSelectionContext: s.attachSelectionContext,
-    autoLayoutRepairEnabled: s.autoLayoutRepairEnabled,
-    visualReviewEnabled: s.visualReviewEnabled,
-    setVisualReviewEnabled: s.setVisualReviewEnabled,
-    isStreaming: s.isStreaming,
-    streamingStartedAt: s.streamingStartedAt,
-    activeRequestId: s.activeRequestId,
-    cancelPrompt: s.cancelPrompt,
-    sessions: s.sessions,
-    activeSessionId: s.activeSessionId,
-    setActiveAgentId: s.setActiveAgentId,
-    setAttachCanvasContext: s.setAttachCanvasContext,
-    setAttachSelectionContext: s.setAttachSelectionContext,
-    setAutoLayoutRepairEnabled: s.setAutoLayoutRepairEnabled,
-    createNewSession: s.createNewSession,
-    switchSession: s.switchSession,
-    probeLocalAgents: s.probeLocalAgents,
-    sendPromptToAgent: s.sendPromptToAgent,
-    runLocalAgentSkill: s.runLocalAgentSkill,
-    applyPatchProposal: s.applyPatchProposal,
-    revertPatchProposal: s.revertPatchProposal,
+    providers: s.providers, activeAgentId: s.activeAgentId, sessions: s.sessions, activeSessionId: s.activeSessionId,
+    isStreaming: s.isStreaming, streamingStartedAt: s.streamingStartedAt, streamingSessionId: s.streamingSessionId,
+    streamingMessageId: s.streamingMessageId, activeRequestId: s.activeRequestId,
+    attachCanvasContext: s.attachCanvasContext, attachSelectionContext: s.attachSelectionContext,
   })));
-
-  const {
-    selectedIds,
-    parsedDoc,
-    activeThemeId,
-    setLeftTab,
-    isAgentPanelCollapsed,
-    toggleAgentPanel,
-  } = useWorkspaceStore(useShallow((s) => ({
-    selectedIds: s.selectedIds,
-    parsedDoc: s.parsedDoc,
-    activeThemeId: s.activeThemeId,
-    setLeftTab: s.setLeftTab,
-    isAgentPanelCollapsed: s.isAgentPanelCollapsed,
-    toggleAgentPanel: s.toggleAgentPanel,
+  const actions = useAgentStore(useShallow((s) => ({
+    send: s.sendPromptToAgent, cancel: s.cancelPrompt, retry: s.retryLastPrompt, runSkill: s.runLocalAgentSkill,
+    createSession: s.createNewSession, switchSession: s.switchSession, renameSession: s.renameSession,
+    deleteSession: s.deleteSession, probe: s.probeLocalAgents,
+    setAttachCanvas: s.setAttachCanvasContext, setAttachSelection: s.setAttachSelectionContext,
   })));
-  const settings = useSettingsStore();
-  const { openSettings } = settings;
-  const { projectDir, registerGeneratedAsset, workbenchMode, activePaperFilePath, paperDirtyFiles } = useProjectStore(useShallow((s) => ({
-    projectDir: s.projectDir, registerGeneratedAsset: s.registerGeneratedAsset,
-    workbenchMode: s.workbenchMode, activePaperFilePath: s.activePaperFilePath, paperDirtyFiles: s.paperDirtyFiles,
+  const { selectedIds, nodeCount, isEmptyCanvas, activeThemeId, collapsed, togglePanel, setCollapsed } = useWorkspaceStore(useShallow((s) => ({
+    selectedIds: s.selectedIds, nodeCount: s.parsedDoc.nodes.length, isEmptyCanvas: s.parsedDoc.elements.length === 0,
+    activeThemeId: s.activeThemeId, collapsed: s.isAgentPanelCollapsed, togglePanel: s.toggleAgentPanel,
+    setCollapsed: s.setAgentPanelCollapsed,
   })));
-  const paperMode = workbenchMode === 'paper';
-  const runtimeStatus = useMcpStore((s) => s.sessionStatus);
+  const { projectDir, paperMode, activePaperFilePath, paperDirty } = useProjectStore(useShallow((s) => ({
+    projectDir: s.projectDir, paperMode: s.workbenchMode === 'paper', activePaperFilePath: s.activePaperFilePath,
+    paperDirty: !!s.paperDirtyFiles[s.activePaperFilePath],
+  })));
+  const { piChannels, piActiveChannelId, piModel, acpModelSelections, openSettings, autoMode, updateSettings } = useSettingsStore(useShallow((s) => ({
+    piChannels: s.piChannels, piActiveChannelId: s.piActiveChannelId, piModel: s.piModel,
+    acpModelSelections: s.acpModelSelections, openSettings: s.openSettings,
+    autoMode: s.agentAutoMode, updateSettings: s.updateSettings,
+  })));
   const buildMessage = usePaperBuildStore((s) => s.projectId === projectDir
     ? (s.status === 'running' ? '正在编译论文…' : s.result?.message) : undefined);
 
-  const [inputText, setInputText] = useState('');
-  const [elapsedSec, setElapsedSec] = useState(0);
-  const [showHistoryDropdown, setShowHistoryDropdown] = useState(false);
-  const [showAgentConfig, setShowAgentConfig] = useState(false);
-  const [showWorkflowMenu, setShowWorkflowMenu] = useState(false);
-  const [previewTabByMsgId, setPreviewTabByMsgId] = useState<
-    Record<string, 'closed' | 'diff' | 'code'>
-  >({});
-  const [generatingImgMsgId, setGeneratingImgMsgId] = useState<string | null>(
-    null
-  );
-  const [imgGenStatusByMsgId, setImgGenStatusByMsgId] = useState<
-    Record<string, string>
-  >({});
-  const chatEndRef = useRef<HTMLDivElement | null>(null);
-  const historyDropdownRef = useRef<HTMLDivElement | null>(null);
-  const workflowMenuRef = useRef<HTMLDivElement | null>(null);
+  const [drafts, setDrafts] = useState<Record<string, ComposerDraft>>({});
+  const [skillsOpen, setSkillsOpen] = useState(false);
+  const [probing, setProbing] = useState(false);
+  const [width, setWidth] = useState(readWidth);
+  const [resizing, setResizing] = useState(false);
+  const textarea = useRef<HTMLTextAreaElement | null>(null);
 
-  useEffect(() => {
-    if (!isStreaming) {
-      setElapsedSec(0);
-      return;
-    }
-    const base = streamingStartedAt ?? Date.now();
-    const tick = () => setElapsedSec(Math.max(0, Math.floor((Date.now() - base) / 1000)));
-    tick();
-    const timer = window.setInterval(tick, 1000);
-    return () => window.clearInterval(timer);
-  }, [isStreaming, streamingStartedAt]);
+  const activeSession = sessions.find((session) => session.id === activeSessionId) ?? sessions[0];
+  const activeProvider = providers.find((provider) => provider.id === activeAgentId) ?? providers[0];
+  const running = isStreaming && streamingSessionId === activeSession?.id;
+  const runningElsewhere = isStreaming && !running;
+  const otherSession = runningElsewhere ? sessions.find((session) => session.id === streamingSessionId) : undefined;
+  const elapsed = useElapsedSeconds(isStreaming ? streamingStartedAt : null);
+  const draft = drafts[activeSessionId] ?? EMPTY_DRAFT;
 
-  // Close dropdowns on outside click
+  const setDraft = useCallback((next: ComposerDraft) => {
+    setDrafts((previous) => ({ ...previous, [activeSessionId]: next }));
+  }, [activeSessionId]);
+  const focusComposer = useCallback(() => {
+    window.requestAnimationFrame(() => {
+      const element = textarea.current;
+      if (!element) return;
+      element.focus();
+      element.setSelectionRange(element.value.length, element.value.length);
+    });
+  }, []);
+  const fillComposer = useCallback((text: string) => {
+    setDrafts((previous) => ({ ...previous, [activeSessionId]: { ...(previous[activeSessionId] ?? EMPTY_DRAFT), text } }));
+    focusComposer();
+  }, [activeSessionId, focusComposer]);
+
+  const probe = useCallback(async () => {
+    setProbing(true);
+    try { await actions.probe(); } finally { setProbing(false); }
+  }, [actions]);
+  useEffect(() => { void probe(); }, [probe]);
+
+  // Ctrl/Cmd+L jumps to the composer from anywhere, opening the panel if needed.
   useEffect(() => {
-    if (!showHistoryDropdown && !showWorkflowMenu) return;
-    const handler = (e: MouseEvent) => {
-      if (
-        showHistoryDropdown &&
-        historyDropdownRef.current &&
-        !historyDropdownRef.current.contains(e.target as Node)
-      ) {
-        setShowHistoryDropdown(false);
-      }
-      if (
-        showWorkflowMenu &&
-        workflowMenuRef.current &&
-        !workflowMenuRef.current.contains(e.target as Node)
-      ) {
-        setShowWorkflowMenu(false);
-      }
+    const onKeyDown = (event: KeyboardEvent) => {
+      const mac = /mac/i.test(navigator.platform);
+      if (event.key.toLowerCase() !== 'l' || event.altKey || event.shiftKey || !(mac ? event.metaKey : event.ctrlKey)) return;
+      event.preventDefault();
+      setCollapsed(false);
+      focusComposer();
     };
-    document.addEventListener('pointerdown', handler);
-    return () => document.removeEventListener('pointerdown', handler);
-  }, [showHistoryDropdown, showWorkflowMenu]);
-
-  const activeSession =
-    sessions.find((s) => s.id === activeSessionId) || sessions[0];
-  const activeProvider =
-    providers.find((p) => p.id === activeAgentId) || providers[0];
-  const activeTheme = JOURNAL_THEMES[activeThemeId] || JOURNAL_THEMES.neurips;
-  const activePiChannel = settings.piChannels.find((item) => item.id === settings.piActiveChannelId)
-    ?? (!settings.piActiveChannelId ? settings.piChannels[0] : undefined);
-  const activePiModelId = settings.piModel || activePiChannel?.defaultModelId || activePiChannel?.models[0]?.id || '';
-  const piConfigIncomplete = activeAgentId === 'pi' && (!activePiChannel || !activePiModelId);
-  const lastMsg = activeSession?.messages[activeSession.messages.length - 1];
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [focusComposer, setCollapsed]);
 
   useEffect(() => {
-    probeLocalAgents();
-  }, [probeLocalAgents]);
+    const onResize = () => setWidth((current) => clampWidth(current));
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
 
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [
-    activeSession?.messages.length,
-    isStreaming,
-    lastMsg?.content.length,
-    lastMsg?.thoughtProcess?.length,
-    lastMsg?.mcpToolCalls?.length,
-    Boolean(lastMsg?.patchProposal),
-  ]);
-
-  const executeAgentImageDirectives = async (
-    msgId: string,
-    tikzSource: string
-  ) => {
-    const directives = parseTikzDocument(tikzSource).imageDirectives || [];
-    if (directives.length === 0 || generatingImgMsgId === msgId) return;
-    const imageTarget = currentCanvasTarget(activeSessionId);
-    const imageProjectVersion = getPaperWorkspaceVersion();
-    const proposalTarget = activeSession?.messages.find((message) => message.id === msgId)?.patchProposal?.targetCanvas;
-    if (proposalTarget && !sameCanvas(proposalTarget)) {
-      setImgGenStatusByMsgId((prev) => ({ ...prev, [msgId]: '请先切回提案所属的画布。' }));
-      return;
-    }
-    let expectedSource = useWorkspaceStore.getState().tikzCode;
-    const checkImageTarget = () => {
-      if (getPaperWorkspaceVersion() !== imageProjectVersion || !sameCanvas(imageTarget) ||
-          useWorkspaceStore.getState().tikzCode !== expectedSource) {
-        throw new Error('画布或源码已变化，已停止将生成结果写入画布。');
-      }
+  const startResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = width;
+    let latest = startWidth;
+    setResizing(true);
+    const onMove = (move: PointerEvent) => {
+      latest = clampWidth(startWidth + startX - move.clientX);
+      setWidth(latest);
     };
-    setGeneratingImgMsgId(msgId);
-    setImgGenStatusByMsgId((prev) => ({
-      ...prev,
-      [msgId]: `正在后台自动调用 ${settings.imageGenProvider} 生成并抠图 (${directives.length} 张)...`,
-    }));
-    try {
-      let okCount = 0;
-      for (const dir of directives) {
-        checkImageTarget();
-        const targetRel = dir.path || `figures/assets/ai/${dir.nodeId}.png`;
-        const res = await generateScientificIllustration({
-          provider: settings.imageGenProvider,
-          apiKey: settings.imageGenApiKey,
-          baseUrl: settings.imageGenBaseUrl,
-          model: settings.imageGenModel,
-          subjectPrompt: dir.prompt,
-          themeId: activeThemeId,
-          aspectRatio: dir.aspectRatio || '1:1',
-          transparentBackground: settings.imageGenAutoRemoveWhiteBg,
-          autoTrimAlpha: settings.imageGenAutoTrimAlpha,
-          projectDir,
-          targetRelativePath: targetRel,
-          proxyUrl: settings.proxyEnabled ? settings.proxyUrl : undefined,
-        });
-        if (res.ok && res.dataUrl) {
-          checkImageTarget();
-          const savedRel = await registerGeneratedAsset(
-            res.savedRelativePath || targetRel,
-            res.dataUrl,
-            projectDir,
-          );
-          checkImageTarget();
-          useWorkspaceStore
-            .getState()
-            .updateImageNodePathById(dir.nodeId, savedRel);
-          expectedSource = useWorkspaceStore.getState().tikzCode;
-          okCount++;
-        }
-      }
-      setImgGenStatusByMsgId((prev) => ({
-        ...prev,
-        [msgId]: `✅ 已自动生成 ${okCount}/${directives.length} 张透明抠图插图并嵌入画布`,
-      }));
-    } catch (err) {
-      setImgGenStatusByMsgId((prev) => ({
-        ...prev,
-        [msgId]: `❌ 生成出错: ${String(err)}`,
-      }));
-    } finally {
-      setGeneratingImgMsgId(null);
-    }
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      setResizing(false);
+      try { window.localStorage.setItem(WIDTH_KEY, String(latest)); } catch { /* Width is a convenience only. */ }
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
   };
 
-  const handleApplyPatchAndAutoCutout = (msgId: string, newTikzCode: string) => {
-    if (!applyPatchProposal(msgId)) return;
-    const directives = parseTikzDocument(newTikzCode).imageDirectives || [];
-    if (directives.length > 0) {
-      void executeAgentImageDirectives(msgId, newTikzCode);
-    }
-  };
+  const activePiChannel = piChannels.find((item) => item.id === piActiveChannelId) ?? (!piActiveChannelId ? piChannels[0] : undefined);
+  const piModelId = piModel || activePiChannel?.defaultModelId || activePiChannel?.models[0]?.id || '';
+  const modelLabel = activeProvider.id === 'pi'
+    ? (activePiChannel?.models.find((model) => model.id === piModelId)?.name || piModelId)
+    : (() => {
+      const id = acpModelSelections[activeProvider.id] || activeProvider.currentModelId || '';
+      return activeProvider.models?.find((model) => model.id === id)?.name || id;
+    })();
 
-  const quickPrompts = parsedDoc.elements.length === 0 ? [
-    '绘制双流 Encoder-Decoder 架构图，使用 stage_box 分组与顶刊语义配色',
-    '画一个带 3D 特征张量 (feature_cube) 与多头注意力 (mha_block) 的视觉主干图',
-    '绘制左侧架构图 + 右侧 PGFPlots 消融实验折线对比图的组合面板',
-  ] : [
-    '用 SEARCH/REPLACE 增量补丁修复当前画布重叠并应用顶刊语义配色',
-    '为当前选中模块添加右侧正交残差跳线与 Add & Norm 模块',
-    '在选中模块旁添加 3D 特征张量立方体 (feature_cube) 并连接箭头',
-  ];
+  const setupIssue = !isDesktop()
+    ? { text: '浏览器预览无法连接本地 Agent，请在桌面应用中使用。', action: undefined }
+    : activeProvider.id === 'pi' && (!activePiChannel || !piModelId)
+      ? { text: '内置 Pi 还没有配置渠道和模型。', action: '去配置' }
+      : !activeProvider.detected && !probing
+        ? { text: `未检测到 ${shortAgentName(activeProvider)}，发送前请先安装并登录，或换用其他 Agent。`, action: '查看设置' }
+        : undefined;
 
-  if (isAgentPanelCollapsed) {
+  const suggestions = paperMode ? PAPER_PROMPTS : isEmptyCanvas ? NEW_FIGURE_PROMPTS : EDIT_FIGURE_PROMPTS;
+  const greeting = paperMode
+    ? { title: '一起打磨这篇论文', detail: '我可以读取当前章节、图注和编译诊断，并把修改整理成可审核的修改集。' }
+    : isEmptyCanvas
+      ? { title: '想画一张什么图？', detail: '描述你的方法或粘贴一张参考图，我会生成可编辑的 TikZ 图。' }
+      : { title: '需要怎么调整这张图？', detail: '我能看到当前画布和你选中的元素，可以精修布局、配色，或添加新模块。' };
+
+  const skills = useMemo<SkillItem[]>(() => paperMode
+    ? PAPER_PROMPTS.map((item) => ({ id: item.title, label: item.title, detail: item.detail, kind: 'template', run: () => fillComposer(item.prompt) }))
+    : [
+      { id: 'full_optimize', label: '综合精修', detail: '消除重叠、对齐层级并应用主题配色，生成一份待审核补丁', kind: 'local', run: () => actions.runSkill('full_optimize') },
+      { id: 'auto_layout', label: '自动排布', detail: '只调整间距与箭头留白，不改配色', kind: 'local', run: () => actions.runSkill('auto_layout') },
+      { id: 'theme_colorize', label: '主题配色', detail: '按当前期刊主题重新分配语义色', kind: 'local', run: () => actions.runSkill('theme_colorize') },
+      { id: 'diagnose_canvas', label: '布局体检', detail: '列出重叠、遮挡与配色问题，不修改画布', kind: 'local', run: () => actions.runSkill('diagnose_canvas') },
+      ...PUBLICATION_WORKFLOW_TEMPLATES.map((template): SkillItem => ({
+        id: template.id, label: plainLabel(template.label), detail: template.description, kind: 'template',
+        run: () => fillComposer(template.buildPrompt(activeThemeId)),
+      })),
+    ], [paperMode, actions, fillComposer, activeThemeId]);
+
+  const lastPrompt = useMemo(
+    () => [...(activeSession?.messages ?? [])].reverse().find((message) => message.role === 'user')?.content,
+    [activeSession?.messages]);
+  const canRetry = !isStreaming && !!lastPrompt;
+
+  if (collapsed) {
     return (
-      <aside className="w-11 h-full bg-slate-50/95 border-l border-slate-200/80 flex flex-col items-center py-3 justify-between shrink-0 select-none">
-        <div className="flex flex-col items-center gap-2">
-          <button
-            onClick={toggleAgentPanel}
-            className="p-1.5 text-slate-600 hover:text-blue-600 hover:bg-white rounded-lg border border-transparent hover:border-slate-200 transition-colors cursor-pointer"
-            title="展开 AI 绘图助手面板"
-          >
-            <PanelRightOpen className="w-4 h-4" />
-          </button>
-          <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 text-white flex items-center justify-center shadow-sm">
-            {isStreaming ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Bot className="w-3.5 h-3.5" />}
-          </div>
-        </div>
-
-        <button
-          onClick={toggleAgentPanel}
-          className="text-[11px] font-semibold text-slate-500 hover:text-blue-600 tracking-widest cursor-pointer py-2"
-          style={{ writingMode: 'vertical-rl' }}
-          title="展开 AI 绘图助手面板"
-        >
-          {isStreaming ? `思考中 ${formatElapsed(elapsedSec)}` : 'AI 项目助手'}
+      <aside aria-label="项目助手（已折叠）" className="flex h-full w-11 shrink-0 select-none flex-col items-center gap-2 border-l border-slate-200 bg-white py-2.5">
+        <button type="button" onClick={togglePanel} title="展开项目助手 (Ctrl+L)" aria-label="展开项目助手"
+          className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-900 cursor-pointer">
+          <PanelRightOpen className="h-4 w-4" />
         </button>
-
-        <div className="flex flex-col items-center gap-1.5">
-          <span
-            className={`w-2 h-2 rounded-full ${isStreaming ? 'animate-pulse' : ''}`}
-            style={{ backgroundColor: activeProvider.badgeColor }}
-            title={`${activeProvider.name}${activeProvider.detected ? ' · 已就绪' : ''}`}
-          />
-          <button
-            onClick={toggleAgentPanel}
-            className="p-1 text-slate-400 hover:text-blue-600 cursor-pointer"
-            title="展开 AI 绘图助手面板"
-          >
-            <ChevronLeft className="w-3.5 h-3.5" />
-          </button>
-        </div>
+        <button type="button" onClick={togglePanel} title={isStreaming ? '正在运行，点击查看' : '展开项目助手'}
+          className="flex flex-1 flex-col items-center gap-2 rounded-lg px-1 py-2 text-slate-500 hover:bg-slate-50 hover:text-slate-900 cursor-pointer">
+          {isStreaming ? <Loader2 className="h-4 w-4 animate-spin text-blue-600" /> : <Sparkles className="h-4 w-4" />}
+          <span className="text-[11px] font-medium tracking-widest" style={{ writingMode: 'vertical-rl' }}>
+            {isStreaming ? `运行中 ${formatElapsed(elapsed)}` : '项目助手'}
+          </span>
+        </button>
       </aside>
     );
   }
 
   return (
-    <aside className="w-[335px] h-full bg-sidebar-gradient border-l border-slate-200/80 flex flex-col shrink-0 select-none">
-      {/* 1. Streamlined Top Agent Header & BYOA / ACP Switcher */}
-      <div className="px-3 py-2 border-b border-slate-200/80 bg-white/70 space-y-1.5">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1.5">
-            <div className="w-5 h-5 rounded-md bg-gradient-to-br from-blue-500 to-indigo-600 text-white flex items-center justify-center shadow-xs">
-              {isStreaming ? <Loader2 className="w-3 h-3 animate-spin" /> : <Bot className="w-3 h-3" />}
-            </div>
-            <span className="text-xs font-semibold text-slate-900">
-              项目 Agent
-            </span>
-            <span
-              className="text-[9.5px] px-1.5 py-0.2 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 font-medium"
-              title={paperMode ? '论文上下文与多文件审阅' : `已自动注入 ${activeTheme.name} 常驻投稿规范`}
-            >
-              {paperMode ? '论文协作' : `🛡️ ${activeTheme.venueBadge}规范`}
-            </span>
-          </div>
+    <aside aria-label="项目助手" style={{ width }}
+      className={`relative flex h-full shrink-0 flex-col border-l border-slate-200 bg-white ${resizing ? 'select-none' : ''}`}>
+      <div role="separator" aria-orientation="vertical" aria-label="调整助手面板宽度" title="拖动调整宽度，双击恢复默认"
+        onPointerDown={startResize}
+        onDoubleClick={() => {
+          setWidth(clampWidth(DEFAULT_WIDTH));
+          try { window.localStorage.removeItem(WIDTH_KEY); } catch { /* Width is a convenience only. */ }
+        }}
+        className={`absolute inset-y-0 -left-1 z-20 w-2 cursor-col-resize transition-colors ${resizing ? 'bg-blue-400/50' : 'hover:bg-blue-300/40'}`} />
 
-          <div className="flex items-center gap-0.5">
-            <button
-              onClick={() => openSettings('agent')}
-              className="p-1 text-slate-500 hover:text-blue-600 hover:bg-white rounded-md transition-colors cursor-pointer"
-              title="打开 Agent 设置 (适配器探测 / 握手测试 / 代理 / 提示词)"
-            >
-              <Settings className="w-3.5 h-3.5" />
-            </button>
-            <button
-              onClick={createNewSession}
-              className="p-1 text-slate-500 hover:text-blue-600 hover:bg-white rounded-md transition-colors cursor-pointer"
-              title="新建对话"
-            >
-              <Plus className="w-3.5 h-3.5" />
-            </button>
-            <div className="relative" ref={historyDropdownRef}>
-              <button
-                onClick={() => setShowHistoryDropdown(!showHistoryDropdown)}
-                className="p-1 text-slate-500 hover:text-blue-600 hover:bg-white rounded-md transition-colors cursor-pointer"
-                title="历史会话记录"
-              >
-                <History className="w-3.5 h-3.5" />
-              </button>
-              {showHistoryDropdown && (
-                <div className="absolute right-0 mt-1 w-56 bg-white border border-slate-200 rounded-lg shadow-lg py-1 z-30">
-                  <div className="px-2.5 py-1 text-[10px] font-semibold text-slate-400 uppercase">
-                    本地会话历史 ({sessions.length})
-                  </div>
-                  {sessions.map((s) => (
-                    <button
-                      key={s.id}
-                      onClick={() => {
-                        switchSession(s.id);
-                        setShowHistoryDropdown(false);
-                      }}
-                      className={`w-full text-left px-2.5 py-1.5 text-xs flex items-center justify-between hover:bg-slate-50 ${
-                        s.id === activeSessionId
-                          ? 'bg-blue-50/60 text-blue-700 font-medium'
-                          : 'text-slate-700'
-                      }`}
-                    >
-                      <span className="truncate">{s.title}</span>
-                      <span className="text-[10px] text-slate-400 shrink-0 ml-2">
-                        {s.messages.length}条
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-            <button
-              onClick={toggleAgentPanel}
-              className="p-1 text-slate-500 hover:text-blue-600 hover:bg-white rounded-md transition-colors cursor-pointer"
-              title="折叠 AI 绘图助手面板"
-            >
-              <PanelRightClose className="w-3.5 h-3.5" />
-            </button>
-          </div>
+      <header className="flex shrink-0 items-center gap-1 border-b border-slate-200/80 px-2 py-1.5 select-none">
+        <SessionMenu sessions={sessions} activeSession={activeSession} currentProjectId={projectDir || 'temporary'}
+          streamingSessionId={isStreaming ? streamingSessionId : null}
+          onSwitch={(id) => { actions.switchSession(id); focusComposer(); }}
+          onRename={actions.renameSession} onDelete={actions.deleteSession}
+          onNew={() => { actions.createSession(); focusComposer(); }} />
+        <button type="button" role="switch" aria-label="自动模式" aria-checked={autoMode} disabled={isStreaming}
+          onClick={() => updateSettings({ agentAutoMode: !autoMode })}
+          title={isStreaming ? '本轮运行结束后可切换模式' : '自动模式：免确认应用最终提案，并放行 ACP 本机文件读写与命令权限；Pi 仍仅使用项目工具'}
+          className={`inline-flex shrink-0 items-center gap-1 rounded-lg border px-2 py-1 text-[11.5px] font-medium transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-60 ${
+            autoMode ? 'border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100' : 'border-slate-200 text-slate-500 hover:bg-slate-100'}`}>
+          <Zap className="h-3 w-3" />{autoMode ? '自动模式' : '手动审核'}
+        </button>
+        <button type="button" onClick={() => { actions.createSession(); focusComposer(); }} title="新对话" aria-label="新对话"
+          className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-900 cursor-pointer">
+          <SquarePen className="h-4 w-4" />
+        </button>
+        <button type="button" onClick={togglePanel} title="折叠项目助手" aria-label="折叠项目助手"
+          className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-900 cursor-pointer">
+          <PanelRightClose className="h-4 w-4" />
+        </button>
+      </header>
+
+      {autoMode && (
+        <div role="status" className="shrink-0 border-b border-amber-100 bg-amber-50/60 px-3 py-1.5 text-[11px] leading-relaxed text-amber-800">
+          {activeAgentId === 'pi'
+            ? '自动模式 · 本轮成功完成后自动应用提案，可撤回；Pi 仍仅使用项目工具。'
+            : '自动模式 · 自动应用最终提案，并允许本机文件读写、命令执行。仅对信任的 Agent 开启。'}
         </div>
+      )}
 
-        {/* Agent CLI Selector + Auto-Heal Engine Toggle Row */}
-        <div className="flex items-center gap-1.5">
-          <div className="relative flex-1">
-            <select
-              value={activeAgentId}
-              onChange={(e) => setActiveAgentId(e.target.value as AcpAgentId)}
-              className="w-full appearance-none pl-6 pr-6 py-1 text-[11px] font-medium bg-white border border-slate-200 rounded-md text-slate-800 focus:outline-none focus:border-blue-500 cursor-pointer"
-            >
-              {providers.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}{p.detected ? ' · 已就绪' : ''}
-                </option>
-              ))}
-            </select>
-            <span
-              className={`w-2 h-2 rounded-full absolute left-2.5 top-1/2 -translate-y-1/2 ${isStreaming ? 'animate-pulse' : ''}`}
-              style={{ backgroundColor: activeProvider.badgeColor }}
-            />
-            <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
+      <MessageList session={activeSession} providers={providers} running={running}
+        streamingMessageId={running ? streamingMessageId : null} startedAt={running ? streamingStartedAt : null}
+        canRetry={canRetry} suggestions={suggestions} greeting={greeting}
+        onRetry={() => void actions.retry()} onOpenSettings={() => openSettings('agent')} onPickSuggestion={fillComposer} />
+
+      <div className="shrink-0 space-y-2 px-2.5 pb-2.5 pt-1.5">
+        {runningElsewhere && (
+          <div role="status" className="flex items-center gap-2 rounded-lg border border-blue-100 bg-blue-50/60 px-2.5 py-1.5 text-[11.5px] text-slate-700">
+            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-blue-600" />
+            <span className="min-w-0 flex-1 truncate">「{otherSession?.title ?? '另一个对话'}」正在运行 · {formatElapsed(elapsed)}</span>
+            {otherSession && (
+              <button type="button" onClick={() => actions.switchSession(otherSession.id)}
+                className="shrink-0 font-medium text-blue-700 hover:underline cursor-pointer">查看</button>
+            )}
+            <button type="button" disabled={!activeRequestId} onClick={() => void actions.cancel()}
+              className="shrink-0 text-slate-600 hover:text-rose-700 hover:underline disabled:opacity-40 cursor-pointer">停止</button>
           </div>
-
-          {!paperMode && activeAgentId !== 'pi' && <button
-            onClick={() => setAutoLayoutRepairEnabled(!autoLayoutRepairEnabled)}
-            className={`px-2 py-1 rounded-md text-[10px] font-medium border flex items-center gap-1 shrink-0 transition-colors cursor-pointer ${
-              autoLayoutRepairEnabled
-                ? 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100/70'
-                : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'
-            }`}
-            title="智能几何防重叠与顶刊配色自愈引擎（自动修复间距遮挡、无框公式与单调白框）"
-          >
-            <Cpu className="w-3 h-3" />
-            <span>{autoLayoutRepairEnabled ? '自愈 ON' : '自愈 OFF'}</span>
-          </button>}
-
-          <button
-            onClick={() => setShowAgentConfig(!showAgentConfig)}
-            className="p-1 rounded-md border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 cursor-pointer"
-            title="查看 ACP 协议命令详情"
-          >
-            <Terminal className="w-3.5 h-3.5" />
-          </button>
-        </div>
-
-        <AgentModelSelector agentId={activeAgentId} includePi />
-        <div className="flex items-center justify-between gap-2">
-          <button
-            type="button"
-            onClick={() => openSettings('agent')}
-            title={activeAgentId === 'pi' ? '内置 Pi 仅使用 AgenTikZ 项目工具；点击配置模型与密钥。' : settings.agentFullAccess
-              ? `工作目录：${settings.agentWorkingDirectory.trim() || projectDir || '应用工作目录'}`
-              : '打开设置可开启跨文件夹访问和命令执行'}
-            className={`text-[10.5px] cursor-pointer ${settings.agentFullAccess ? 'text-amber-700' : 'text-slate-500'}`}
-          >
-            {activeAgentId === 'pi' ? 'Pi · 长驻会话 · 仅项目工具 · 配置模型' : settings.agentFullAccess ? '完整本机访问已开启' : '受限模式 · 配置本机访问'}
-          </button>
-          <button type="button" onClick={() => openSettings('mcp')}
-            className="inline-flex items-center gap-1 text-[10.5px] text-blue-600 hover:text-blue-700 cursor-pointer shrink-0">
-            <Plug className="h-3 w-3" />MCP 服务
-          </button>
-        </div>
-        {(isStreaming || runtimeStatus) && (
-          <div
-            role="status"
-            className={`flex items-center justify-between gap-1.5 rounded-md border px-2 py-1 text-[10.5px] leading-snug ${
-              isStreaming
-                ? 'border-indigo-200 bg-indigo-50/80 text-indigo-900'
-                : 'border-slate-200/80 bg-slate-50/80 text-slate-600'
-            }`}
-          >
-            <span className="flex items-center gap-1.5 min-w-0 break-words">
-              {isStreaming && <span className="h-1.5 w-1.5 rounded-full bg-indigo-600 animate-ping shrink-0" />}
-              <span>{runtimeStatus || '正在等待 Agent 响应…'}</span>
-            </span>
-            {isStreaming && (
-              <span className="font-mono text-[10px] text-indigo-700 shrink-0">
-                {formatElapsed(elapsedSec)}
-              </span>
+        )}
+        {!isStreaming && setupIssue && (
+          <div role="status" className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50/70 px-2.5 py-1.5 text-[11.5px] leading-relaxed text-amber-900">
+            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
+            <span className="min-w-0 flex-1">{setupIssue.text}</span>
+            {setupIssue.action && (
+              <button type="button" onClick={() => openSettings('agent')}
+                className="shrink-0 font-medium text-blue-700 hover:underline cursor-pointer">{setupIssue.action}</button>
             )}
           </div>
         )}
-        {!isStreaming && piConfigIncomplete && (
-          <div className="flex items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50/90 px-2 py-1.5 text-[10.5px] text-amber-900">
-            <span>尚未配置内置 Pi 渠道或默认模型</span>
-            <button type="button" onClick={() => openSettings('agent')} className="shrink-0 font-semibold text-indigo-700 hover:underline cursor-pointer">
-              去配置 →
-            </button>
-          </div>
-        )}
+        {paperMode && buildMessage && <p role="status" className="truncate px-1 text-[11px] text-slate-500" title={buildMessage}>{buildMessage}</p>}
 
-        {/* Collapsible ACP Command Inspector (Agentero style BYOA transparency) */}
-        {showAgentConfig && (
-          <div className="p-2 rounded-lg bg-white border border-slate-200 text-[11px] space-y-1">
-            <div className="flex items-center justify-between text-slate-700 font-medium">
-              <span>stdio 启动命令:</span>
-              <span className="text-[10px] text-emerald-600 font-mono">
-                {activeProvider.protocol}
-              </span>
-            </div>
-            {activeAgentId === 'custom-acp' ? (
-              <input
-                value={customCommand}
-                onChange={(event) => setCustomCommand(event.target.value)}
-                onBlur={() => void probeLocalAgents()}
-                aria-label="Custom ACP command"
-                placeholder={'Executable and args, or {"command":"...","args":[]}'}
-                className="w-full px-2 py-1 rounded bg-slate-50 font-mono text-[10px] text-slate-700 border border-slate-200"
-              />
-            ) : (
-              <div className="px-2 py-1 rounded bg-slate-50 font-mono text-[10px] text-slate-700 border border-slate-100 truncate">
-                $ {activeProvider.command} {activeProvider.args.join(' ')}
-              </div>
+        <AgentComposer key={activeSessionId} draft={draft} onDraftChange={setDraft} textareaRef={textarea}
+          onSend={actions.send} onStop={() => void actions.cancel()} running={running} canStop={!!activeRequestId}
+          blockedReason={runningElsewhere ? '另一个对话正在运行，结束后才能发送' : undefined}
+          placeholder={paperMode ? '描述论文任务，Enter 发送，Shift+Enter 换行' : '描述绘图需求，Enter 发送，Shift+Enter 换行'}
+          lastPrompt={lastPrompt} onSlash={() => setSkillsOpen(true)}
+          context={paperMode ? (
+            <ContextChip active icon={<FileText className="h-3 w-3 shrink-0" />}
+              label={`${activePaperFilePath || '未打开文件'}${paperDirty ? ' · 未保存' : ''}`}
+              title="Agent 会读取当前论文文件（包含未保存的编辑）以及项目信息" />
+          ) : <>
+            <ContextChip active={attachCanvasContext} icon={<Layers className="h-3 w-3 shrink-0" />}
+              label={`画布 · ${nodeCount} 个节点`}
+              title={attachCanvasContext ? '本轮会附带当前画布源码，点击改为不附带' : '本轮不附带画布源码（适合从零开始画新图），点击附带'}
+              onToggle={() => actions.setAttachCanvas(!attachCanvasContext)} />
+            {selectedIds.length > 0 && (
+              <ContextChip active={attachSelectionContext} icon={<MousePointer2 className="h-3 w-3 shrink-0" />}
+                label={`选中 ${selectedIds.length} 个`}
+                title={`${attachSelectionContext ? '本轮会告诉 Agent 你选中了' : '本轮不告知选中项'}：${selectedIds.slice(0, 6).join('、')}${selectedIds.length > 6 ? ' 等' : ''}`}
+                onToggle={() => actions.setAttachSelection(!attachSelectionContext)} />
             )}
-            <p className="text-[10px] text-slate-500 leading-snug">
-              {activeAgentId === 'pi' ? (activeProvider.detected ? 'Pi SDK 已就绪；可在设置中点击「测试模型连通性」验证渠道。' : (activeProvider.diagnostic || '请在设置中检测 Pi 运行时并配置模型。')) : activeProvider.detected
-                ? `已就绪${activeProvider.version ? ` (${activeProvider.version})` : ''} — 发送时建立 ACP 会话`
-                : '未检测到本地 Agent CLI 或 ACP 适配器，请先安装并登录对应 CLI'}
-            </p>
-            <div className="pt-1 flex items-center justify-between border-t border-slate-100">
-              <span className="text-[10px] text-slate-400">
-                {activeProvider.resolvedPath
-                  ? `路径: ${activeProvider.resolvedPath}`
-                  : '支持双层检测与内置适配器'}
-              </span>
-              <button
-                type="button"
-                onClick={() => openSettings('agent')}
-                className="text-[10.5px] font-medium text-blue-600 hover:text-blue-700 cursor-pointer"
-              >
-                打开完整 Agent 设置 →
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* 2. Middle Scrollable Chat Conversation Window */}
-      <div className="flex-1 overflow-y-auto p-3 space-y-3 bg-white select-text">
-        {activeSession?.messages.map((msg, msgIndex) => {
-          const patch = msg.patchProposal;
-          const previewMode =
-            previewTabByMsgId[msg.id] ||
-            (patch?.mode === 'surgical_diff' ? 'diff' : 'closed');
-          const isActiveStreamingMsg =
-            isStreaming &&
-            msg.role === 'assistant' &&
-            msgIndex === activeSession.messages.length - 1;
-          const isSystemError =
-            msg.role === 'system' &&
-            (/^(?:Pi|ACP)\s*错误：/.test(msg.content) || msg.content.startsWith('ACP 权限请求已拒绝：'));
-
-          return (
-            <div
-              key={msg.id}
-              className={`flex flex-col ${
-                msg.role === 'user' ? 'items-end' : 'items-start'
-              }`}
-            >
-              {/* Sender Meta Header */}
-              <div className="flex items-center gap-1.5 mb-1 px-0.5">
-                <span className="text-[10px] font-semibold text-slate-500">
-                  {msg.role === 'user'
-                    ? '你 (Researcher)'
-                    : msg.role === 'system'
-                    ? 'AgenTikZ 状态'
-                    : providers.find((p) => p.id === msg.agentId)?.name ||
-                      'ACP Agent'}
-                </span>
-                <span className="text-[10px] text-slate-400">{msg.timestamp}</span>
-              </div>
-
-              {/* Context Pills attached to user message */}
-              {!!msg.images?.length && <div className="flex flex-wrap gap-2 mb-2 justify-end">
-                {msg.images.map((image) => <img key={image.id} src={imageDataUrl(image)} alt={image.name}
-                  title={image.name} className="max-w-full w-40 max-h-48 object-contain rounded-lg border border-slate-200 bg-white" />)}
-              </div>}
-              {msg.role === 'user' &&
-                ((msg.contextSelectionIds && msg.contextSelectionIds.length > 0) ||
-                  msg.includeFullCanvas || msg.contextPaperPath) && (
-                  <div className="flex flex-wrap gap-1 mb-1 justify-end">
-                    {msg.includeFullCanvas && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-mono">
-                        @canvas
-                      </span>
-                    )}
-                    {msg.contextPaperPath && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 break-all">
-                        @论文({msg.contextPaperPath})
-                      </span>
-                    )}
-                    {msg.contextSelectionIds?.map((id) => (
-                      <span
-                        key={id}
-                        className="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200 font-mono"
-                      >
-                        @选中({id})
-                      </span>
-                    ))}
-                  </div>
-                )}
-
-              {/* Message Bubble */}
-              <div
-                className={`max-w-[95%] rounded-xl px-3 py-2 text-xs leading-relaxed ${
-                  msg.role === 'user'
-                    ? 'bg-blue-600 text-white rounded-br-xs shadow-2xs'
-                    : isSystemError
-                    ? 'bg-rose-50/95 text-rose-900 border border-rose-200 rounded-bl-xs space-y-2'
-                    : isActiveStreamingMsg
-                    ? 'w-full bg-indigo-50/35 text-slate-800 border border-indigo-200/90 rounded-bl-xs space-y-2 shadow-2xs'
-                    : 'bg-slate-50/90 text-slate-800 border border-slate-200/90 rounded-bl-xs space-y-2'
-                }`}
-              >
-                {/* Live Agent Thinking / Streaming Activity Indicator */}
-                {isActiveStreamingMsg && (
-                  <div
-                    data-testid="agent-live-activity"
-                    className="rounded-lg border border-indigo-200/90 bg-white/95 px-2.5 py-2 space-y-1.5 shadow-2xs"
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-1.5 min-w-0">
-                        <Loader2 className="w-3.5 h-3.5 text-indigo-600 animate-spin shrink-0" />
-                        <span className="text-[11px] font-semibold text-indigo-950 truncate">
-                          Agent 正在运行
-                        </span>
-                        <span className="inline-flex items-center gap-0.5 pl-0.5" aria-hidden="true">
-                          <span className="w-1 h-1 rounded-full bg-indigo-500 animate-bounce" style={{ animationDelay: '0ms' }} />
-                          <span className="w-1 h-1 rounded-full bg-indigo-500 animate-bounce" style={{ animationDelay: '150ms' }} />
-                          <span className="w-1 h-1 rounded-full bg-indigo-500 animate-bounce" style={{ animationDelay: '300ms' }} />
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        <span className="rounded bg-indigo-50 px-1.5 py-0.5 font-mono text-[10px] font-medium text-indigo-700 border border-indigo-100">
-                          {formatElapsed(elapsedSec)}
-                        </span>
-                        {activeRequestId && (
-                          <button
-                            type="button"
-                            onClick={() => void cancelPrompt()}
-                            className="inline-flex items-center gap-1 rounded border border-rose-200 bg-rose-50 px-1.5 py-0.5 text-[10px] font-medium text-rose-700 hover:bg-rose-100 cursor-pointer"
-                            title="中止本轮 Agent 请求"
-                          >
-                            <Square className="w-2.5 h-2.5 fill-current" />
-                            <span>停止</span>
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                    <p className="text-[10.5px] text-slate-600 leading-snug break-words">
-                      {runtimeStatus || '正在等待模型思考与首字节响应…'}
-                    </p>
-                  </div>
-                )}
-
-                {/* Agent Thought / Reasoning Stream */}
-                {msg.thoughtProcess && (
-                  <details
-                    open={isActiveStreamingMsg ? true : undefined}
-                    className="group bg-white rounded-lg border border-slate-200/80 px-2.5 py-1.5 text-[11px] text-slate-500"
-                  >
-                    <summary className="cursor-pointer font-medium text-slate-600 flex items-center justify-between gap-1 list-none">
-                      <span className="flex items-center gap-1">
-                        <ChevronRight className="w-3 h-3 group-open:rotate-90 transition-transform" />
-                        <span>Agent 思考与推理过程</span>
-                      </span>
-                      <span className="font-mono text-[10px] text-slate-400">
-                        {msg.thoughtProcess.length} 字
-                      </span>
-                    </summary>
-                    <p className="mt-1.5 pt-1.5 border-t border-slate-100 text-[10.5px] font-mono text-slate-500 leading-normal whitespace-pre-wrap max-h-44 overflow-y-auto">
-                      {msg.thoughtProcess}
-                    </p>
-                  </details>
-                )}
-
-                {/* MCP Tool Calls */}
-                {msg.mcpToolCalls && msg.mcpToolCalls.length > 0 && (
-                  <div className="space-y-1">
-                    {msg.mcpToolCalls.map((tc, idx) => (
-                      <div
-                        key={idx}
-                        className="flex items-center justify-between px-2 py-1 rounded bg-white border border-slate-200/80 text-[10px] font-mono text-slate-600"
-                      >
-                        <span className="flex items-center gap-1 truncate">
-                          <Wrench className="w-3 h-3 text-blue-600 shrink-0" />
-                          <strong className="text-slate-800">
-                            {tc.toolName.replace(/^mcp__agen?tikz__/, '')}
-                          </strong>
-                          <span className="text-slate-400 truncate">
-                            ({tc.source === 'local' ? '本地快捷操作' : tc.source === 'mcp' ? 'MCP' : 'Agent 工具'} · {tc.argsSummary}{tc.durationMs !== undefined ? ` · ${tc.durationMs} ms` : ''})
-                          </span>
-                        </span>
-                        {tc.status === 'completed' ? (
-                          <Check className="w-3 h-3 text-emerald-600 shrink-0 ml-1" />
-                        ) : tc.status === 'failed' ? (
-                          <span className="text-red-600 shrink-0 ml-1">失败</span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 text-indigo-600 shrink-0 ml-1">
-                            <Loader2 className="w-2.5 h-2.5 animate-spin" />
-                            <span>运行中</span>
-                          </span>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {/* Message Text */}
-                {msg.content && (
-                  <div className="whitespace-pre-wrap flex items-start gap-1.5">
-                    {isSystemError && <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0 mt-0.5" />}
-                    <div className="min-w-0 flex-1">{msg.content}</div>
-                  </div>
-                )}
-                {isSystemError && (
-                  <div className="pt-1 flex justify-end">
-                    <button
-                      type="button"
-                      onClick={() => openSettings('agent')}
-                      className="rounded border border-rose-200 bg-white px-2 py-0.5 text-[10.5px] font-medium text-rose-800 hover:bg-rose-100 cursor-pointer"
-                    >
-                      检查 Agent 与渠道设置 →
-                    </button>
-                  </div>
-                )}
-                {msg.projectPatchProposal && <ProjectPatchCard messageId={msg.id} proposal={msg.projectPatchProposal} />}
-
-                {/* TikZ Code Patch Proposal Card with Diff & Semantic Change Preview */}
-                {patch && (
-                  <div className="mt-2 bg-white border border-blue-200 rounded-lg overflow-hidden shadow-2xs">
-                    <div className="px-2.5 py-1.5 bg-blue-50/70 border-b border-blue-100 flex items-center justify-between gap-1">
-                      <span className="text-[11px] font-semibold text-blue-900 flex items-center gap-1 truncate">
-                        <Sparkles className="w-3 h-3 text-blue-600 shrink-0" />
-                        <span className="truncate">{patch.summary}</span>
-                      </span>
-                      <div className="flex items-center gap-1 shrink-0">
-                        {typeof patch.layoutScore === 'number' && (
-                          <span
-                            className={`text-[9.5px] px-1.5 py-0.2 rounded font-mono font-semibold ${
-                              patch.layoutScore >= 90
-                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                                : 'bg-amber-50 text-amber-700 border border-amber-200'
-                            }`}
-                            title="AST 2D 几何防重叠与配色健康度评分"
-                          >
-                            {patch.layoutScore}分
-                          </span>
-                        )}
-                        <span
-                          className={`text-[10px] px-1.5 py-0.2 rounded font-medium ${
-                            patch.status === 'applied'
-                              ? 'bg-emerald-100 text-emerald-800'
-                              : 'bg-amber-100 text-amber-800'
-                          }`}
-                        >
-                          {patch.status === 'applied' ? '已应用' : '待确认'}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="p-2.5 space-y-2">
-                      <p className="text-[11px] text-slate-500">
-                        {patch.rationale}
-                      </p>
-
-                      {/* Semantic AST Change Summary Pills */}
-                      {patch.semanticItems && patch.semanticItems.length > 0 && (
-                        <div className="flex flex-wrap gap-1">
-                          {patch.semanticItems.slice(0, 6).map((item, idx) => (
-                            <span
-                              key={idx}
-                              className={`text-[10px] px-1.5 py-0.5 rounded font-mono border ${
-                                item.type === 'add'
-                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                  : item.type === 'remove'
-                                  ? 'bg-red-50 text-red-700 border-red-200'
-                                  : 'bg-indigo-50 text-indigo-700 border-indigo-200'
-                              }`}
-                            >
-                              {item.type === 'add'
-                                ? '+'
-                                : item.type === 'remove'
-                                ? '-'
-                                : '~'}{' '}
-                              {item.id}: {item.detail}
-                            </span>
-                          ))}
-                          {patch.semanticItems.length > 6 && (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 font-mono">
-                              +{patch.semanticItems.length - 6} 项变更
-                            </span>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Auto-Repairs Summary */}
-                      {patch.autoRepairs && patch.autoRepairs.length > 0 && (
-                        <div className="p-1.5 rounded bg-indigo-50/60 border border-indigo-100 text-[10px] text-indigo-800 space-y-0.5">
-                          <div className="font-semibold flex items-center gap-1">
-                            <Wand2 className="w-3 h-3 text-indigo-600" />
-                            <span>智能自愈已优化 ({patch.autoRepairs.length} 项)：</span>
-                          </div>
-                          {patch.autoRepairs.slice(0, 3).map((rep, i) => (
-                            <div key={i} className="truncate pl-4 text-slate-600">
-                              • {rep}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                      {/* View Toggle: Diff View vs Full TikZ Code Preview */}
-                      <div className="flex items-center gap-2 pt-0.5">
-                        {patch.diffLines && patch.diffLines.length > 0 && (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setPreviewTabByMsgId((prev) => ({
-                                ...prev,
-                                [msg.id]: previewMode === 'diff' ? 'closed' : 'diff',
-                              }))
-                            }
-                            className={`text-[10.5px] flex items-center gap-1 font-medium cursor-pointer ${
-                              previewMode === 'diff'
-                                ? 'text-indigo-700 underline'
-                                : 'text-slate-600 hover:text-indigo-600'
-                            }`}
-                          >
-                            <GitCompare className="w-3 h-3" />
-                            <span>
-                              {previewMode === 'diff' ? '收起 Diff 对比' : '查看 Diff 变更对比'}
-                            </span>
-                          </button>
-                        )}
-
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setPreviewTabByMsgId((prev) => ({
-                              ...prev,
-                              [msg.id]: previewMode === 'code' ? 'closed' : 'code',
-                            }))
-                          }
-                          className="text-[10.5px] text-blue-600 hover:underline flex items-center gap-1 font-medium cursor-pointer"
-                        >
-                          <Code2 className="w-3 h-3" />
-                          <span>
-                            {previewMode === 'code'
-                              ? '收起生成的 TikZ 源码'
-                              : '预览生成的干净 TikZ 源码'}
-                          </span>
-                        </button>
-                      </div>
-
-                      {previewMode === 'diff' &&
-                        patch.diffLines &&
-                        patch.diffLines.length > 0 && (
-                          <div className="rounded bg-slate-900 border border-slate-800 text-[10px] font-mono max-h-48 overflow-auto py-1">
-                            {patch.diffLines.map((dl, idx) => (
-                              <div
-                                key={idx}
-                                className={`px-2 py-0.5 whitespace-pre flex items-start gap-1.5 ${
-                                  dl.type === 'add'
-                                    ? 'bg-emerald-950/80 text-emerald-300'
-                                    : dl.type === 'remove'
-                                    ? 'bg-rose-950/80 text-rose-300'
-                                    : dl.text === '@@ ... @@'
-                                    ? 'bg-slate-800/80 text-slate-400 italic'
-                                    : 'text-slate-300'
-                                }`}
-                              >
-                                <span className="w-4 shrink-0 select-none text-right opacity-60">
-                                  {dl.type === 'add'
-                                    ? '+'
-                                    : dl.type === 'remove'
-                                    ? '-'
-                                    : ' '}
-                                </span>
-                                <span className="truncate">{dl.text}</span>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-
-                      {previewMode === 'code' && (
-                        <pre className="p-2 rounded bg-slate-50 border border-slate-200 text-[10px] font-mono text-slate-700 max-h-44 overflow-auto leading-snug">
-                          {patch.newTikzCode}
-                        </pre>
-                      )}
-
-                      {/* @agent-image Hybrid Vector + AI Cutout Directives */}
-                      {patch.renderPreview && <details className="rounded-lg border border-blue-100 bg-blue-50/50 p-2">
-                        <summary className="text-[10.5px] text-blue-700 cursor-pointer">真实 TeX 预览 · 仍需审核</summary>
-                        <img src={patch.renderPreview.dataUrl} alt="待审核提案的真实 TeX 渲染"
-                          className="mt-2 w-full object-contain rounded bg-white" />
-                        <p className="mt-1 text-[10px] text-slate-500">AI 的视觉检查结论见回复；编译成功不代表排版无误。</p>
-                      </details>}
-                      {!patch.renderPreview && visualReviewEnabled && (
-                        <p className="text-[10px] text-slate-500">
-                          尚无真实 TeX 预览；布局评分仅来自源码检查。
-                        </p>
-                      )}
-                      {(() => {
-                        const directives =
-                          parseTikzDocument(patch.newTikzCode)
-                            .imageDirectives || [];
-                        if (directives.length === 0) return null;
-                        const isBusy = generatingImgMsgId === msg.id;
-                        const statusText = imgGenStatusByMsgId[msg.id];
-                        return (
-                          <div className="p-2 rounded-lg bg-emerald-50/80 border border-emerald-200 space-y-1.5">
-                            <div className="flex items-center justify-between">
-                              <span className="text-[10.5px] font-semibold text-emerald-950 flex items-center gap-1">
-                                <ImageIcon className="w-3 h-3 text-emerald-600" />
-                                检测到 {directives.length} 个 @agent-image 透明插图指令
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() => openSettings('illustration')}
-                                className="text-[9.5px] text-emerald-700 hover:underline cursor-pointer"
-                              >
-                                {settings.imageGenProvider}
-                              </button>
-                            </div>
-                            <div className="space-y-1">
-                              {directives.map((d, di) => (
-                                <div
-                                  key={di}
-                                  className="text-[10px] font-mono text-emerald-900 bg-white/80 px-1.5 py-0.5 rounded border border-emerald-100 truncate"
-                                  title={d.prompt}
-                                >
-                                  • ({d.nodeId}) {d.prompt}
-                                </div>
-                              ))}
-                            </div>
-                            <button
-                              type="button"
-                              disabled={isBusy}
-                              onClick={async () => {
-                                if (patch.status !== 'applied') {
-                                  if (!applyPatchProposal(msg.id)) return;
-                                }
-                                await executeAgentImageDirectives(
-                                  msg.id,
-                                  patch.newTikzCode
-                                );
-                              }}
-                              className="w-full py-1 px-2 rounded bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white text-[10.5px] font-semibold flex items-center justify-center gap-1 transition-colors cursor-pointer"
-                            >
-                              <Sparkles className="w-3 h-3" />
-                              <span>
-                                {isBusy
-                                  ? '正在生成并抠图...'
-                                  : `✨ 重新生成 ${directives.length} 张 AI 透明插图`}
-                              </span>
-                            </button>
-                            {statusText && (
-                              <div className="text-[10px] text-emerald-900">
-                                {statusText}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })()}
-
-                      {/* Action Buttons: Apply (Auto-Cutout if @agent-image exists) / Revert / Open Code Tab */}
-                      <div className="flex items-center gap-1.5 pt-1">
-                        {patch.status !== 'applied' ? (
-                          <button
-                            onClick={() =>
-                              handleApplyPatchAndAutoCutout(
-                                msg.id,
-                                patch.newTikzCode
-                              )
-                            }
-                            className="flex-1 py-1.5 px-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-[11px] font-medium flex items-center justify-center gap-1 transition-colors cursor-pointer"
-                          >
-                            <Check className="w-3.5 h-3.5" />
-                            <span>应用到画布与代码</span>
-                          </button>
-                        ) : (
-                          <button
-                            onClick={() => revertPatchProposal(msg.id)}
-                            className="flex-1 py-1.5 px-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md text-[11px] font-medium flex items-center justify-center gap-1 transition-colors cursor-pointer"
-                          >
-                            <RotateCcw className="w-3.5 h-3.5" />
-                            <span>撤回此修改</span>
-                          </button>
-                        )}
-                        <button
-                          onClick={() => setLeftTab('code')}
-                          className="py-1.5 px-2 border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-md text-[11px] cursor-pointer"
-                          title="在左侧 TikZ 代码标签页查看"
-                        >
-                          查看源码
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          );
-        })}
-
-        {isStreaming && (
-          <div className="flex items-center gap-2 text-xs text-slate-500 bg-white/80 border border-slate-200/70 rounded-2xl px-3 py-2 w-fit animate-shimmer">
-            <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse-dot" />
-            <span>{activeProvider.name} 正在处理项目任务…</span>
-          </div>
-        )}
-
-        <div ref={chatEndRef} />
-      </div>
-
-      {/* 3. Progressive-Disclosure Workflow Bar + Context & Chat Input Area */}
-      <div className="border-t border-slate-200/80 bg-white/75 p-2.5 space-y-2 relative">
-        {/* Single Compact Workflow & Skill Row + Popover */}
-        {paperMode && (
-          <div className="space-y-1.5">
-            <div className="flex flex-wrap gap-1">
-              {[
-                ['润色当前章节', '请先读取当前论文章节，在保留科学含义、数值和引用的前提下润色，生成待审核的论文修改集。'],
-                ['同步图注与正文', '请读取当前项目的配图和相关论文章节，检查图注、label 与正文引用是否一致，将有依据的修正合并为一个待审核修改集。不要编造结论。'],
-                ['分析编译诊断', '请读取最近的论文编译诊断，先确认是否过期，再定位相关源码；如需修改，请生成待审核修改集，不要声称已修复或已编译。'],
-              ].map(([label, prompt]) => (
-                <button type="button" key={label} disabled={isStreaming} onClick={() => setInputText(prompt)}
-                  className="text-[10.5px] px-2 py-1 rounded-full border border-indigo-200 text-indigo-700 bg-indigo-50 disabled:opacity-40">
-                  {label}
-                </button>
-              ))}
-            </div>
-            {buildMessage && <p className="text-[10px] text-slate-600" role="status">{buildMessage}</p>}
-          </div>
-        )}
-        {!paperMode && <div className="flex items-center justify-between gap-1.5">
-          <div className="flex items-center gap-1 overflow-x-auto no-scrollbar">
-            <button
-              type="button"
-              onClick={() => runLocalAgentSkill('full_optimize')}
-              disabled={isStreaming}
-              className="text-[10.5px] px-2 py-1 rounded-full bg-indigo-50/90 border border-indigo-200 text-indigo-800 hover:bg-indigo-600 hover:text-white font-medium shrink-0 transition-colors cursor-pointer disabled:opacity-40"
-              title="一键执行零重叠、层级对齐、顶刊色板、5点契约综合精修"
-            >
-              ✨ 综合精修
-            </button>
-            <button
-              type="button"
-              onClick={() =>
-                setInputText(
-                  PUBLICATION_WORKFLOW_TEMPLATES[0].buildPrompt(activeThemeId)
-                )
-              }
-              disabled={isStreaming}
-              className="text-[10.5px] px-2 py-1 rounded-full bg-white border border-slate-200 text-slate-700 hover:border-indigo-300 hover:text-indigo-700 shrink-0 transition-colors cursor-pointer disabled:opacity-40"
-              title={PUBLICATION_WORKFLOW_TEMPLATES[0].description}
-            >
-              📐 {PUBLICATION_WORKFLOW_TEMPLATES[0].label}
-            </button>
-            <button
-              type="button"
-              onClick={() => runLocalAgentSkill('theme_colorize')}
-              disabled={isStreaming}
-              className="text-[10.5px] px-2 py-1 rounded-full bg-white border border-slate-200 text-slate-700 hover:border-indigo-300 hover:text-indigo-700 shrink-0 transition-colors cursor-pointer disabled:opacity-40"
-              title="按主证据层级重绘顶刊语义色板"
-            >
-              🎯 主证据着色
-            </button>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => setShowWorkflowMenu((v) => !v)}
-            className={`px-2 py-1 rounded-full text-[10.5px] font-medium border flex items-center gap-0.5 shrink-0 cursor-pointer transition-colors ${
-              showWorkflowMenu
-                ? 'bg-slate-800 text-white border-slate-800'
-                : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'
-            }`}
-          >
-            <span>更多技能</span>
-            <ChevronDown className="w-3 h-3" />
-          </button>
-        </div>}
-
-        {/* Popover Menu for Full Skills, Publication Templates & Quick Prompts */}
-        {!paperMode && showWorkflowMenu && (
-          <div
-            ref={workflowMenuRef}
-            className="absolute bottom-full left-2 right-2 mb-1.5 bg-white rounded-xl border border-slate-200 shadow-xl p-2.5 z-30 space-y-2.5 max-h-72 overflow-y-auto"
-          >
-            <div className="flex items-center justify-between border-b border-slate-100 pb-1.5">
-              <span className="text-[10.5px] font-semibold text-slate-700">
-                ✦ 绘图规范与单项体检
-              </span>
-              <button
-                type="button"
-                onClick={() => setShowWorkflowMenu(false)}
-                className="text-[10px] text-slate-400 hover:text-slate-700 cursor-pointer"
-              >
-                收起
-              </button>
-            </div>
-
-            <div className="space-y-1">
-              <div className="text-[10px] font-medium text-slate-400">
-                Nature Skills 5点契约工作流
-              </div>
-              <div className="grid grid-cols-2 gap-1.5">
-                {PUBLICATION_WORKFLOW_TEMPLATES.map((tpl) => (
-                  <button
-                    key={tpl.id}
-                    type="button"
-                    onClick={() => {
-                      setInputText(tpl.buildPrompt(activeThemeId));
-                      setShowWorkflowMenu(false);
-                    }}
-                    className="text-left p-1.5 rounded-lg border border-indigo-100 bg-indigo-50/50 hover:bg-indigo-100/70 transition-colors cursor-pointer"
-                  >
-                    <div className="text-[10.5px] font-semibold text-indigo-900">
-                      ✦ {tpl.label}
-                    </div>
-                    <div className="text-[9.5px] text-slate-500 truncate mt-0.5">
-                      {tpl.description}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="space-y-1">
-              <div className="text-[10px] font-medium text-slate-400">
-                单项规范体检与快捷指令
-              </div>
-              <div className="flex flex-wrap gap-1">
-                <button
-                  type="button"
-                  onClick={() => {
-                    runLocalAgentSkill('auto_layout');
-                    setShowWorkflowMenu(false);
-                  }}
-                  className="px-2 py-0.5 rounded bg-slate-100 hover:bg-blue-50 text-slate-700 hover:text-blue-700 text-[10px] cursor-pointer"
-                >
-                  📐 零重叠自动排布
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    runLocalAgentSkill('theme_colorize');
-                    setShowWorkflowMenu(false);
-                  }}
-                  className="px-2 py-0.5 rounded bg-slate-100 hover:bg-blue-50 text-slate-700 hover:text-blue-700 text-[10px] cursor-pointer"
-                >
-                  🎨 顶刊色板重绘
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    runLocalAgentSkill('diagnose_canvas');
-                    setShowWorkflowMenu(false);
-                  }}
-                  className="px-2 py-0.5 rounded bg-slate-100 hover:bg-blue-50 text-slate-700 hover:text-blue-700 text-[10px] cursor-pointer"
-                >
-                  📋 5点契约与规范体检
-                </button>
-                {quickPrompts.map((qp, i) => (
-                  <button
-                    key={i}
-                    type="button"
-                    onClick={() => {
-                      sendPromptToAgent(qp);
-                      setShowWorkflowMenu(false);
-                    }}
-                    className="px-2 py-0.5 rounded bg-white border border-slate-200 hover:border-blue-300 text-slate-600 hover:text-blue-700 text-[10px] cursor-pointer"
-                  >
-                    {qp}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Compact Context Pills Row (@canvas & @selection & active theme & optional reference template) */}
-        <div className="flex items-center justify-between gap-1.5 flex-wrap">
-          {paperMode ? (
-            <span className="text-[10px] text-indigo-700 break-all" title="自动附加当前论文上下文，工具读取包含未保存内容">
-              @论文({activePaperFilePath || '未打开'}){paperDirtyFiles[activePaperFilePath] ? ' · 含未保存编辑' : ''} · @项目
-            </span>
-          ) : <div className="flex items-center gap-1 flex-wrap">
-            <button
-              onClick={() => setAttachCanvasContext(!attachCanvasContext)}
-              className={`px-1.5 py-0.5 rounded text-[10px] font-mono border flex items-center gap-1 cursor-pointer ${
-                attachCanvasContext
-                  ? 'bg-blue-50 text-blue-700 border-blue-200 font-medium'
-                  : 'bg-white text-slate-400 border-slate-200'
-              }`}
-            >
-              <Layers className="w-2.5 h-2.5" />
-              @canvas({parsedDoc.nodes.length})
-            </button>
-
-            <button
-              onClick={() => setAttachSelectionContext(!attachSelectionContext)}
-              className={`px-1.5 py-0.5 rounded text-[10px] font-mono border cursor-pointer ${
-                attachSelectionContext && selectedIds.length > 0
-                  ? 'bg-amber-50 text-amber-800 border-amber-200 font-medium'
-                  : 'bg-white text-slate-400 border-slate-200'
-              }`}
-            >
-              @选中(
-              {selectedIds.length > 0
-                ? selectedIds.slice(0, 2).join(',')
-                : '无'}
-              )
-            </button>
-
-            <span
-              className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-indigo-50/80 text-indigo-700 border border-indigo-200"
-              title={`当前激活顶刊配色主题：${activeTheme.name}`}
-            >
-              @{activeThemeId}
-            </span>
-            <span className="px-1.5 py-0.5 rounded text-[10px] bg-violet-50 text-violet-700 border border-violet-200"
-              title="内置 tikz-diagram-reproduction：构图分层、算子语义配色、数据形态、四类论文参考；支持按图复刻">
-              绘图 Skill
-            </span>
-            <button type="button" onClick={() => setVisualReviewEnabled(!visualReviewEnabled)}
-              disabled={isStreaming} aria-pressed={visualReviewEnabled}
-              title="让 Agent 渲染待审提案并查看图片后修正；每轮最多 3 次，需要本地 TeX 和支持视觉的模型"
-              className={`px-1.5 py-0.5 rounded text-[10px] border disabled:opacity-40 ${visualReviewEnabled
-                ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'text-slate-400 border-slate-200'}`}>
-              视觉复核{visualReviewEnabled ? ' 开' : ' 关'}
-            </button>
-          </div>}
-
-
-        </div>
-
-        {/* Multi-line Prompt Input Box */}
-        <AgentComposer key={`${projectDir || 'temporary'}:${activeSessionId}`} text={inputText} onTextChange={setInputText}
-          onSend={sendPromptToAgent} onCancel={cancelPrompt} isStreaming={isStreaming}
-          canCancel={!!activeRequestId} paperMode={paperMode} />
+          </>}
+          actions={<>
+            <SkillMenu open={skillsOpen} onOpenChange={setSkillsOpen} items={skills} disabled={isStreaming} />
+            <AgentPicker providers={providers} activeProvider={activeProvider} modelLabel={modelLabel}
+              paperMode={paperMode} probing={probing} onReprobe={() => void probe()} />
+          </>} />
       </div>
     </aside>
   );

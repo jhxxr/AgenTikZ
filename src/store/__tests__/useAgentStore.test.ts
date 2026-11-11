@@ -8,6 +8,11 @@ const bridge = vi.hoisted(() => ({
   listen: vi.fn(),
   unlisten: vi.fn(),
   setTikzCode: vi.fn(),
+  applyPaperFileChanges: vi.fn(),
+  paperContents: { 'main.tex': 'Unsaved manuscript' } as Record<string, string>,
+  paperRevision: 3,
+  projectVersion: 0,
+  canvasId: 'untitled',
   canvasCode: '% original canvas',
   revision: 0,
   projectDir: 'E:\\Research\\current-project',
@@ -21,7 +26,7 @@ const bridge = vi.hoisted(() => ({
 vi.mock('@tauri-apps/api/event', () => ({ listen: bridge.listen }));
 vi.mock('../../core/mcp/runtime', () => ({ ensureMcpRuntime: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../useProjectStore', () => ({
-  getPaperWorkspaceVersion: () => 0,
+  getPaperWorkspaceVersion: () => bridge.projectVersion,
   useProjectStore: {
     subscribe: vi.fn((callback) => {
       bridge.projectListeners.add(callback);
@@ -29,9 +34,11 @@ vi.mock('../useProjectStore', () => ({
     }),
     getState: () => ({
       projectDir: bridge.projectDir, workbenchMode: bridge.workbenchMode,
-      activePaperFilePath: 'main.tex', paperFileContents: { 'main.tex': 'Unsaved manuscript' },
+      activePaperFilePath: 'main.tex', paperFileContents: bridge.paperContents,
+      activeCanvasFileName: bridge.canvasId,
       paperFiles: [{ relativePath: 'main.tex', category: 'main' }], paperDirtyFiles: { 'main.tex': true },
-      paperEditRevision: 3,
+      paperEditRevision: bridge.paperRevision,
+      applyPaperFileChanges: bridge.applyPaperFileChanges,
     }),
   },
 }));
@@ -71,6 +78,15 @@ beforeEach(() => {
   bridge.revision = 0;
   bridge.projectDir = 'E:\\Research\\current-project';
   bridge.workbenchMode = 'figure';
+  bridge.projectVersion = 0;
+  bridge.canvasId = 'untitled';
+  bridge.paperRevision = 3;
+  bridge.paperContents = { 'main.tex': 'Unsaved manuscript' };
+  bridge.applyPaperFileChanges.mockImplementation((_projectId, _revision, files) => {
+    for (const file of files) bridge.paperContents[file.relativePath] = file.after;
+    bridge.paperRevision += 1;
+    return true;
+  });
   bridge.setTikzCode.mockImplementation((code: string) => { bridge.canvasCode = code; bridge.revision += 1; });
   vi.stubGlobal('window', { __TAURI_INTERNALS__: {
     invoke: (command: string, args: Record<string, unknown>) => bridge.invoke(command, args),
@@ -80,12 +96,160 @@ beforeEach(() => {
     return bridge.unlisten;
   });
   bridge.invoke.mockResolvedValue({ usedNativeCli: true, reply: 'Real final response' });
-  useSettingsStore.setState(useSettingsStore.getInitialState(), true);
+  useSettingsStore.setState({ ...useSettingsStore.getInitialState(), agentAutoMode: false }, true);
   useMcpStore.setState(useMcpStore.getInitialState(), true);
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe('automatic mode', () => {
+  const assistant = () => useAgentStore.getState().sessions.find((s) => s.id === 'test-session')!
+    .messages.find((m) => m.role === 'assistant')!;
+  const stageProposals = () => {
+    const state = useAgentStore.getState();
+    useAgentStore.setState({ sessions: state.sessions.map((s) => s.id === 'test-session' ? { ...s,
+      messages: s.messages.map((m) => m.id === state.streamingMessageId ? { ...m,
+        patchProposal: { id: 'canvas', status: 'pending' as const, summary: 'Canvas', rationale: '',
+          affectedElementIds: [], newTikzCode: '% draft', baseTikzCode: bridge.canvasCode, baseRevision: bridge.revision,
+          targetCanvas: { conversationId: s.id, projectId: bridge.projectDir, canvasId: bridge.canvasId } },
+        projectPatchProposal: { id: 'paper', status: 'pending' as const, summary: 'Paper', rationale: '',
+          projectId: bridge.projectDir, baseRevision: bridge.paperRevision,
+          files: [{ relativePath: 'main.tex', before: bridge.paperContents['main.tex'], after: 'Revised manuscript', diffLines: [] }] },
+      } : m) } : s) });
+  };
+
+  it('auto-applies a final text proposal once, preserving undo and manual review after disabling', async () => {
+    const store = await freshStore();
+    useSettingsStore.getState().updateSettings({ agentAutoMode: true });
+    bridge.invoke.mockResolvedValue({ usedNativeCli: true, reply: 'Done', proposedTikz: '% replacement' });
+    await store.getState().sendPromptToAgent('Edit');
+    expect(assistant().patchProposal).toMatchObject({ status: 'applied', autoApplied: true, previousTikzCode: '% original canvas' });
+    expect(bridge.setTikzCode).toHaveBeenCalledOnce();
+    store.getState().revertPatchProposal(assistant().id);
+    expect(assistant().patchProposal).toMatchObject({ status: 'pending', autoApplied: false });
+    expect(bridge.canvasCode).toBe('% original canvas');
+    useSettingsStore.getState().updateSettings({ agentAutoMode: false });
+    await store.getState().sendPromptToAgent('Another edit');
+    expect(store.getState().sessions[0].messages.at(-1)?.patchProposal?.status).toBe('pending');
+    expect(bridge.setTikzCode).toHaveBeenCalledTimes(2);
+  });
+
+  it('forwards effective native access without overwriting the independent full-access preference', async () => {
+    const store = await freshStore();
+    useSettingsStore.getState().updateSettings({ agentAutoMode: true, agentWorkingDirectory: '  E:\\Notes  ' });
+    await store.getState().testAgentHandshake('claude-code');
+    expect(bridge.invoke).toHaveBeenLastCalledWith('acp_test_agent', expect.objectContaining({ fullAccess: true, workingDirectory: 'E:\\Notes' }));
+    await store.getState().sendPromptToAgent('Read');
+    expect(bridge.invoke).toHaveBeenLastCalledWith('acp_send_prompt', expect.objectContaining({
+      fullAccess: true, autoMode: true, workingDirectory: 'E:\\Notes',
+      agentContext: expect.stringContaining('Automatic mode is enabled'),
+    }));
+    expect(useSettingsStore.getState().agentFullAccess).toBe(false);
+    useSettingsStore.getState().updateSettings({ agentAutoMode: false });
+    await store.getState().sendPromptToAgent('Read');
+    expect(bridge.invoke).toHaveBeenLastCalledWith('acp_send_prompt', expect.objectContaining({ fullAccess: false, autoMode: false, workingDirectory: undefined }));
+    useSettingsStore.getState().updateSettings({ agentFullAccess: true });
+    await store.getState().sendPromptToAgent('Read');
+    expect(bridge.invoke).toHaveBeenLastCalledWith('acp_send_prompt', expect.objectContaining({ fullAccess: true, autoMode: false }));
+  });
+
+  it.each(['claude-code', 'pi'] as const)('applies final MCP proposals after %s finishes, even in another conversation', async (agentId) => {
+    const store = await freshStore();
+    store.getState().setActiveAgentId(agentId);
+    useSettingsStore.getState().updateSettings({ agentAutoMode: true, piModel: 'fixture' });
+    bridge.invoke.mockImplementation(async (_command, args) => {
+      stageProposals();
+      // The agent must be able to refine/preview the pending draft without changing live source.
+      expect(assistant().patchProposal?.status).toBe('pending');
+      expect(bridge.setTikzCode).not.toHaveBeenCalled();
+      expect(bridge.applyPaperFileChanges).not.toHaveBeenCalled();
+      store.setState((state) => ({ sessions: state.sessions.map((s) => ({ ...s,
+        messages: s.messages.map((m) => m.patchProposal ? { ...m, patchProposal: { ...m.patchProposal, newTikzCode: '% final draft' } } : m),
+      })) }));
+      store.getState().createNewSession();
+      if (agentId === 'pi') {
+        expect(args.request).not.toHaveProperty('fullAccess');
+        expect(args.request.prompt).toContain('Automatic mode is enabled');
+        return { runtimeStarted: true, reply: 'Done', resumed: false };
+      }
+      return { usedNativeCli: true, reply: 'Done', proposedTikz: '% duplicate fallback' };
+    });
+    await store.getState().sendPromptToAgent('Edit both');
+    expect(store.getState().activeSessionId).not.toBe('test-session');
+    expect(assistant().patchProposal).toMatchObject({ status: 'applied', autoApplied: true, newTikzCode: '% final draft' });
+    expect(assistant().projectPatchProposal).toMatchObject({ status: 'applied', autoApplied: true, appliedRevision: 4 });
+    expect(bridge.setTikzCode).toHaveBeenCalledOnce();
+    expect(bridge.paperContents['main.tex']).toBe('Revised manuscript');
+    store.getState().switchSession('test-session');
+    expect(store.getState().revertProjectProposal(assistant().id)).toBe(true);
+    expect(bridge.paperContents['main.tex']).toBe('Unsaved manuscript');
+    expect(assistant().projectPatchProposal).toMatchObject({ status: 'pending', autoApplied: false });
+  });
+
+  it.each(['error', 'cancel', 'disabled', 'project-changed', 'source-changed', 'rejected'])(
+    'does not auto-apply when the run is %s', async (reason) => {
+      const store = await freshStore();
+      useSettingsStore.getState().updateSettings({ agentAutoMode: true });
+      bridge.invoke.mockImplementation(async (command) => {
+        if (command === 'acp_cancel_prompt') return;
+        stageProposals();
+        if (reason === 'error') throw new Error('Transport failed');
+        if (reason === 'cancel') await store.getState().cancelPrompt();
+        if (reason === 'disabled') useSettingsStore.getState().updateSettings({ agentAutoMode: false });
+        if (reason === 'project-changed') bridge.projectVersion += 1;
+        if (reason === 'source-changed') {
+          bridge.canvasCode = '% User edit'; bridge.revision += 1;
+          bridge.paperContents['main.tex'] = 'User edit'; bridge.paperRevision += 1;
+        }
+        if (reason === 'rejected') store.setState((state) => ({ sessions: state.sessions.map((s) => ({ ...s,
+          messages: s.messages.map((m) => ({ ...m,
+            patchProposal: m.patchProposal && { ...m.patchProposal, status: 'rejected' as const },
+            projectPatchProposal: m.projectPatchProposal && { ...m.projectPatchProposal, status: 'rejected' as const },
+          })),
+        })) }));
+        return { usedNativeCli: true, reply: 'Done' };
+      });
+      await store.getState().sendPromptToAgent('Edit');
+      expect(bridge.setTikzCode).not.toHaveBeenCalled();
+      expect(bridge.applyPaperFileChanges).not.toHaveBeenCalled();
+      expect(assistant().patchProposal?.status).not.toBe('applied');
+      expect(assistant().projectPatchProposal?.status).not.toBe('applied');
+      if (reason === 'source-changed') expect(assistant().content).toContain('提案未应用');
+    },
+  );
+
+  it('does not approve a turn retroactively or apply a proposal to a different canvas', async () => {
+    const store = await freshStore();
+    bridge.invoke.mockImplementation(async () => {
+      stageProposals();
+      useSettingsStore.getState().updateSettings({ agentAutoMode: true });
+      return { usedNativeCli: true, reply: 'Done' };
+    });
+    await store.getState().sendPromptToAgent('Manual turn');
+    expect(bridge.setTikzCode).not.toHaveBeenCalled();
+    expect(bridge.applyPaperFileChanges).not.toHaveBeenCalled();
+    bridge.invoke.mockImplementation(async () => {
+      stageProposals();
+      bridge.canvasId = 'other.tikz';
+      return { usedNativeCli: true, reply: 'Done' };
+    });
+    await store.getState().sendPromptToAgent('Auto turn');
+    expect(bridge.setTikzCode).not.toHaveBeenCalled();
+    expect(store.getState().sessions[0].messages.at(-1)?.content).toContain('原画布');
+  });
+
+  it('auto-applies a local repair but never reapplies it on undo', async () => {
+    const store = await freshStore();
+    bridge.canvasCode = '\\begin{tikzpicture}\\node (a) at (0,0) {A};\\node (b) at (0,0) {B};\\end{tikzpicture}';
+    useSettingsStore.getState().updateSettings({ agentAutoMode: true });
+    store.getState().runLocalAgentSkill('full_optimize');
+    expect(assistant().patchProposal).toMatchObject({ status: 'applied', autoApplied: true });
+    store.getState().revertPatchProposal(assistant().id);
+    expect(assistant().patchProposal?.status).toBe('pending');
+    expect(bridge.setTikzCode).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('real ACP frontend contract', () => {

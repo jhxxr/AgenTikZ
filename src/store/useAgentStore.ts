@@ -34,6 +34,7 @@ import {
 import { JOURNAL_THEMES } from '../core/themes/journal-presets';
 import { JournalThemeId } from '../types/theme';
 import {
+  agentHasFullAccess,
   buildCustomAcpCommandSpec,
   resolveEffectiveUserAgent,
   useSettingsStore,
@@ -85,6 +86,10 @@ interface AgentStoreState {
   streamingStartedAt: number | null;
   activeRequestId: string | null;
   activeRequestBackend: 'pi' | 'acp' | null;
+  /** The conversation that owns the running request; it may differ from the visible one. */
+  streamingSessionId: string | null;
+  /** The assistant placeholder being filled by the running request. */
+  streamingMessageId: string | null;
   sessions: AgentSession[];
   activeSessionId: string;
   setActiveAgentId: (id: AcpAgentId) => void;
@@ -95,13 +100,19 @@ interface AgentStoreState {
   setVisualReviewEnabled: (enabled: boolean) => void;
   createNewSession: () => void;
   switchSession: (sessionId: string) => void;
+  renameSession: (sessionId: string, title: string) => void;
+  deleteSession: (sessionId: string) => void;
   probeLocalAgents: () => Promise<void>;
   testAgentHandshake: (agentId: AcpAgentId) => Promise<AcpHandshakeResult>;
   sendPromptToAgent: (promptText: string, images?: AgentImageAttachment[]) => Promise<void>;
   cancelPrompt: () => Promise<void>;
+  /** Re-sends the latest user turn of the visible conversation. */
+  retryLastPrompt: () => Promise<void>;
   runLocalAgentSkill: (skillId: LocalAgentSkillId) => void;
   applyPatchProposal: (messageId: string) => boolean;
   revertPatchProposal: (messageId: string) => void;
+  rejectPatchProposal: (messageId: string) => void;
+  restorePatchProposal: (messageId: string) => void;
   applyProjectProposal: (messageId: string) => boolean;
   revertProjectProposal: (messageId: string) => boolean;
   rejectProjectProposal: (messageId: string) => void;
@@ -109,14 +120,17 @@ interface AgentStoreState {
 
 const initialSettings = useSettingsStore.getState();
 const initialSessionId = 'session_1';
+export const DEFAULT_SESSION_TITLE = '新对话';
+// Conversations start empty: the panel renders its own welcome state, so no
+// synthetic "system" bubble has to be filtered out of history or counts.
 const initialSession: AgentSession = {
-  id: initialSessionId, title: '新会话', agentId: initialSettings.defaultAgentId, createdAt: '刚刚',
-  messages: [{
-    id: 'msg_welcome', role: 'system', agentId: initialSettings.defaultAgentId,
-    timestamp: new Date().toTimeString().slice(0, 5),
-    content: '欢迎使用 AgenTikZ 项目助手。绘图和论文共用对话：可以精修配图、联动修改图注与正文，或分析编译诊断。\n\n所有画布与论文工具修改都先生成提案，审核后才应用。',
-  }],
+  id: initialSessionId, title: DEFAULT_SESSION_TITLE, agentId: initialSettings.defaultAgentId, createdAt: '刚刚',
+  updatedAt: Date.now(), messages: [],
 };
+const clock = () => new Date().toTimeString().slice(0, 5);
+const currentProjectId = () => useProjectStore.getState().projectDir || 'temporary';
+/** Set by cancelPrompt so the failure it causes is reported as a stop, not an error. */
+let cancelRequested = false;
 
 export const useAgentStore = create<AgentStoreState>((set, get) => ({
   providers: DEFAULT_ACP_PROVIDERS,
@@ -134,6 +148,8 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
   streamingStartedAt: null,
   activeRequestId: null,
   activeRequestBackend: null,
+  streamingSessionId: null,
+  streamingMessageId: null,
   sessions: [initialSession],
   activeSessionId: initialSessionId,
 
@@ -147,20 +163,26 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
   setAutoLayoutRepairEnabled: (autoLayoutRepairEnabled) => set({ autoLayoutRepairEnabled }),
   setVisualReviewEnabled: (visualReviewEnabled) => set({ visualReviewEnabled }),
   createNewSession: () => {
-    const { activeAgentId, sessions } = get();
+    const { activeAgentId, activeSessionId, sessions } = get();
     const prefs = useSettingsStore.getState();
-    const id = `session_${crypto.randomUUID()}`;
-    set({
+    const context = {
       attachCanvasContext: prefs.defaultAttachCanvas,
       attachSelectionContext: prefs.defaultAttachSelection,
+    };
+    const projectId = currentProjectId();
+    // An untouched conversation is already "new": reuse it instead of piling up empty ones.
+    const current = sessions.find((session) => session.id === activeSessionId);
+    if (current && current.messages.length === 0 && (current.projectId ?? projectId) === projectId) {
+      set({ ...context, sessions: sessions.map((session) => session.id === current.id
+        ? { ...session, agentId: activeAgentId, projectId, updatedAt: Date.now() } : session) });
+      return;
+    }
+    const id = `session_${crypto.randomUUID()}`;
+    set({
+      ...context,
       sessions: [{
-        id, title: `会话 #${sessions.length + 1}`, agentId: activeAgentId, createdAt: '刚刚',
-        projectId: useProjectStore.getState().projectDir || 'temporary',
-        messages: [{
-          id: `msg_${id}`, role: 'system', agentId: activeAgentId,
-          timestamp: new Date().toTimeString().slice(0, 5),
-          content: '项目对话已创建。绘图与论文可在同一对话中协作；修改提案需审核后应用。',
-        }],
+        id, title: DEFAULT_SESSION_TITLE, agentId: activeAgentId, createdAt: '刚刚',
+        projectId, updatedAt: Date.now(), messages: [],
       }, ...sessions],
       activeSessionId: id,
     });
@@ -168,6 +190,30 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
   switchSession: (activeSessionId) => {
     const session = get().sessions.find((item) => item.id === activeSessionId);
     if (session) set({ activeSessionId, activeAgentId: session.agentId });
+  },
+  renameSession: (sessionId, title) => {
+    const next = title.trim().slice(0, 60);
+    if (!next) return;
+    set((state) => ({ sessions: state.sessions.map((session) => session.id === sessionId
+      ? { ...session, title: next, customTitle: true } : session) }));
+  },
+  deleteSession: (sessionId) => {
+    const { sessions, activeSessionId, streamingSessionId, activeAgentId } = get();
+    // A running request still writes into its conversation; it has to be stopped first.
+    if (sessionId === streamingSessionId || !sessions.some((session) => session.id === sessionId)) return;
+    const remaining = sessions.filter((session) => session.id !== sessionId);
+    if (remaining.length === 0) {
+      const id = `session_${crypto.randomUUID()}`;
+      set({ activeSessionId: id, sessions: [{
+        id, title: DEFAULT_SESSION_TITLE, agentId: activeAgentId, createdAt: '刚刚',
+        projectId: currentProjectId(), updatedAt: Date.now(), messages: [],
+      }] });
+      return;
+    }
+    if (sessionId !== activeSessionId) { set({ sessions: remaining }); return; }
+    const index = sessions.findIndex((session) => session.id === sessionId);
+    const next = remaining[Math.min(index, remaining.length - 1)];
+    set({ sessions: remaining, activeSessionId: next.id, activeAgentId: next.agentId });
   },
   probeLocalAgents: async () => {
     try {
@@ -244,8 +290,8 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
         customCommand: get().customCommand,
         proxyUrl,
         userAgent,
-        fullAccess: settings.agentFullAccess,
-        workingDirectory: settings.agentFullAccess
+        fullAccess: agentHasFullAccess(settings),
+        workingDirectory: agentHasFullAccess(settings)
           ? settings.agentWorkingDirectory.trim() || useProjectStore.getState().projectDir || undefined : undefined,
       });
       set((state) => ({
@@ -286,6 +332,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
   cancelPrompt: async () => {
     const requestId = get().activeRequestId;
     if (!requestId) return;
+    cancelRequested = true;
     endMcpRequest(requestId);
     const { invoke } = await import('@tauri-apps/api/core');
     try { await invoke(get().activeRequestBackend === 'pi' ? 'pi_cancel_prompt' : 'acp_cancel_prompt', { requestId }); }
@@ -294,6 +341,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
   sendPromptToAgent: async (promptText, images = []) => {
     if ((!promptText.trim() && !images.length) || get().isStreaming) return;
     validateAgentImages(images);
+    cancelRequested = false;
     promptText = promptText.trim() || '请分析所附图片，结合当前项目给出建议；需要修改时先生成待审核提案。';
     const project = useProjectStore.getState();
     const projectId = project.projectDir || 'temporary';
@@ -316,18 +364,26 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
       .flatMap((message) => message.images || []), ...images].slice(-MAX_AGENT_IMAGES);
     const userMessage: AgentChatMessage = {
       id: `user_${crypto.randomUUID()}`, role: 'user', agentId: activeAgentId,
-      timestamp: new Date().toTimeString().slice(0, 5), content: promptText.trim(),
+      timestamp: clock(), createdAt: Date.now(), content: promptText.trim(),
       contextSelectionIds: !paperMode && attachSelectionContext ? [...workspace.selectedIds] : [],
       includeFullCanvas: !paperMode && attachCanvasContext,
       contextPaperPath: paperMode ? project.activePaperFilePath : undefined,
       images: images.length ? images.map((image) => ({ ...image })) : undefined,
     };
+    const startedAt = Date.now();
+    // Capture opt-in for this turn: enabling auto mode never approves older work.
+    const autoMode = useSettingsStore.getState().agentAutoMode;
+    const projectVersion = getPaperWorkspaceVersion();
+    let completedMessageId: string | undefined;
     set((state) => ({
       isStreaming: true,
-      streamingStartedAt: Date.now(),
+      streamingStartedAt: startedAt,
+      streamingSessionId: activeSessionId,
+      streamingMessageId: null,
       sessions: state.sessions.map((session) => session.id === activeSessionId
-        ? { ...session, agentId: activeAgentId, projectId,
-            title: session.messages.length <= 1 ? promptText.trim().slice(0, 22) : session.title,
+        ? { ...session, agentId: activeAgentId, projectId, updatedAt: startedAt,
+            title: session.customTitle || session.messages.some((message) => message.role === 'user')
+              ? session.title : promptText.trim().replace(/\s+/g, ' ').slice(0, 28),
             messages: [...session.messages, userMessage] }
         : session),
     }));
@@ -359,7 +415,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
             ? VISUAL_REVIEW_GUIDANCE
             : '\n\n=== TEXTUAL LAYOUT VERIFICATION (NON-VISION MODEL) ===\nThe selected model does not support image input (`render_canvas_preview` is disabled). Submit one complete `\\begin{tikzpicture}...\\end{tikzpicture}` via `propose_tikz_patch` (or `propose_surgical_diff` for small edits) and inspect the `report` returned directly in that tool response (or pass `proposalId` to `inspect_layout_diagnostics` / `propose_layout_repair`). Do NOT call `propose_layout_repair` without `proposalId`, as that repairs the original live canvas and overwrites your pending proposal. Refine at most once or twice if `report.issues` reports concrete overlaps, then stop and summarize.')
         : '';
-      const agentContext = buildProjectAgentContext() + (paperMode ? '' : '\n\n' + buildAgentSkillAndLibraryContext(
+      const agentContext = buildProjectAgentContext(autoMode) + (paperMode ? '' : '\n\n' + buildAgentSkillAndLibraryContext(
         activeThemeId,
         canvasTikz,
         selectedIds,
@@ -380,7 +436,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
           diagramMode,
         }
       );
-      await sendViaRealAcp(
+      completedMessageId = await sendViaRealAcp(
         activeAgentId,
         compiledPrompt,
         canvasTikz,
@@ -395,18 +451,46 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
         effectiveVisualReview,
         images,
         diagramMode,
+        autoMode,
       );
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
+      const stopped = cancelRequested;
       set((state) => ({ sessions: state.sessions.map((session) => session.id === activeSessionId
         ? { ...session, messages: [...session.messages, {
             id: `error_${crypto.randomUUID()}`, role: 'system' as const, agentId: activeAgentId,
-            timestamp: new Date().toTimeString().slice(0, 5), content: `${activeAgentId === 'pi' ? 'Pi' : 'ACP'} 错误：${detail}`,
+            kind: stopped ? 'cancelled' as const : 'error' as const,
+            timestamp: clock(), createdAt: Date.now(),
+            content: stopped ? '已停止本轮请求。' : `${activeAgentId === 'pi' ? 'Pi' : 'ACP'} 错误：${detail}`,
           }] }
         : session) }));
     } finally {
-      set({ isStreaming: false, streamingStartedAt: null });
+      const messageId = get().streamingMessageId;
+      if (messageId) {
+        updateAgentMessage(activeSessionId, messageId, (message) => ({ ...message, durationMs: Date.now() - startedAt }));
+      }
+      const shouldAutoApply = autoMode && !cancelRequested && getPaperWorkspaceVersion() === projectVersion;
+      cancelRequested = false;
+      set({ isStreaming: false, streamingStartedAt: null, streamingSessionId: null, streamingMessageId: null });
+      if (shouldAutoApply && completedMessageId) autoApplyProposals(activeSessionId, completedMessageId);
     }
+  },
+  retryLastPrompt: async () => {
+    const { sessions, activeSessionId, isStreaming } = get();
+    if (isStreaming) return;
+    const session = sessions.find((item) => item.id === activeSessionId);
+    if (!session) return;
+    const index = session.messages.map((message) => message.role).lastIndexOf('user');
+    if (index < 0) return;
+    const prompt = session.messages[index];
+    // An applied proposal can only be undone from its own card, so that turn has to stay visible.
+    const keepsAppliedWork = session.messages.slice(index).some((message) =>
+      message.patchProposal?.status === 'applied' || message.projectPatchProposal?.status === 'applied');
+    if (!keepsAppliedWork) {
+      set({ sessions: sessions.map((item) => item.id === activeSessionId
+        ? { ...item, messages: item.messages.slice(0, index) } : item) });
+    }
+    await get().sendPromptToAgent(prompt.content, prompt.images ?? []);
   },
   runLocalAgentSkill: (skillId) => {
     const { activeAgentId, activeSessionId, sessions } = get();
@@ -420,8 +504,10 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
       const emptyMsg: AgentChatMessage = {
         id: `skill_${crypto.randomUUID()}`,
         role: 'system',
+        kind: 'notice',
         agentId: activeAgentId,
         timestamp,
+        createdAt: Date.now(),
         content: '当前画布为空。请先添加基础组件，或通过下方输入框让 Agent 根据你的需求绘图。',
       };
       set({
@@ -452,9 +538,10 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
           { toolName: 'get_canvas_ast', argsSummary: '解析画布节点与边集合', status: 'completed', source: 'local' },
           { toolName: 'inspect_layout_diagnostics', argsSummary: `theme=${activeThemeId}`, status: 'completed', source: 'local' },
         ],
-        content: `### 📐 画布 AST 与几何布局诊断报告\n- **布局健康评分**：\`${beforeReport.score} / 100\`\n- **当前顶刊主题**：${theme.name}\n\n${issueLines.join('\n')}${
+        createdAt: Date.now(),
+        content: `### 画布布局诊断报告\n- **布局健康评分**：\`${beforeReport.score} / 100\`\n- **当前顶刊主题**：${theme.name}\n\n${issueLines.join('\n')}${
           beforeReport.issues.length > 0
-            ? '\n\n💡 点击上方 **「✨ 一键综合精修」** 即可自动生成无重叠、带顶刊语义配色的增量 Diff 补丁。'
+            ? '\n\n在输入框的「技能」菜单中选择 **综合精修**，即可生成无重叠、带顶刊语义配色的增量补丁。'
             : ''
         }`,
       };
@@ -470,10 +557,10 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
     const diff = computeTikzDiff(currentTikz, repairResult.tikzCode);
 
     const skillTitles: Record<LocalAgentSkillId, string> = {
-      full_optimize: `✨ 一键综合精修（防重叠排障 + ${theme.name.split(' ')[0]} 配色 + 组件规范化）`,
-      auto_layout: '📐 自动几何排障与箭头留白扩展',
-      theme_colorize: `🎨 应用 ${theme.name} 语义配色方案`,
-      diagnose_canvas: '🔍 画布诊断',
+      full_optimize: `综合精修（防重叠 + ${theme.name.split(' ')[0]} 配色 + 组件规范化）`,
+      auto_layout: '自动排布与箭头留白',
+      theme_colorize: `应用 ${theme.name} 语义配色`,
+      diagnose_canvas: '画布诊断',
     };
 
     const hasChanges = repairResult.tikzCode.trim() !== currentTikz.trim();
@@ -493,6 +580,7 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
         { toolName: 'inspect_layout_diagnostics', argsSummary: `score=${beforeReport.score}->${repairResult.afterReport.score}`, status: 'completed', source: 'local' },
         { toolName: 'auto_repair_layout', argsSummary: `${repairResult.repairs.length} 项优化`, status: 'completed', source: 'local' },
       ],
+      createdAt: Date.now(),
       content: `### ${skillTitles[skillId]}\n${repairBullets}\n\n- **布局健康度提升**：\`${beforeReport.score}/100\` → \`${repairResult.afterReport.score}/100\`\n- **AST 变更统计**：新增 \`${diff.addedCount}\` 项 / 修改 \`${diff.modifiedCount}\` 项 / 移除 \`${diff.removedCount}\` 项（共涉及 ${diff.affectedElementIds.length} 个元素）`,
       patchProposal: hasChanges
         ? {
@@ -520,50 +608,30 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
         s.id === activeSessionId ? { ...s, messages: [...s.messages, assistantMsg] } : s
       ),
     });
+    autoApplyProposals(activeSessionId, assistantMsg.id);
   },
-  applyPatchProposal: (messageId) => {
-    const { sessions, activeSessionId } = get();
-    const message = sessions.find((session) => session.id === activeSessionId)?.messages.find((item) => item.id === messageId);
-    if (!message?.patchProposal || message.patchProposal.status === 'applied') return false;
-    const conflict = proposalConflict(message.patchProposal);
-    if (conflict) {
-      updateAgentMessage(activeSessionId, messageId, (item) => ({ ...item, content: `${item.content}\n\n提案未应用：${conflict}` }));
-      return false;
-    }
-    const workspace = useWorkspaceStore.getState();
-    const currentCode = workspace.tikzCode;
-    const recTheme = message.patchProposal.recommendedThemeId;
-    if (recTheme && recTheme in JOURNAL_THEMES) {
-      workspace.setActiveTheme?.(recTheme as JournalThemeId);
-    }
-    workspace.setTikzCode(message.patchProposal.newTikzCode, true);
-    if (message.patchProposal.fitCanvasOnApply) {
-      workspace.fitCanvasToContent?.();
-    }
-    if (
-      useSettingsStore.getState().autoSelectAffectedNodes &&
-      message.patchProposal.affectedElementIds.length > 0
-    ) {
-      workspace.setSelectedIds(message.patchProposal.affectedElementIds);
-    }
-    updateAgentMessage(activeSessionId, messageId, (item) => ({ ...item,
-      patchProposal: item.patchProposal ? { ...item.patchProposal, status: 'applied', previousTikzCode: currentCode } : undefined,
-    }));
-    return true;
-  },
+  applyPatchProposal: (messageId) => applyCanvasProposal(get().activeSessionId, messageId),
   revertPatchProposal: (messageId) => {
     const { sessions, activeSessionId } = get();
     const message = sessions.find((session) => session.id === activeSessionId)?.messages.find((item) => item.id === messageId);
     if (!message?.patchProposal || message.patchProposal.previousTikzCode === undefined) return;
     const conflict = proposalConflict(message.patchProposal, true);
     if (conflict) {
-      updateAgentMessage(activeSessionId, messageId, (item) => ({ ...item, content: `${item.content}\n\n提案未撤回：${conflict}` }));
+      updateAgentMessage(activeSessionId, messageId, (item) => appendNoteOnce(item, `提案未撤回：${conflict}`));
       return;
     }
     useWorkspaceStore.getState().setTikzCode(message.patchProposal.previousTikzCode, true);
     updateAgentMessage(activeSessionId, messageId, (item) => ({ ...item,
-      patchProposal: item.patchProposal ? { ...item.patchProposal, status: 'pending', baseRevision: useWorkspaceStore.getState().sourceRevision ?? 0 } : undefined,
+      patchProposal: item.patchProposal ? { ...item.patchProposal, status: 'pending', autoApplied: false, baseRevision: useWorkspaceStore.getState().sourceRevision ?? 0 } : undefined,
     }));
+  },
+  rejectPatchProposal: (messageId) => {
+    updateAgentMessage(get().activeSessionId, messageId, (message) => message.patchProposal?.status === 'pending'
+      ? { ...message, patchProposal: { ...message.patchProposal, status: 'rejected' } } : message);
+  },
+  restorePatchProposal: (messageId) => {
+    updateAgentMessage(get().activeSessionId, messageId, (message) => message.patchProposal?.status === 'rejected'
+      ? { ...message, patchProposal: { ...message.patchProposal, status: 'pending' } } : message);
   },
   applyProjectProposal: (messageId) => changeProjectProposal(get().activeSessionId, messageId, false),
   revertProjectProposal: (messageId) => changeProjectProposal(get().activeSessionId, messageId, true),
@@ -598,7 +666,40 @@ export function projectProposalConflict(proposal: ProjectPatchProposal, revertin
   }
 }
 
-function changeProjectProposal(sessionId: string, messageId: string, reverting: boolean): boolean {
+/** Shared by manual review and auto mode; never depends on the visible conversation. */
+function applyCanvasProposal(sessionId: string, messageId: string, autoApplied = false): boolean {
+  const message = useAgentStore.getState().sessions.find((session) => session.id === sessionId)
+    ?.messages.find((item) => item.id === messageId);
+  const proposal = message?.patchProposal;
+  if (!proposal || proposal.status !== 'pending') return false;
+  const conflict = proposalConflict(proposal);
+  if (conflict) {
+    updateAgentMessage(sessionId, messageId, (item) => appendNoteOnce(item, `提案未应用：${conflict}`));
+    return false;
+  }
+  const workspace = useWorkspaceStore.getState();
+  const currentCode = workspace.tikzCode;
+  const recTheme = proposal.recommendedThemeId;
+  if (recTheme && recTheme in JOURNAL_THEMES) workspace.setActiveTheme?.(recTheme as JournalThemeId);
+  workspace.setTikzCode(proposal.newTikzCode, true);
+  if (proposal.fitCanvasOnApply) workspace.fitCanvasToContent?.();
+  if (useSettingsStore.getState().autoSelectAffectedNodes && proposal.affectedElementIds.length > 0) {
+    workspace.setSelectedIds(proposal.affectedElementIds);
+  }
+  updateAgentMessage(sessionId, messageId, (item) => ({ ...item,
+    patchProposal: { ...proposal, status: 'applied', previousTikzCode: currentCode, autoApplied },
+  }));
+  return true;
+}
+
+/** One attempt on the final proposal, not a subscription that would reapply reverted work. */
+function autoApplyProposals(sessionId: string, messageId: string): void {
+  if (!useSettingsStore.getState().agentAutoMode || useAgentStore.getState().isStreaming) return;
+  applyCanvasProposal(sessionId, messageId, true);
+  changeProjectProposal(sessionId, messageId, false, true);
+}
+
+function changeProjectProposal(sessionId: string, messageId: string, reverting: boolean, autoApplied = false): boolean {
   if (useAgentStore.getState().isStreaming) return false;
   const message = useAgentStore.getState().sessions.find((session) => session.id === sessionId)
     ?.messages.find((item) => item.id === messageId);
@@ -610,9 +711,8 @@ function changeProjectProposal(sessionId: string, messageId: string, reverting: 
     reverting ? proposal.appliedRevision! : proposal.baseRevision,
     proposal.files.map((file) => reverting
       ? { relativePath: file.relativePath, before: file.after, after: file.before } : file))) {
-    updateAgentMessage(sessionId, messageId, (item) => ({
-      ...item, content: `${item.content}\n\n提案未${reverting ? '撤回' : '应用'}：${conflict || '目标文件已变化。'}`,
-    }));
+    updateAgentMessage(sessionId, messageId, (item) =>
+      appendNoteOnce(item, `提案未${reverting ? '撤回' : '应用'}：${conflict || '目标文件已变化。'}`));
     return false;
   }
   const revision = useProjectStore.getState().paperEditRevision;
@@ -620,8 +720,14 @@ function changeProjectProposal(sessionId: string, messageId: string, reverting: 
     ...proposal, status: reverting ? 'pending' : 'applied',
     baseRevision: reverting ? revision : proposal.baseRevision,
     appliedRevision: reverting ? undefined : revision,
+    autoApplied: !reverting && autoApplied,
   } }));
   return true;
+}
+
+/** Repeated clicks on a conflicting proposal must not stack the same explanation. */
+function appendNoteOnce(message: AgentChatMessage, note: string): AgentChatMessage {
+  return message.content.includes(note) ? message : { ...message, content: `${message.content}\n\n${note}`.trim() };
 }
 
 /** Updates only the originating conversation/message, even after switching tabs. */
@@ -712,7 +818,8 @@ async function sendViaRealAcp(
   visualReviewEnabled = true,
   newImages: AgentImageAttachment[] = images,
   diagramMode: DiagramDesignMode = 'design',
-): Promise<void> {
+  autoMode = false,
+): Promise<string> {
   const target = currentCanvasTarget(activeSessionId);
   const projectVersion = getPaperWorkspaceVersion();
   const baseTikzCode = useWorkspaceStore.getState().tikzCode;
@@ -800,8 +907,8 @@ async function sendViaRealAcp(
         useAgentStore.setState((state) => ({ sessions: state.sessions.map((session) =>
           session.id === activeSessionId && !session.messages.some((message) => message.id === noticeId)
             ? { ...session, messages: [...session.messages, {
-                id: noticeId, role: 'system' as const, agentId,
-                timestamp: new Date().toTimeString().slice(0, 5),
+                id: noticeId, role: 'system' as const, kind: 'warning' as const, agentId,
+                timestamp: clock(), createdAt: Date.now(),
                 content: `ACP 权限请求已拒绝：${event.text}`,
               }] }
             : session) }));
@@ -828,12 +935,13 @@ async function sendViaRealAcp(
         return message;
       });
     });
-    useAgentStore.setState((state) => ({ sessions: state.sessions.map((session) => session.id === activeSessionId
-      ? { ...session, messages: [...session.messages, {
-          id: messageId, role: 'assistant' as const, agentId,
-          timestamp: new Date().toTimeString().slice(0, 5), content: '',
-        }] }
-      : session) }));
+    useAgentStore.setState((state) => ({ streamingMessageId: messageId,
+      sessions: state.sessions.map((session) => session.id === activeSessionId
+        ? { ...session, messages: [...session.messages, {
+            id: messageId, role: 'assistant' as const, agentId,
+            timestamp: clock(), createdAt: Date.now(), content: '',
+          }] }
+        : session) }));
     const settings = useSettingsStore.getState();
     const proxyUrl = settings.proxyEnabled ? settings.proxyUrl : undefined;
     const userAgent = resolveEffectiveUserAgent(settings.userAgentPreset, settings.customUserAgent);
@@ -908,9 +1016,10 @@ async function sendViaRealAcp(
       responseLanguage: settings.responseLanguage,
       personalPrompt: settings.personalPrompt || undefined,
       workbenchMode: paperMode ? 'paper' : 'figure',
-      fullAccess: settings.agentFullAccess,
+      fullAccess: agentHasFullAccess({ ...settings, agentAutoMode: autoMode }),
+      autoMode,
       mcpTarget: target,
-      workingDirectory: settings.agentFullAccess
+      workingDirectory: agentHasFullAccess({ ...settings, agentAutoMode: autoMode })
         ? settings.agentWorkingDirectory.trim() || useProjectStore.getState().projectDir || undefined
         : undefined,
     });
@@ -939,7 +1048,7 @@ async function sendViaRealAcp(
     updateAgentMessage(activeSessionId, messageId, (message) => ({
       ...message,
       // The IPC response is authoritative, not an extra stream chunk.
-      content: response.reply?.trim() ? response.reply : '修改提案已生成，请审核后应用。',
+      content: response.reply?.trim() ? response.reply : '修改提案已生成。',
       thoughtProcess: response.thought ?? message.thoughtProcess,
       patchProposal: message.patchProposal ?? (patchProposal
         ? { ...patchProposal, targetCanvas: target, baseTikzCode, baseRevision }
@@ -948,6 +1057,7 @@ async function sendViaRealAcp(
     useMcpStore.setState({
       sessionStatus: agentId === 'pi' ? 'Pi 本轮响应已完成（长驻会话保持就绪）。' : 'ACP Agent 本轮响应已完成。',
     });
+    return messageId;
   } catch (error) {
     useMcpStore.setState({ sessionStatus: `Agent 会话未完成：${error instanceof Error ? error.message : String(error)}` });
     // Keep real partial output; remove only a completely empty placeholder.

@@ -72,12 +72,33 @@ describe('agent access preferences', () => {
     expect(reloaded.getState()).toMatchObject({ defaultAgentId: 'claude-code', piModel: '', piThinkingLevel: 'auto', acpThoughtSelections: {} });
   });
 
+  it('defaults to automatic mode, persists an explicit opt-out, and restores it on reset', async () => {
+    const { useSettingsStore, agentHasFullAccess } = await import('../useSettingsStore');
+    expect(useSettingsStore.getState().agentAutoMode).toBe(true);
+    expect(agentHasFullAccess(useSettingsStore.getState())).toBe(true);
+    expect(useSettingsStore.getState().agentFullAccess).toBe(false);
+    useSettingsStore.getState().updateSettings({ agentAutoMode: false, responseLanguage: 'en' });
+    vi.resetModules();
+    const { useSettingsStore: reloaded, agentHasFullAccess: reloadedAccess } = await import('../useSettingsStore');
+    expect(reloaded.getState()).toMatchObject({ agentAutoMode: false, agentFullAccess: false });
+    expect(reloadedAccess(reloaded.getState())).toBe(false);
+    reloaded.getState().resetSettings();
+    expect(JSON.parse(storage.get(STORAGE_KEY)!)).toMatchObject({ agentAutoMode: true, agentFullAccess: false });
+  });
+
+  it.each(['true', 'false', 1, null])('keeps the automatic default for a non-boolean stored value %s', async (value) => {
+    storage.set(STORAGE_KEY, JSON.stringify({ agentAutoMode: value }));
+    const { useSettingsStore } = await import('../useSettingsStore');
+    expect(useSettingsStore.getState().agentAutoMode).toBe(true);
+  });
+
   it('migrates existing settings with access disabled', async () => {
     storage.set(STORAGE_KEY, JSON.stringify({ responseLanguage: 'en' }));
     const { useSettingsStore } = await import('../useSettingsStore');
     expect(useSettingsStore.getState()).toMatchObject({
       responseLanguage: 'en',
       agentFullAccess: false,
+      agentAutoMode: true,
       agentWorkingDirectory: '',
     });
   });

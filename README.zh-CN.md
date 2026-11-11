@@ -112,7 +112,7 @@ flowchart TB
 
 - **无损 CST/AST 解析引擎**：位于 `src/core/parser/`，通过深度感知括号 `[]` 与花括号 `{}` 匹配解析 `\tikzset` 样式、`\node` 节点、正交/弧线/残差 `\draw` 连线以及 `\begin{axis}...\end{axis}` 实验图表，确保含分号的数学公式（如 `$p(x;\theta)$`）或含括号文本绝不误截断语句。
 - **官方 ACP v1 通信实现**：位于 `src-tauri/src/acp/mod.rs`，桌面端通过 `stdio` 启动本地已安装的 ACP 适配器，对初始化握手（`20s`）、会话创建（`20s`）、提示词生成（`180s`）及子进程退出均设有严格超时边界。
-- **当前版本边界**：当前版本 **v0.7.4** 新增内置 Pi 与 ACP 双端「思考强度」自由选择（默认不传参数兼容严格网关，并支持 `off` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` 全档位）、实时思考进度动画与耗时计时器、桌面端系统代理与 Node.js `>=20.12` 兼容容错、无头 Pi 运行时精简打包以及一键「测试模型连通性」；保留 Pi 多渠道自定义 API URL、系统凭据隔离、ACP 模型选择、可视化画布、论文工作区、多文件审阅、视觉复核与内置绘图 skill。Pi 仅使用 AgenTikZ 内置工具；外部 MCP 与完整本机访问开关适用于 ACP。详见 [v0.7.4 发布说明](docs/releases/v0.7.4.md)、[MCP 服务指南](docs/mcp-guide.zh-CN.md) 和 [Pi 接入说明](docs/pi-runtime.zh-CN.md)。
+- **当前版本边界**：当前版本 **v0.7.5** 默认开启项目助手「自动模式」：本轮成功结束后自动应用最终画布或论文提案，保留版本冲突检查与撤回，并为 ACP 放行本机文件读写和命令权限。侧边栏同时收拢对话历史、模型选择、技能与可审核差异。Pi 仍仅使用 AgenTikZ 内置工具。详见 [v0.7.5 发布说明](docs/releases/v0.7.5.md)、[MCP 服务指南](docs/mcp-guide.zh-CN.md) 和 [Pi 接入说明](docs/pi-runtime.zh-CN.md)。
 
 ## 论文模板与学术主题
 
