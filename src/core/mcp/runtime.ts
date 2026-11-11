@@ -16,6 +16,7 @@ import { useSettingsStore } from '../../store/useSettingsStore';
 import { renderAgentPreview } from '../agent/visual-review';
 import { imageDataUrl } from '../agent/image-attachments';
 import { preserveReproductionIntent } from '../agent/diagram-design-policy';
+import { maskLatexComments } from '../tex/source';
 
 class ToolError extends Error {
   constructor(public code: string, message: string) { super(message); }
@@ -23,6 +24,78 @@ class ToolError extends Error {
 const fail = (code: string, message: string): never => { throw new ToolError(code, message); };
 const stringArg = (args: Record<string, unknown>, key: string): string =>
   typeof args[key] === 'string' ? args[key] as string : fail('invalid_arguments', `${key} 必须是字符串。`);
+
+const PREAMBLE_ONLY_CMD_RE =
+  /\\(?:documentclass|usepackage)(?:\s*\[[^\]]*\])?\s*\{[^}]*\}|\\(?:usetikzlibrary|usepgfplotslibrary)\s*\{[^}]*\}|\\pgfplotsset\s*\{\s*compat\s*=\s*[^{}]+\}|\\(?:this)?pagestyle\s*\{[^}]*\}|\\begin\s*\{document\}/g;
+
+function normalizeProposedTikzSource(raw: string): string {
+  let current = raw
+    .replace(/\x08/g, '\\b')
+    .replace(/\x0c/g, '\\f')
+    .replace(/\t(?=(?:ikz(?:picture|set|style)\b|ext(?:bf|it|tt|rm|sf|sc|normal|width|height)?\b|iny\b|itle\b|heta\b|imes\b))/g, '\\t');
+  const outerFence = /^\s*```(?:[a-zA-Z0-9_-]+)?[ \t]*\r?\n([\s\S]*?)\r?\n?```[ \t]*$/.exec(current);
+  if (outerFence) {
+    current = outerFence[1].trim();
+  } else if (current.includes('```') && !/\\begin\s*\{tikzpicture\}/.test(maskLatexComments(current.replace(/```[\s\S]*?```/g, '')))) {
+    const candidates: string[] = [];
+    const fenceRe = /```(?:[a-zA-Z0-9_-]+)?[ \t]*\r?\n([\s\S]*?)```/g;
+    let match: RegExpExecArray | null;
+    while ((match = fenceRe.exec(current)) !== null) {
+      if (/\\begin\s*\{tikzpicture\}/.test(maskLatexComments(match[1]))) {
+        candidates.push(match[1].trim());
+      }
+    }
+    if (candidates.length > 0) current = candidates[candidates.length - 1];
+  }
+
+  const maskedInitial = maskLatexComments(current);
+  const hasEndDoc = /\\end\s*\{document\}/.exec(maskedInitial);
+  PREAMBLE_ONLY_CMD_RE.lastIndex = 0;
+  if (!hasEndDoc && !PREAMBLE_ONLY_CMD_RE.test(maskedInitial)) {
+    return current;
+  }
+
+  if (hasEndDoc) {
+    current = current.slice(0, hasEndDoc.index);
+  }
+  const masked = maskLatexComments(current);
+  PREAMBLE_ONLY_CMD_RE.lastIndex = 0;
+  let out = '';
+  let cursor = 0;
+  let cmdMatch: RegExpExecArray | null;
+  while ((cmdMatch = PREAMBLE_ONLY_CMD_RE.exec(masked)) !== null) {
+    out += current.slice(cursor, cmdMatch.index);
+    cursor = cmdMatch.index + cmdMatch[0].length;
+    if (current[cursor] === '\r') cursor += 1;
+    if (current[cursor] === '\n') cursor += 1;
+  }
+  out += current.slice(cursor);
+  return out.replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function validateProposedTikzSource(nextSource: string) {
+  if (nextSource.length > 2 * 1024 * 1024) {
+    fail('invalid_source', '提案源码超出 2 MB 大小上限。');
+  }
+  const masked = maskLatexComments(nextSource);
+  const beginCount = (masked.match(/\\begin\s*\{tikzpicture\}/g) ?? []).length;
+  const endCount = (masked.match(/\\end\s*\{tikzpicture\}/g) ?? []).length;
+  if (beginCount === 0 || endCount === 0) {
+    fail(
+      'invalid_source',
+      `提案缺少完整的 \\begin{tikzpicture}...\\end{tikzpicture} 环境（检测到 ${beginCount} 个 \\begin{tikzpicture}、${endCount} 个 \\end{tikzpicture}；请提交完整画布源码而非局部节点片段，并确保 JSON 字符串内反斜杠正确转义为 \\\\begin / \\\\end）。`
+    );
+  }
+  if (beginCount !== 1 || endCount !== 1) {
+    fail(
+      'invalid_source',
+      `提案包含 ${beginCount} 个 \\begin{tikzpicture} 与 ${endCount} 个 \\end{tikzpicture}（仅允许单个顶层 tikzpicture；请勿在 \\node 内嵌套子 tikzpicture，改用 scope、path 或普通样式绘制局部图形）。`
+    );
+  }
+  if (/\\documentclass\b/.test(masked) || /\\begin\s*\{document\}/.test(masked)) {
+    fail('invalid_source', '提案必须是完整的单个 tikzpicture，且不包含独立文档导言区。');
+  }
+}
 
 const allowedKeys: Record<string, string[]> = {
   get_canvas_source: [], get_canvas_ast: [], get_selected_elements: [],
@@ -32,7 +105,7 @@ const allowedKeys: Record<string, string[]> = {
   render_canvas_preview: ['proposalId'],
   propose_tikz_patch: ['baseRevision', 'baseSourceHash', 'summary', 'rationale', 'newTikzCode'],
   propose_surgical_diff: ['baseRevision', 'baseSourceHash', 'summary', 'rationale', 'patches'],
-  propose_layout_repair: ['baseRevision', 'baseSourceHash', 'summary', 'rationale', 'themeId'],
+  propose_layout_repair: ['baseRevision', 'baseSourceHash', 'summary', 'rationale', 'themeId', 'proposalId'],
 };
 
 function validateArguments(name: string, args: Record<string, unknown>) {
@@ -144,14 +217,24 @@ export async function executeMcpTool(event: McpToolRequest): Promise<unknown> {
     }
     if (event.toolName === 'inspect_layout_diagnostics') {
       if (args.proposalId && args.proposalId !== currentProposal?.id) fail('proposal_not_found', '待应用提案不存在。');
-      return { ...version, report: analyzeTikzLayout(args.proposalId ? currentProposal!.newTikzCode : source, themeId) };
+      return {
+        ...version,
+        inspectedTarget: args.proposalId ? 'pending_proposal' : 'live_canvas',
+        ...(!args.proposalId && currentProposal?.status === 'pending'
+          ? {
+              pendingProposalId: currentProposal.id,
+              note: 'Inspected original live_canvas because proposalId was omitted; pass proposalId to inspect your pending proposal.',
+            }
+          : {}),
+        report: analyzeTikzLayout(args.proposalId ? currentProposal!.newTikzCode : source, themeId),
+      };
     }
     if (!context.agentId || !context.messageId || !session) fail('read_only_request', '此连接只允许读取画布。');
     if (args.baseRevision !== revision || args.baseSourceHash !== hash) fail('source_changed', '画布已变化，请重新读取后生成提案。');
     let nextSource: string;
     let repairs: string[] | undefined;
     if (event.toolName === 'propose_tikz_patch') {
-      nextSource = stringArg(args, 'newTikzCode');
+      nextSource = normalizeProposedTikzSource(stringArg(args, 'newTikzCode'));
     } else if (event.toolName === 'propose_surgical_diff') {
       if (!Array.isArray(args.patches) || !args.patches.length || args.patches.length > 100) fail('invalid_arguments', 'patches 必须包含 1–100 项。');
       nextSource = source;
@@ -167,15 +250,19 @@ export async function executeMcpTool(event: McpToolRequest): Promise<unknown> {
         nextSource = nextSource.replace(search, () => replacement);
       }
     } else {
-      const repair = autoRepairTikzLayout(context.diagramMode === 'reproduction' ? preserveReproductionIntent(source) : source, themeId);
+      if (args.proposalId && (args.proposalId !== currentProposal?.id || currentProposal.status !== 'pending')) {
+        fail('proposal_not_found', '待应用提案不存在。');
+      }
+      const targetSource = args.proposalId ? currentProposal!.newTikzCode : source;
+      const repair = autoRepairTikzLayout(
+        context.diagramMode === 'reproduction' ? preserveReproductionIntent(targetSource) : targetSource,
+        themeId,
+      );
       nextSource = repair.tikzCode;
       repairs = repair.repairs;
     }
     if (context.diagramMode === 'reproduction') nextSource = preserveReproductionIntent(nextSource);
-    if (nextSource.length > 2 * 1024 * 1024 || nextSource.split('\\begin{tikzpicture}').length !== 2
-        || nextSource.split('\\end{tikzpicture}').length !== 2 || nextSource.includes('\\documentclass')) {
-      fail('invalid_source', '提案必须是完整的单个 tikzpicture，且不包含独立文档导言区。');
-    }
+    validateProposedTikzSource(nextSource);
     // Hashing is asynchronous; recheck identity, registry and version immediately before publication.
     const live = useWorkspaceStore.getState();
     if (!useMcpStore.getState().config.builtinEnabled || getMcpRequest(event.requestId) !== context || !sameCanvas(context.target) ||

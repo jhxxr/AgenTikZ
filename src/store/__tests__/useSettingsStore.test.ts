@@ -88,4 +88,27 @@ describe('agent access preferences', () => {
       agentWorkingDirectory: '',
     });
   });
+
+  it('normalizes gateway URLs per protocol and uses 128k/32k defaults for custom Pi models', async () => {
+    const { useSettingsStore } = await import('../useSettingsStore');
+    const { newPiModel, normalizePiChannelBaseUrl } = await import('../../types/pi');
+    expect(newPiModel('deepseek-v4.1-flash')).toMatchObject({
+      id: 'deepseek-v4.1-flash',
+      reasoning: true,
+      contextWindow: 128000,
+      maxTokens: 32768,
+    });
+    expect(normalizePiChannelBaseUrl('https://share.example.test/', 'openai-completions')).toBe('https://share.example.test/v1');
+    expect(normalizePiChannelBaseUrl('https://share.example.test/v1', 'anthropic-messages')).toBe('https://share.example.test');
+    useSettingsStore.getState().updateSettings({
+      piChannels: [
+        { id: 'openai-gw', name: 'OpenAI GW', provider: 'openai', api: 'openai-completions', baseUrl: 'https://share.example.test/', models: [newPiModel('deepseek-v4.1-flash')] },
+        { id: 'claude-gw', name: 'Claude GW', provider: 'anthropic', api: 'anthropic-messages', baseUrl: 'https://share.example.test/v1', models: [newPiModel('deepseek-v4.1-flash')] },
+      ],
+    });
+    expect(useSettingsStore.getState().piChannels.map((c) => c.baseUrl)).toEqual([
+      'https://share.example.test/v1',
+      'https://share.example.test',
+    ]);
+  });
 });

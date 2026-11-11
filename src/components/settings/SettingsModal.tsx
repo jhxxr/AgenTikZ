@@ -814,12 +814,12 @@ export const SettingsModal: React.FC = () => {
                 {/* Network Proxy & User-Agent (Agentero AgentCommonRows / UserAgentBlock) */}
                 <SettingsSectionLabel
                   title="网络代理与请求头亲和 (Proxy & User-Agent)"
-                  description="为本地 ACP Agent 子进程注入 HTTP_PROXY / HTTPS_PROXY 环境变量与自定义 User-Agent。"
+                  description="为内置 Pi 与本地 ACP Agent 子进程注入 HTTP_PROXY / HTTPS_PROXY 环境变量与自定义 User-Agent（自动绕过本地 127.0.0.1 工具桥）。"
                 />
                 <SettingsGroup>
                   <SettingsRow
-                    label="为本地 ACP Agent 启用网络代理"
-                    description="开启后自动向 Agent 进程注入 HTTP_PROXY / HTTPS_PROXY / ALL_PROXY"
+                    label="为内置 Pi 与本地 ACP Agent 启用网络代理"
+                    description="开启后自动向 Agent 进程注入 HTTP_PROXY / HTTPS_PROXY / ALL_PROXY 与 NODE_USE_ENV_PROXY"
                   >
                     <SettingsToggle
                       checked={proxyEnabled}

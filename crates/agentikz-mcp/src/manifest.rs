@@ -38,7 +38,7 @@ pub fn builtin_tools() -> Vec<ToolSpec> {
         json!({}),
         vec![],
     );
-    add("inspect_layout_diagnostics", "Inspect actual canvas layout or an existing pending proposal. Returns issues and a health score.", json!({
+    add("inspect_layout_diagnostics", "Inspect live canvas layout, or pass proposalId to inspect an existing pending proposal. Returns issues and a health score.", json!({
         "proposalId": {"type": "string"},
         "themeId": {"type": "string", "enum": ["neurips", "cvpr", "nature", "ieee"]}
     }), vec![]);
@@ -66,7 +66,7 @@ pub fn builtin_tools() -> Vec<ToolSpec> {
     });
     let mut complete = base.clone();
     complete["newTikzCode"] = json!({"type":"string", "minLength": 1});
-    add("propose_tikz_patch", "Create or update a pending full-source canvas proposal. The user must apply it. Supply the revision/hash from the latest read.", complete,
+    add("propose_tikz_patch", "Create or update a pending full-source canvas proposal (returns proposalId and layout report). Must be one complete \\begin{tikzpicture}...\\end{tikzpicture}. Supply revision/hash from the latest read.", complete,
         vec!["baseRevision", "baseSourceHash", "summary", "newTikzCode"]);
     let mut surgical = base.clone();
     surgical["patches"] = json!({
@@ -74,11 +74,12 @@ pub fn builtin_tools() -> Vec<ToolSpec> {
         "items": {"type":"object", "properties":{"search":{"type":"string","minLength":1}, "replace":{"type":"string"}},
                   "required":["search","replace"], "additionalProperties":false}
     });
-    add("propose_surgical_diff", "Create a pending exact SEARCH/REPLACE proposal. Every search must match exactly once. Does not change the canvas.", surgical,
+    add("propose_surgical_diff", "Create a pending exact SEARCH/REPLACE proposal against the live canvas (returns proposalId and layout report). Every search must match exactly once.", surgical,
         vec!["baseRevision", "baseSourceHash", "summary", "patches"]);
     let mut repair = base;
+    repair["proposalId"] = json!({"type":"string", "minLength": 1});
     repair["themeId"] = json!({"type":"string", "enum":["neurips","cvpr","nature","ieee"]});
-    add("propose_layout_repair", "Create a pending layout-repair proposal using AgenTikZ diagnostics. Does not change the canvas.", repair,
+    add("propose_layout_repair", "Create a pending layout-repair proposal. Pass proposalId to repair your pending proposal; omitting proposalId repairs the original live canvas and replaces any pending proposal.", repair,
         vec!["baseRevision", "baseSourceHash", "summary"]);
     add("get_project_context", "Read the current project file index, active manuscript, canvas identity, dirty state and paper revision. Works across paper/figure views of the same project.", json!({}), vec![]);
     add("read_project_file", "Read an indexed project text file without changing the editor tab. Returns current editor source (including unsaved edits), paperRevision and sourceHash. Read every affected file before proposing manuscript changes.", json!({

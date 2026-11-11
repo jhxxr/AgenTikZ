@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PiEngine, validateBridge, makeTools } from '../engine.mjs';
+import { PiEngine, validateBridge, makeTools, formatSafeModelFailure } from '../engine.mjs';
 
 const specs = [{ name: 'get_project_context', description: 'Read current project',
   inputSchema: { type: 'object', properties: {}, additionalProperties: false } }];
@@ -93,6 +93,13 @@ test('tool previews use native image blocks with no base64 JSON duplication and 
   active.supportsImages = false;
   assert.equal((await tool.execute('unsupported', {})).isError, true);
   assert.equal(calls, 1);
+
+  const nonVision = harness({ vision: false });
+  await nonVision.engine.prompt(request({
+    tools: [...specs, { ...specs[0], name: 'render_canvas_preview' }],
+  }), () => {});
+  assert.deepEqual(nonVision.created[0].options.tools, ['get_project_context']);
+  nonVision.engine.dispose();
 });
 
 test('disables discovered resources, prompt expansion, native tools and background warming', async () => {
@@ -178,4 +185,55 @@ test('turn and output budgets survive an aborted message_end event and dispose t
     assert.equal(engine.active, null);
     assert.equal(engine.sessions.size, 0);
   }
+});
+
+test('streams thinking deltas, tool call status, detects maxTokens truncation, and classifies errors safely', async () => {
+  const { engine, created } = harness();
+  await engine.prompt(request(), () => {});
+  const events = [];
+  created[0].prompt = async () => {
+    created[0].emit({ type: 'turn_start' });
+    created[0].emit({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: 'Planning layout...' } });
+    created[0].emit({ type: 'message_update', assistantMessageEvent: {
+      type: 'toolcall_start', contentIndex: 0, partial: { content: [{ type: 'toolCall', name: 'propose_tikz_patch' }] },
+    } });
+    created[0].emit({ type: 'tool_execution_start', toolName: 'propose_tikz_patch' });
+    created[0].emit({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'Done.' } });
+    created[0].emit({ type: 'message_end', message: { role: 'assistant', stopReason: 'stop' } });
+  };
+  const ok = await engine.prompt(request({ requestId: 'stream-ok' }), (ev) => events.push(ev));
+  assert.equal(ok.reply, 'Done.');
+  assert.ok(events.some((ev) => ev.kind === 'thought' && ev.text === 'Planning layout...'));
+  assert.ok(events.some((ev) => ev.kind === 'mcp_status' && ev.text.includes('生成工具参数：propose_tikz_patch')));
+  assert.ok(events.some((ev) => ev.kind === 'mcp_status' && ev.text.includes('调用项目工具：propose_tikz_patch')));
+
+  // Single length-truncated turn auto-recovers once via compact continuation prompt
+  let attempt = 0;
+  created[0].prompt = async () => {
+    attempt += 1;
+    created[0].emit({ type: 'turn_start' });
+    if (attempt === 1) {
+      created[0].emit({ type: 'message_end', message: { role: 'assistant', stopReason: 'length' } });
+    } else {
+      created[0].emit({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'Recovered compact patch.' } });
+      created[0].emit({ type: 'message_end', message: { role: 'assistant', stopReason: 'stop' } });
+    }
+  };
+  const recovered = await engine.prompt(request({ requestId: 'recover-once' }), () => {});
+  assert.equal(attempt, 2);
+  assert.equal(recovered.reply, 'Recovered compact patch.');
+
+  // Persistent truncation must fail explicitly instead of silently returning incomplete text
+  created[0].prompt = async () => {
+    created[0].emit({ type: 'turn_start' });
+    created[0].emit({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: '我会先读取项目上下文...' } });
+    created[0].emit({ type: 'message_end', message: { role: 'assistant', stopReason: 'length' } });
+  };
+  await assert.rejects(engine.prompt(request({ requestId: 'truncated' }), () => {}), /truncated at maxTokens limit/);
+
+  // Safe error classifier includes HTTP status & allowlisted code without echoing secrets
+  const formatted404 = formatSafeModelFailure('404 status code: {"error":{"type":"not_found_error","message":"sk-SECRET-KEY"}}');
+  assert.match(formatted404, /HTTP 404/);
+  assert.match(formatted404, /not_found_error/);
+  assert.ok(!formatted404.includes('SECRET'));
 });

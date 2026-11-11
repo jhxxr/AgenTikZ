@@ -26,6 +26,8 @@ struct Running {
 }
 static RUNNING: LazyLock<Mutex<HashMap<String, Running>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+static SESSION_CREDENTIALS: LazyLock<Mutex<HashMap<String, String>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 struct RequestGuard(String);
 impl Drop for RequestGuard {
     fn drop(&mut self) {
@@ -52,6 +54,10 @@ pub struct PiPrompt {
     images: Vec<crate::agent_image::AgentImage>,
     #[serde(default)]
     reference_images: Vec<crate::agent_image::AgentImage>,
+    #[serde(default)]
+    proxy_url: Option<String>,
+    #[serde(default)]
+    user_agent: Option<String>,
     target: crate::mcp::bridge::CanvasTarget,
 }
 
@@ -126,9 +132,77 @@ fn validate_provider(provider: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn credentials(provider: &str) -> Result<keyring::Entry, String> {
+fn validate_proxy_url(proxy_url: Option<&str>) -> Result<Option<String>, String> {
+    let Some(trimmed) = proxy_url.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    if trimmed.len() > 2048 || trimmed.bytes().any(|b| b < 0x20 || b == 0x7f) {
+        return Err("代理地址格式无效。".into());
+    }
+    let url = tauri::Url::parse(trimmed).map_err(|_| "代理地址格式无效。")?;
+    if !matches!(url.scheme(), "http" | "https" | "socks5" | "socks5h") || url.host_str().is_none() {
+        return Err("代理地址仅支持 http(s):// 或 socks5://。".into());
+    }
+    Ok(Some(trimmed.to_string()))
+}
+
+fn validate_user_agent(user_agent: Option<&str>) -> Result<Option<String>, String> {
+    let Some(trimmed) = user_agent.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    if trimmed.len() > 512 || !trimmed.bytes().all(|b| (0x20..=0x7e).contains(&b)) {
+        return Err("自定义 User-Agent 仅支持单行可见 ASCII 字符（最长 512 字符）。".into());
+    }
+    Ok(Some(trimmed.to_string()))
+}
+
+pub(crate) fn merge_loopback_no_proxy(existing: Option<&str>) -> String {
+    let mut items: Vec<String> = existing
+        .unwrap_or("")
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+    for required in ["127.0.0.1", "localhost", "::1", "[::1]"] {
+        if !items.iter().any(|item| item.eq_ignore_ascii_case(required)) {
+            items.push(required.to_string());
+        }
+    }
+    items.join(",")
+}
+
+fn store_credential(provider: &str, key: &str) -> Result<(), String> {
     validate_provider(provider)?;
-    keyring::Entry::new(CREDENTIAL_SERVICE, provider).map_err(|_| "系统凭据存储不可用。".into())
+    let stored_in_os = keyring::Entry::new(CREDENTIAL_SERVICE, provider)
+        .and_then(|entry| entry.set_password(key))
+        .is_ok();
+    if let Ok(mut mem) = SESSION_CREDENTIALS.lock() {
+        mem.insert(provider.to_string(), key.to_string());
+        return Ok(());
+    }
+    if stored_in_os {
+        Ok(())
+    } else {
+        Err("无法保存到系统凭据存储；未写入明文文件。".into())
+    }
+}
+
+fn load_credential(provider: &str) -> Result<Option<String>, String> {
+    validate_provider(provider)?;
+    if let Ok(mem) = SESSION_CREDENTIALS.lock() {
+        if let Some(value) = mem.get(provider).filter(|v| !v.is_empty()) {
+            return Ok(Some(value.clone()));
+        }
+    }
+    let Ok(entry) = keyring::Entry::new(CREDENTIAL_SERVICE, provider) else {
+        return Ok(None);
+    };
+    match entry.get_password() {
+        Ok(value) if !value.is_empty() => Ok(Some(value)),
+        Ok(_) | Err(keyring::Error::NoEntry) => Ok(None),
+        Err(_) => Ok(None),
+    }
 }
 
 #[tauri::command]
@@ -141,18 +215,19 @@ pub fn pi_save_api_key(
     if key.is_empty() || key.len() > 8192 {
         return Err("请输入有效的 API Key。".into());
     }
-    credentials(&provider)?
-        .set_password(key)
-        .map_err(|_| "无法保存到系统凭据存储；未写入明文文件。")?;
+    store_credential(&provider, key)?;
     close_window(window.label());
     Ok(())
 }
 
 #[tauri::command]
 pub fn pi_delete_api_key(window: WebviewWindow, provider: String) -> Result<(), String> {
-    match credentials(&provider)?.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => {}
-        Err(_) => return Err("无法删除系统凭据。".into()),
+    validate_provider(&provider)?;
+    if let Ok(mut mem) = SESSION_CREDENTIALS.lock() {
+        mem.remove(&provider);
+    }
+    if let Ok(entry) = keyring::Entry::new(CREDENTIAL_SERVICE, &provider) {
+        let _ = entry.delete_credential();
     }
     close_window(window.label());
     Ok(())
@@ -160,11 +235,7 @@ pub fn pi_delete_api_key(window: WebviewWindow, provider: String) -> Result<(), 
 
 #[tauri::command]
 pub fn pi_has_api_key(provider: String) -> Result<bool, String> {
-    match credentials(&provider)?.get_password() {
-        Ok(value) => Ok(!value.is_empty()),
-        Err(keyring::Error::NoEntry) => Ok(false),
-        Err(_) => Err("系统凭据存储不可用。".into()),
-    }
+    Ok(load_credential(&provider)?.is_some())
 }
 
 fn worker_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -202,7 +273,7 @@ fn node_version_supported(version: &str) -> bool {
     numbers.len() == 3 && (numbers[0] > 22 || (numbers[0] == 22 && numbers[1] >= 19))
 }
 
-fn restricted_environment(command: &mut Command) {
+fn restricted_environment(command: &mut Command, proxy_url: Option<&str>) {
     command.env_clear();
     // No model credentials, NODE_OPTIONS, npm hooks or discovered extension settings.
     for key in [
@@ -215,10 +286,54 @@ fn restricted_environment(command: &mut Command) {
         "USERPROFILE",
         "LOCALAPPDATA",
         "APPDATA",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "NODE_EXTRA_CA_CERTS",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "no_proxy",
     ] {
         if let Some(value) = std::env::var_os(key) {
             command.env(key, value);
         }
+    }
+    let explicit_proxy = proxy_url.map(str::trim).filter(|s| !s.is_empty());
+    if let Some(proxy) = explicit_proxy {
+        for key in [
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "all_proxy",
+        ] {
+            command.env(key, proxy);
+        }
+    }
+    let has_proxy = explicit_proxy.is_some()
+        || [
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "all_proxy",
+        ]
+        .iter()
+        .any(|key| std::env::var_os(key).is_some_and(|v| !v.is_empty()));
+    let base_no_proxy = std::env::var("NO_PROXY")
+        .ok()
+        .or_else(|| std::env::var("no_proxy").ok());
+    let merged_no_proxy = merge_loopback_no_proxy(base_no_proxy.as_deref());
+    command.env("NO_PROXY", &merged_no_proxy);
+    command.env("no_proxy", &merged_no_proxy);
+    if has_proxy {
+        command.env("NODE_USE_ENV_PROXY", "1");
     }
 }
 
@@ -227,6 +342,7 @@ struct Worker {
     input: ChildStdin,
     output: BufReader<ChildStdout>,
     stderr: tokio::task::JoinHandle<()>,
+    proxy_url: Option<String>,
     last_used: Instant,
 }
 impl Drop for Worker {
@@ -235,7 +351,7 @@ impl Drop for Worker {
     }
 }
 impl Worker {
-    async fn start(app: &AppHandle) -> Result<Self, String> {
+    async fn start(app: &AppHandle, proxy_url: Option<String>) -> Result<Self, String> {
         let node = crate::acp::resolve_mcp_executable("node")?;
         let entry = worker_path(app)?;
         let cwd = app
@@ -244,10 +360,20 @@ impl Worker {
             .map_err(|_| "无法定位应用目录。")?
             .join("pi-workspace");
         std::fs::create_dir_all(&cwd).map_err(|_| "无法创建 Pi 工作目录。")?;
-        Self::start_at(node, entry, cwd).await
+        Self::start_at_with_proxy(node, entry, cwd, proxy_url).await
     }
 
+    #[cfg(test)]
     async fn start_at(node: PathBuf, entry: PathBuf, cwd: PathBuf) -> Result<Self, String> {
+        Self::start_at_with_proxy(node, entry, cwd, None).await
+    }
+
+    async fn start_at_with_proxy(
+        node: PathBuf,
+        entry: PathBuf,
+        cwd: PathBuf,
+        proxy_url: Option<String>,
+    ) -> Result<Self, String> {
         // Node cannot load an entrypoint using Windows verbatim paths (\\?\),
         // including the canonicalized resource_dir supplied by Tauri. Normalize
         // at the process boundary so all callers, including tests, use safe paths.
@@ -255,7 +381,7 @@ impl Worker {
         let entry = crate::acp::protocol_workspace_path(entry);
         let cwd = crate::acp::protocol_workspace_path(cwd);
         let mut check = Command::new(&node);
-        restricted_environment(&mut check);
+        restricted_environment(&mut check, None);
         check.current_dir(&cwd);
         check.arg("--version").kill_on_drop(true);
         #[cfg(windows)]
@@ -270,7 +396,7 @@ impl Worker {
             return Err("内置 Pi 需要 Node.js 22.19 或更新版本；不会自动下载安装。".into());
         }
         let mut command = Command::new(node);
-        restricted_environment(&mut command);
+        restricted_environment(&mut command, proxy_url.as_deref());
         command
             .arg(entry)
             .current_dir(cwd)
@@ -293,6 +419,7 @@ impl Worker {
             input,
             output,
             stderr,
+            proxy_url,
             last_used: Instant::now(),
         };
         let ready = timeout(Duration::from_secs(30), worker.read())
@@ -366,7 +493,7 @@ impl Worker {
             }
             match frame["type"].as_str() {
                 Some("event") => {
-                    if matches!(frame["kind"].as_str(), Some("message" | "mcp_status")) {
+                    if matches!(frame["kind"].as_str(), Some("message" | "thought" | "mcp_status")) {
                         let _ = app.emit_to(window, "acp:stream", &frame);
                     }
                 }
@@ -385,7 +512,7 @@ impl Worker {
 
 #[tauri::command]
 pub async fn pi_probe(app: AppHandle, window: WebviewWindow) -> Result<Value, String> {
-    let mut worker = Worker::start(&app).await?;
+    let mut worker = Worker::start(&app, None).await?;
     let request = json!({"type":"inspect", "requestId":uuid::Uuid::new_v4().to_string()});
     let result = timeout(
         Duration::from_secs(30),
@@ -404,13 +531,22 @@ pub async fn pi_fetch_models(
     app: AppHandle,
     window: WebviewWindow,
     channel: PiChannel,
+    proxy_url: Option<String>,
+    user_agent: Option<String>,
 ) -> Result<Value, String> {
     channel.validate()?;
-    let api_key = credentials(&channel.id)?.get_password()
-        .map_err(|_| "请先保存该渠道的 API Key。")?;
-    let mut worker = Worker::start(&app).await?;
-    let request = json!({"type":"fetch_models", "requestId":uuid::Uuid::new_v4().to_string(),
-        "channel":channel, "apiKey":api_key});
+    let proxy = validate_proxy_url(proxy_url.as_deref())?;
+    let ua = validate_user_agent(user_agent.as_deref())?;
+    let api_key = load_credential(&channel.id)?
+        .ok_or_else(|| "请先保存该渠道的 API Key。".to_string())?;
+    let mut worker = Worker::start(&app, proxy).await?;
+    let request = json!({
+        "type":"fetch_models",
+        "requestId":uuid::Uuid::new_v4().to_string(),
+        "channel":channel,
+        "apiKey":api_key,
+        "userAgent":ua,
+    });
     let result = timeout(Duration::from_secs(60), worker.run(&app, window.label(), &request))
         .await.map_err(|_| "获取模型超时，请检查渠道地址或手动添加模型。")??;
     Ok(result["models"].clone())
@@ -455,6 +591,8 @@ pub async fn pi_send_prompt(
             return Err("所选模型不在当前 Pi 渠道中，请重新选择。".into());
         }
     }
+    let proxy_url = validate_proxy_url(request.proxy_url.as_deref())?;
+    let user_agent = validate_user_agent(request.user_agent.as_deref())?;
     crate::agent_image::validate_images(&request.images)?;
     crate::agent_image::validate_images(&request.reference_images)?;
     if request.request_id.is_empty()
@@ -488,9 +626,8 @@ pub async fn pi_send_prompt(
     }
     let _guard = RequestGuard(request.request_id.clone());
     let credential_id = request.channel.as_ref().map(|channel| channel.id.as_str()).unwrap_or(&request.provider);
-    let api_key = credentials(credential_id)?
-        .get_password()
-        .map_err(|_| "请在设置 → Agent → 内置 Pi 中保存当前渠道的 API Key。")?;
+    let api_key = load_credential(credential_id)?
+        .ok_or_else(|| "请在设置 → Agent → 内置 Pi 中保存当前渠道的 API Key。".to_string())?;
     let config = crate::mcp::mcp_get_config(app.clone()).await?;
     if !config.builtin_enabled {
         return Err("请先启用内置 MCP 工具；Pi 不会改用原生文件或命令工具。".into());
@@ -505,7 +642,7 @@ pub async fn pi_send_prompt(
     let record = json!({
         "type":"prompt", "requestId":request.request_id, "conversationId":request.conversation_id,
         "projectId":request.target.project_id, "provider":request.provider, "model":request.model,
-        "channel":request.channel,
+        "channel":request.channel, "userAgent":user_agent,
         "apiKey":api_key, "prompt":request.prompt, "history":request.history, "thinkingLevel":request.thinking_level,
         "images":request.images,
         "referenceImages":request.reference_images,
@@ -521,14 +658,14 @@ pub async fn pi_send_prompt(
     let mut worker = slot.lock().await;
     if worker
         .as_ref()
-        .is_some_and(|w| w.last_used.elapsed() > Duration::from_secs(900))
+        .is_some_and(|w| w.last_used.elapsed() > Duration::from_secs(900) || w.proxy_url != proxy_url)
     {
         worker.take();
     }
     if worker.is_none() {
         let startup = tokio::select! {
             _ = cancelled.changed() => Err("Pi 请求已取消。".to_string()),
-            result = Worker::start(&app) => result,
+            result = Worker::start(&app, proxy_url) => result,
         }?;
         *worker = Some(startup);
     }
@@ -597,15 +734,18 @@ mod tests {
         command.env("NODE_OPTIONS", "--require=untrusted.js");
         command.env("ANTHROPIC_API_KEY", "test-only-do-not-inherit");
         command.env("OPENAI_API_KEY", "test-only-do-not-inherit");
-        restricted_environment(&mut command);
-        let names: Vec<_> = command
+        restricted_environment(&mut command, Some("http://127.0.0.1:7890"));
+        let envs: HashMap<String, String> = command
             .as_std()
             .get_envs()
-            .map(|(key, _)| key.to_string_lossy().to_string())
+            .filter_map(|(k, v)| Some((k.to_string_lossy().to_string(), v?.to_string_lossy().to_string())))
             .collect();
         for key in ["NODE_OPTIONS", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"] {
-            assert!(!names.iter().any(|name| name == key));
+            assert!(!envs.contains_key(key));
         }
+        assert_eq!(envs.get("HTTPS_PROXY").map(String::as_str), Some("http://127.0.0.1:7890"));
+        assert_eq!(envs.get("NODE_USE_ENV_PROXY").map(String::as_str), Some("1"));
+        assert!(envs.get("NO_PROXY").is_some_and(|v| v.contains("127.0.0.1") && v.contains("localhost")));
     }
 
     #[tokio::test]

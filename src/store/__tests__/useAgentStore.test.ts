@@ -567,4 +567,51 @@ describe('real ACP frontend contract', () => {
     expect(store.getState().attachCanvasContext).toBe(false);
     expect(store.getState().attachSelectionContext).toBe(false);
   });
+
+  it('forwards proxy/User-Agent to Pi, skips render_canvas_preview prompt guidance on text-only models, and streams thoughts', async () => {
+    const store = await freshStore();
+    const { newPiModel } = await import('../../types/pi');
+    const channel = {
+      id: 'custom-gw',
+      name: 'Custom Gateway',
+      provider: 'openai',
+      api: 'openai-completions' as const,
+      baseUrl: 'https://share.example.test/',
+      defaultModelId: 'deepseek-v4.1-flash',
+      models: [newPiModel('deepseek-v4.1-flash')],
+    };
+    useSettingsStore.getState().updateSettings({
+      piChannels: [channel],
+      piActiveChannelId: 'custom-gw',
+      piProvider: 'openai',
+      piModel: '',
+      proxyEnabled: true,
+      proxyUrl: 'http://127.0.0.1:7890',
+      userAgentPreset: 'custom',
+      customUserAgent: 'AgenTikZ-Pi/1.0',
+    });
+    store.getState().setActiveAgentId('pi');
+    bridge.invoke.mockImplementation(async (command, args: any) => {
+      if (command === 'pi_send_prompt') {
+        bridge.onEvent?.({ payload: { requestId: args.request.requestId, kind: 'thought', text: 'Thinking step 1. ' } });
+        bridge.onEvent?.({ payload: { requestId: args.request.requestId, kind: 'message', text: 'Final answer.' } });
+        return { runtimeStarted: true, reply: 'Final answer.', resumed: false };
+      }
+      return {};
+    });
+    await store.getState().sendPromptToAgent('绘制双流架构图');
+    const call = bridge.invoke.mock.calls.find(([cmd]) => cmd === 'pi_send_prompt')!;
+    expect(call[1].request).toMatchObject({
+      provider: 'openai',
+      model: 'deepseek-v4.1-flash',
+      proxyUrl: 'http://127.0.0.1:7890',
+      userAgent: 'AgenTikZ-Pi/1.0',
+      channel: expect.objectContaining({ baseUrl: 'https://share.example.test/v1' }),
+    });
+    expect(call[1].request.prompt).toContain('TEXTUAL LAYOUT VERIFICATION (NON-VISION MODEL)');
+    expect(call[1].request.prompt).not.toContain('BOUNDED VISUAL REVIEW');
+    const lastMsg = store.getState().sessions[0].messages.at(-1);
+    expect(lastMsg?.thoughtProcess).toBe('Thinking step 1. ');
+    expect(lastMsg?.content).toBe('Final answer.');
+  });
 });

@@ -196,6 +196,54 @@ describe('actual canvas MCP handlers', () => {
       .toMatchObject({ error: { code: 'ambiguous_search' } });
   });
 
+  it('normalizes fenced and standalone-wrapped tikzpicture proposals while rejecting nested tikzpictures with guidance', async () => {
+    const fenced = '```tikz\n\\definecolor{encBlue}{HTML}{2563EB}\n% Example \\begin{tikzpicture} in comment\n' + replacement + '\n```';
+    const res1 = await call('propose_tikz_patch', { ...await base(), newTikzCode: fenced });
+    expect(res1).toMatchObject({ status: 'pending', applied: false });
+    const pending1 = useAgentStore.getState().sessions[0].messages[0].patchProposal!;
+    expect(pending1.newTikzCode).toContain('\\definecolor{encBlue}{HTML}{2563EB}');
+    expect(pending1.newTikzCode).not.toContain('```');
+
+    const standalone = [
+      '\\documentclass[tikz,border=10pt]{standalone}',
+      '\\usepackage{tikz,amsmath}',
+      '\\usetikzlibrary{arrows.meta,positioning}',
+      '\\definecolor{decGreen}{HTML}{16A34A}',
+      '\\tikzset{customBox/.style={draw=decGreen}}',
+      '\\begin{document}',
+      replacement,
+      '\\end{document}',
+    ].join('\n');
+    const res2 = await call('propose_tikz_patch', { ...await base(), newTikzCode: standalone });
+    expect(res2).toMatchObject({ status: 'pending', applied: false });
+    const pending2 = useAgentStore.getState().sessions[0].messages[0].patchProposal!;
+    expect(pending2.newTikzCode).not.toContain('\\documentclass');
+    expect(pending2.newTikzCode).not.toContain('\\begin{document}');
+    expect(pending2.newTikzCode).toContain('\\definecolor{decGreen}{HTML}{16A34A}');
+    expect(pending2.newTikzCode).toContain('\\tikzset{customBox/.style={draw=decGreen}}');
+    expect(pending2.newTikzCode).toContain('\\begin{tikzpicture}');
+
+    const jsonEscaped = '\x09ikzset{box/.style={draw}}\n\x08egin{tikzpicture}\n\\node[font=\x0cootnotesize\x08fseries] (a) at (0,0) {Recovered};\n\\end{tikzpicture}';
+    const resEscaped = await call('propose_tikz_patch', { ...await base(), newTikzCode: jsonEscaped });
+    expect(resEscaped).toMatchObject({ status: 'pending', applied: false });
+    const pendingEscaped = useAgentStore.getState().sessions[0].messages[0].patchProposal!;
+    expect(pendingEscaped.newTikzCode).toContain('\\tikzset{box/.style={draw}}');
+    expect(pendingEscaped.newTikzCode).toContain('\\begin{tikzpicture}');
+    expect(pendingEscaped.newTikzCode).toContain('\\footnotesize\\bfseries');
+
+    const diagWithoutId = await call('inspect_layout_diagnostics');
+    expect(diagWithoutId.inspectedTarget).toBe('live_canvas');
+    expect(diagWithoutId.pendingProposalId).toBe(resEscaped.proposalId);
+    const repairedPending = await call('propose_layout_repair', { ...await base(), proposalId: resEscaped.proposalId });
+    expect(repairedPending).toMatchObject({ status: 'pending', applied: false });
+    expect(useAgentStore.getState().sessions[0].messages[0].patchProposal!.newTikzCode).toContain('{Recovered}');
+
+    const nested = '\\begin{tikzpicture}\n\\node (outer) {\\begin{tikzpicture}\\draw (0,0)--(1,1);\\end{tikzpicture}};\n\\end{tikzpicture}';
+    const resNested = await call('propose_tikz_patch', { ...await base(), newTikzCode: nested });
+    expect(resNested).toMatchObject({ error: { code: 'invalid_source' } });
+    expect(resNested.error.message).toContain('嵌套');
+  });
+
   it('validates tool arguments and rejects expired requests', async () => {
     expect(await call('get_canvas_source', { path: 'unrelated.txt' })).toMatchObject({ error: { code: 'invalid_arguments' } });
     expect(await call('get_theme_palette', { themeId: '__proto__' })).toMatchObject({ error: { code: 'invalid_arguments' } });

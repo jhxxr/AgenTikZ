@@ -1,6 +1,6 @@
 [package]
 name = "agentikz"
-version = "0.7.1"
+version = "0.7.2"
 description = "AI-era Visual TikZ & PGFPlots Editor for Scientific Research with BYOA (ACP/MCP)"
 authors = ["AgenTikZ"]
 license = "MIT"

@@ -630,7 +630,8 @@ fn apply_runtime_env_overrides(
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    if let Some(proxy) = proxy_url.map(str::trim).filter(|s| !s.is_empty()) {
+    let explicit_proxy = proxy_url.map(str::trim).filter(|s| !s.is_empty());
+    if let Some(proxy) = explicit_proxy {
         for key in [
             "HTTP_PROXY",
             "HTTPS_PROXY",
@@ -641,6 +642,32 @@ fn apply_runtime_env_overrides(
         ] {
             env_map.insert(key.into(), proxy.into());
         }
+    }
+    let has_proxy = explicit_proxy.is_some()
+        || [
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "all_proxy",
+        ]
+        .iter()
+        .any(|key| {
+            env_map.get(*key).is_some_and(|v| !v.is_empty())
+                || std::env::var_os(key).is_some_and(|v| !v.is_empty())
+        });
+    if has_proxy {
+        let base_no_proxy = env_map
+            .get("NO_PROXY")
+            .cloned()
+            .or_else(|| env_map.get("no_proxy").cloned())
+            .or_else(|| std::env::var("NO_PROXY").ok())
+            .or_else(|| std::env::var("no_proxy").ok());
+        let merged = crate::pi::merge_loopback_no_proxy(base_no_proxy.as_deref());
+        env_map.insert("NO_PROXY".into(), merged.clone());
+        env_map.insert("no_proxy".into(), merged);
+        env_map.insert("NODE_USE_ENV_PROXY".into(), "1".into());
     }
     if let Some(ua) = user_agent.map(str::trim).filter(|s| !s.is_empty()) {
         env_map.insert("USER_AGENT".into(), ua.into());

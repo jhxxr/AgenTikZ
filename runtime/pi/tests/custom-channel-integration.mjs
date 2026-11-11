@@ -64,6 +64,7 @@ for (const api of ['openai-completions', 'openai-responses', 'anthropic-messages
       bridge: { endpoint: base + '/call', token: 't'.repeat(64) },
       channel: { id, name: id, provider: 'openai', api, baseUrl: `${base}/${id}/v1`,
         models: [{ id: 'fixture', name: 'Fixture', reasoning: false, supportsImages: false, contextWindow: 16384, maxTokens: 1024 }] },
+      userAgent: '!AgenTikZ-Literal $PATH/1.0',
     });
     const first = await engine.prompt(request('one'), () => {});
     const second = await engine.prompt(request('two'), () => {});
@@ -73,6 +74,11 @@ for (const api of ['openai-completions', 'openai-responses', 'anthropic-messages
     assert.equal(calls.length, 2);
     assert.ok(calls[0].path.startsWith('/one/v1/'), calls[0].path);
     assert.ok(calls[1].path.startsWith('/two/v1/'), calls[1].path);
+    if (api === 'anthropic-messages') {
+      assert.equal(calls[0].path.split('?')[0], '/one/v1/messages');
+      assert.equal(calls[1].path.split('?')[0], '/two/v1/messages');
+    }
+    assert.equal(calls[0].headers['user-agent'], '!AgenTikZ-Literal $PATH/1.0');
     const authHeader = api === 'anthropic-messages' ? 'x-api-key' : api === 'google-generative-ai' ? 'x-goog-api-key' : 'authorization';
     assert.ok(calls[0].headers[authHeader]?.includes('key-for-one'));
     assert.ok(calls[1].headers[authHeader]?.includes('key-for-two'));

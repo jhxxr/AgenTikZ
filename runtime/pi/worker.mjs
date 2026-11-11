@@ -43,7 +43,7 @@ process.stdin.on('data', (chunk) => {
       else void engine.inspect().then((models) => write({ type: 'models', requestId: record.requestId, models }))
         .catch(() => write({ type: 'error', requestId: record.requestId, error: 'Pi catalog unavailable' }));
     } else if (record.type === 'fetch_models') {
-      void fetchChannelModels(record.channel, record.apiKey)
+      void fetchChannelModels(record.channel, record.apiKey, fetch, record.userAgent)
         .then((models) => write({ type: 'models', requestId: record.requestId, models }))
         .catch((error) => write({ type: 'error', requestId: record.requestId, error: error.message }));
     } else if (record.type === 'prompt') {

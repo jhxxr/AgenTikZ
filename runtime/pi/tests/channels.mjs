@@ -2,7 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
-import { fetchChannelModels, registerChannel, validateChannel } from '../channels.mjs';
+import {
+  DEFAULT_CHANNEL_CONTEXT_WINDOW, DEFAULT_CHANNEL_MAX_TOKENS,
+  escapeConfigLiteral, fetchChannelModels, normalizeChannelBaseUrl, registerChannel, validateChannel, validateUserAgent,
+} from '../channels.mjs';
 import { sessionKey } from '../engine.mjs';
 
 const channel = (changes = {}) => ({
@@ -24,6 +27,8 @@ test('discovers and deduplicates gateway models, preserving base paths and keepi
   assert.equal(captured.redirect, 'error');
   assert.deepEqual(models.map((model) => model.id), ['model-a', 'model-b']);
   assert.equal(models[0].supportsImages, false, 'unknown model capabilities must not be guessed');
+  assert.equal(models[0].contextWindow, DEFAULT_CHANNEL_CONTEXT_WINDOW);
+  assert.equal(models[0].maxTokens, DEFAULT_CHANNEL_MAX_TOKENS);
 });
 
 test('Anthropic discovery follows bounded cursor pagination on the same endpoint', async () => {
@@ -89,6 +94,9 @@ test('registers explicit capabilities under channel-specific provider ids and is
   assert.equal(captured.config.baseUrl, config.baseUrl);
   assert.equal(captured.config.api, 'openai-completions');
   assert.deepEqual(captured.config.models[0].input, ['text']);
+  assert.equal(captured.config.models[0].compat.supportsStore, false);
+  assert.equal(captured.config.models[0].compat.supportsDeveloperRole, false);
+  assert.equal(captured.config.models[0].compat.maxTokensField, 'max_tokens');
   assert.ok(!JSON.stringify(captured).includes('apiKey'));
   assert.throws(() => registerChannel(runtime, config, 'deleted'), /Invalid/);
   const input = { conversationId: 'chat', projectId: 'project', provider: 'openai', model: 'model-a', apiKey: 'fixture', tools: [], channel: config };
@@ -96,4 +104,32 @@ test('registers explicit capabilities under channel-specific provider ids and is
     { models: [{ ...config.models[0], supportsImages: true }] }]) {
     assert.notEqual(sessionKey(input), sessionKey({ ...input, channel: { ...config, ...changes } }));
   }
+});
+
+test('normalizes bare gateway origins and pasted endpoint suffixes per protocol', () => {
+  assert.equal(normalizeChannelBaseUrl('https://share.example.test/', 'openai-completions'), 'https://share.example.test/v1');
+  assert.equal(normalizeChannelBaseUrl('https://share.example.test', 'openai-responses'), 'https://share.example.test/v1');
+  assert.equal(normalizeChannelBaseUrl('https://share.example.test/v1/chat/completions', 'openai-completions'), 'https://share.example.test/v1');
+  assert.equal(normalizeChannelBaseUrl('https://share.example.test/v1', 'anthropic-messages'), 'https://share.example.test');
+  assert.equal(normalizeChannelBaseUrl('https://share.example.test/v1/messages', 'anthropic-messages'), 'https://share.example.test');
+  assert.equal(normalizeChannelBaseUrl('https://share.example.test/', 'google-generative-ai'), 'https://share.example.test/v1beta');
+  assert.equal(normalizeChannelBaseUrl('https://example.test/missing/v1', 'openai-completions'), 'https://example.test/missing/v1');
+});
+
+test('validates and escapes User-Agent literals and sets DeepSeek reasoning compat', () => {
+  assert.equal(escapeConfigLiteral('!whoami $HOME'), '$!whoami $$HOME');
+  assert.throws(() => validateUserAgent('bad\r\nheader: injected'), /Invalid User-Agent/);
+  let captured;
+  const runtime = { registerProvider: (id, config) => { captured = { id, config }; } };
+  const deepseekChannel = channel({
+    baseUrl: 'https://share.example.test/',
+    models: [{ id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash', contextWindow: 128000, maxTokens: 32768, reasoning: false, supportsImages: false }],
+  });
+  registerChannel(runtime, deepseekChannel, 'deepseek-v4.1-flash', '!ua $ENV');
+  assert.equal(captured.config.baseUrl, 'https://share.example.test/v1');
+  assert.equal(captured.config.headers['User-Agent'], '$!ua $$ENV');
+  assert.equal(captured.config.models[0].reasoning, true);
+  assert.equal(captured.config.models[0].compat.requiresReasoningContentOnAssistantMessages, true);
+  assert.equal(captured.config.models[0].compat.thinkingFormat, 'deepseek');
+  assert.equal(captured.config.models[0].compat.supportsReasoningEffort, false);
 });

@@ -1,42 +1,106 @@
 export const CHANNEL_APIS = new Set(['openai-completions', 'openai-responses', 'anthropic-messages', 'google-generative-ai']);
+export const DEFAULT_CHANNEL_CONTEXT_WINDOW = 128000;
+export const DEFAULT_CHANNEL_MAX_TOKENS = 32768;
+
+export function inferModelReasoning(id) {
+  if (typeof id !== 'string') return false;
+  return /^(?:deepseek-(?:reasoner|r1|v3\.2|v4|flash)|qwq|o1|o3|o4)(?:$|[-_./])/i.test(id.trim())
+    || /(?:^|[-_./])(?:thinking|reasoner|r1)(?:$|[-_./])/i.test(id.trim());
+}
+
+export function normalizeChannelBaseUrl(rawUrl, api) {
+  if (typeof rawUrl !== 'string' || !rawUrl.trim()) {
+    throw new Error('Invalid Pi channel URL');
+  }
+  const url = new URL(rawUrl.trim());
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+    throw new Error('Invalid Pi channel URL');
+  }
+  let pathname = url.pathname.replace(/\/+$/, '');
+  pathname = pathname.replace(/\/(chat\/completions|responses|models)$/i, '');
+  if (api === 'anthropic-messages') {
+    pathname = pathname.replace(/\/v1\/messages$/i, '').replace(/\/messages$/i, '').replace(/\/v1$/i, '');
+  } else if (api === 'openai-completions' || api === 'openai-responses') {
+    pathname = pathname.replace(/\/v1\/messages$/i, '/v1').replace(/\/messages$/i, '');
+    if (!pathname) pathname = '/v1';
+  } else if (api === 'google-generative-ai') {
+    if (!pathname) pathname = '/v1beta';
+  }
+  url.pathname = pathname || '/';
+  return url.toString().replace(/\/+$/, '');
+}
+
+export function validateUserAgent(userAgent) {
+  if (userAgent === undefined || userAgent === null || userAgent === '') return undefined;
+  if (typeof userAgent !== 'string') throw new Error('Invalid User-Agent header');
+  const trimmed = userAgent.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.length > 512 || !/^[\x20-\x7E]+$/.test(trimmed)) {
+    throw new Error('Invalid User-Agent header');
+  }
+  return trimmed;
+}
+
+/** Escape literal header values so pi-coding-agent resolveConfigValue never runs `!cmd` or `$ENV`. */
+export function escapeConfigLiteral(value) {
+  const escaped = value.split('$').join('$$');
+  return escaped.startsWith('!') ? `$!${escaped.slice(1)}` : escaped;
+}
 
 export function validateChannel(channel) {
   if (!channel || !/^[a-zA-Z0-9_-]{1,80}$/.test(channel.id) || !CHANNEL_APIS.has(channel.api)) {
     throw new Error('Invalid Pi channel');
   }
-  const url = new URL(channel.baseUrl);
-  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
-    throw new Error('Invalid Pi channel URL');
-  }
-  return url.toString().replace(/\/+$/, '');
+  return normalizeChannelBaseUrl(channel.baseUrl, channel.api);
 }
 
-export function registerChannel(runtime, channel, modelId) {
+export function registerChannel(runtime, channel, modelId, userAgent) {
   const baseUrl = validateChannel(channel);
+  const ua = validateUserAgent(userAgent);
   const model = channel.models?.find((item) => item.id === modelId);
   if (!model || !model.id || model.id.length > 256 || !Number.isInteger(model.contextWindow) ||
       model.contextWindow < 1024 || model.contextWindow > 10000000 || !Number.isInteger(model.maxTokens) ||
       model.maxTokens < 1 || model.maxTokens > model.contextWindow) throw new Error('Invalid Pi channel model');
   // Namespace custom providers so two endpoints using the same model id never collide.
   const provider = `agentikz-${channel.id}`;
+  const isCustomOpenAiGateway = channel.api === 'openai-completions' && !baseUrl.includes('api.openai.com');
+  const isDeepSeek = /deepseek/i.test(model.id);
   runtime.registerProvider(provider, { baseUrl, api: channel.api,
     authHeader: channel.api.startsWith('openai-'),
-    models: [{ id: model.id, name: model.name || model.id, reasoning: model.reasoning === true,
+    ...(ua ? { headers: { 'User-Agent': escapeConfigLiteral(ua) } } : {}),
+    models: [{ id: model.id, name: model.name || model.id,
+      reasoning: model.reasoning === true || (isCustomOpenAiGateway && isDeepSeek),
       input: model.supportsImages ? ['text', 'image'] : ['text'],
       contextWindow: model.contextWindow, maxTokens: model.maxTokens,
+      ...(isCustomOpenAiGateway ? {
+        compat: {
+          supportsStore: false,
+          supportsDeveloperRole: false,
+          maxTokensField: 'max_tokens',
+          ...(isDeepSeek ? {
+            requiresReasoningContentOnAssistantMessages: true,
+            thinkingFormat: 'deepseek',
+            supportsReasoningEffort: false,
+          } : {}),
+        },
+      } : {}),
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }],
   });
   return provider;
 }
 
 /** Discovery is user-initiated. Never forward credentials through redirects or error bodies. */
-export async function fetchChannelModels(channel, apiKey, fetchImpl = fetch) {
+export async function fetchChannelModels(channel, apiKey, fetchImpl = fetch, userAgent = undefined) {
   const base = validateChannel(channel);
+  const ua = validateUserAgent(userAgent);
   if (typeof apiKey !== 'string' || !apiKey.trim()) throw new Error('请先保存该渠道的 API Key。');
   const url = new URL(base + (channel.api === 'anthropic-messages' && !/\/v1$/.test(base) ? '/v1/models' : '/models'));
-  const headers = channel.api === 'anthropic-messages'
-    ? { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' }
-    : channel.api === 'google-generative-ai' ? { 'x-goog-api-key': apiKey } : { authorization: `Bearer ${apiKey}` };
+  const headers = {
+    ...(channel.api === 'anthropic-messages'
+      ? { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' }
+      : channel.api === 'google-generative-ai' ? { 'x-goog-api-key': apiKey } : { authorization: `Bearer ${apiKey}` }),
+    ...(ua ? { 'user-agent': ua } : {}),
+  };
   const items = [];
   const seenPages = new Set();
   for (let page = 0; page < 20; page++) {
@@ -78,11 +142,14 @@ export async function fetchChannelModels(channel, apiKey, fetchImpl = fetch) {
         if (typeof rawId !== 'string') continue;
         const id = channel.api === 'google-generative-ai' ? rawId.replace(/^models\//, '') : rawId;
         if (!id.trim() || id.length > 256) continue;
-        const contextWindow = Number.isInteger(item.context_length ?? item.inputTokenLimit)
-          ? Math.max(1024, Math.min(10000000, item.context_length ?? item.inputTokenLimit)) : 32768;
+        const rawContext = item.context_length ?? item.max_context_length ?? item.inputTokenLimit;
+        const contextWindow = Number.isInteger(rawContext)
+          ? Math.max(1024, Math.min(10000000, rawContext)) : DEFAULT_CHANNEL_CONTEXT_WINDOW;
+        const rawMaxOut = item.max_completion_tokens ?? item.max_output_tokens ?? item.outputTokenLimit;
         models.set(id, { id, name: String(item.display_name ?? item.displayName ?? item.name ?? id).slice(0, 256),
-          reasoning: false, supportsImages: item.architecture?.input_modalities?.includes('image') === true,
-          contextWindow, maxTokens: Math.min(contextWindow, Number.isInteger(item.outputTokenLimit) ? Math.max(1, item.outputTokenLimit) : 4096) });
+          reasoning: typeof item.reasoning === 'boolean' ? item.reasoning : inferModelReasoning(id),
+          supportsImages: item.architecture?.input_modalities?.includes('image') === true,
+          contextWindow, maxTokens: Math.min(contextWindow, Number.isInteger(rawMaxOut) ? Math.max(1, rawMaxOut) : DEFAULT_CHANNEL_MAX_TOKENS) });
       }
       return [...models.values()].sort((a, b) => a.id.localeCompare(b.id));
     }
