@@ -88,6 +88,8 @@
 
 ## 工作原理与架构
 
+**外部 Agent 控制软件**：AgenTikZ 可作为独立 **MCP Server**，让其他本机 Agent 工具直接读图、画图和改图。打开 **设置 → MCP 服务 → 让外部 Agent 操作 AgenTikZ**，选择只读、修改需审核或直接修改，复制 stdio 连接配置到外部客户端即可；不需要在软件内聊天、启动 ACP 适配器或配置模型 API Key。连接绑定当前画布，切换画布、关闭连接或退出应用后失效。详见 [MCP 服务指南](docs/mcp-guide.zh-CN.md)。
+
 ```mermaid
 flowchart TB
     subgraph Frontend["前端工作台 (React 19 + Zustand + CodeMirror 6)"]
@@ -100,7 +102,7 @@ flowchart TB
     subgraph Backend["Tauri v2 Rust 桌面核心"]
         AcpBridge["ACP v1 客户端桥接 (stdio)\n严格超时控制 · 权限默认拒绝 (Fail-Closed)"]
         TexEngine["内置 TeX 编译引擎\n(XeLaTeX · Tectonic 内核 · 独立临时目录隔离)"]
-        McpManifest["内置 MCP 工具契约定义\n(AST / 选中图元 / 补丁 Schema)"]
+        McpManifest["MCP 画布桥接\n目标绑定 · 版本校验 · 审核或直接修改"]
     end
 
     Canvas <-->|"精确 SourceSpan 局部替换"| Parser
@@ -108,11 +110,15 @@ flowchart TB
     AgentUI <-->|"Tauri IPC + acp:stream 流事件"| AcpBridge
     Canvas -->|"完整 Standalone .tex"| TexEngine
     AcpBridge <-->|"JSON-RPC 2.0 over stdio"| LocalAgents["本机 ACP 智能体 CLI\n(Claude Code · Codex · OpenCode · Gemini · Cursor · Kimi)"]
+    ExternalAgent["外部 Agent 软件\n无需应用内聊天"] <-->|"MCP stdio"| McpSidecar["打包的 Rust MCP Server"]
+    LocalAgents <-->|"MCP stdio"| McpSidecar
+    McpSidecar <-->|"临时令牌 · 本机桥接"| McpManifest
+    McpManifest <-->|"实时画布工具"| Parser
 ```
 
 - **无损 CST/AST 解析引擎**：位于 `src/core/parser/`，通过深度感知括号 `[]` 与花括号 `{}` 匹配解析 `\tikzset` 样式、`\node` 节点、正交/弧线/残差 `\draw` 连线以及 `\begin{axis}...\end{axis}` 实验图表，确保含分号的数学公式（如 `$p(x;\theta)$`）或含括号文本绝不误截断语句。
 - **官方 ACP v1 通信实现**：位于 `src-tauri/src/acp/mod.rs`，桌面端通过 `stdio` 启动本地已安装的 ACP 适配器，对初始化握手（`20s`）、会话创建（`20s`）、提示词生成（`180s`）及子进程退出均设有严格超时边界。
-- **当前版本边界**：**v0.8.1** 自动模式下每次有效的工具修改立即应用，保留版本冲突检查、连续修改整组撤回和已应用配图的真实 TeX 预览；仍可切换手动审核。继续内置 v0.8.0 引入的 TeX 编译引擎、中文字体、常用宏包及官方论文模板库。详见 [v0.8.1 发布说明](docs/releases/v0.8.1.md)、[MCP 服务指南](docs/mcp-guide.zh-CN.md) 和 [Pi 接入说明](docs/pi-runtime.zh-CN.md)。
+- **当前版本边界**：**v0.9.0** 提供独立 stdio MCP 绘图服务，让外部本机 Agent 软件直接操作画布，无需应用内聊天或 ACP 会话。支持只读、修改需审核和直接修改，保留目标与版本检查、撤销及真实 TeX 预览。既有应用内 Agent、内置 TeX 引擎、中文字体和论文模板继续保留。详见 [v0.9.0 发布说明](docs/releases/v0.9.0.md)、[MCP 服务指南](docs/mcp-guide.zh-CN.md) 和 [Pi 接入说明](docs/pi-runtime.zh-CN.md)。
 
 ## 论文模板与学术主题
 

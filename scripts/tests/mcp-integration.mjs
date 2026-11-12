@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const binary = path.join(root, 'src-tauri/binaries', process.platform === 'win32' ? 'agentikz-mcp.exe' : 'agentikz-mcp');
 
-async function fixture(t) {
+async function fixture(t, scope) {
   const token = randomBytes(32).toString('hex');
   const calls = [];
   const server = createServer(async (req, res) => {
@@ -34,9 +34,12 @@ async function fixture(t) {
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   t.after(() => new Promise((resolve) => { server.close(resolve); server.closeAllConnections(); }));
+  const env = { ...globalThis.process.env, AGENTIKZ_MCP_ENDPOINT: `http://127.0.0.1:${server.address().port}/call`, AGENTIKZ_MCP_TOKEN: token };
+  delete env.AGENTIKZ_MCP_SCOPE;
+  if (scope) env.AGENTIKZ_MCP_SCOPE = scope;
   const process = spawn(binary, [], {
     windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
-    env: { ...globalThis.process.env, AGENTIKZ_MCP_ENDPOINT: `http://127.0.0.1:${server.address().port}/call`, AGENTIKZ_MCP_TOKEN: token },
+    env,
   });
   let nextId = 1;
   let stderr = '';
@@ -74,6 +77,31 @@ async function fixture(t) {
   });
   return { request, notify, calls, server };
 }
+
+test('independent canvas-scoped client discovers drawing tools without exposing manuscript access', async (t) => {
+  const client = await fixture(t, 'canvas');
+  const initialized = await client.request('initialize', {
+    protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'Independent external agent', version: '1' },
+  });
+  assert.equal(initialized.error, undefined);
+  assert.match(initialized.result.instructions, /external MCP client/);
+  client.notify('notifications/initialized');
+  const listed = await client.request('tools/list');
+  assert.equal(listed.result.tools.length, 11);
+  assert.ok(listed.result.tools.some((tool) => tool.name === 'propose_surgical_diff'));
+  assert.ok(listed.result.tools.some((tool) => tool.name === 'render_canvas_preview'));
+  for (const name of ['read_project_file', 'get_project_context', 'propose_project_patch', 'get_paper_diagnostics']) {
+    assert.ok(!listed.result.tools.some((tool) => tool.name === name));
+    const denied = await client.request('tools/call', { name, arguments: {} });
+    assert.equal(denied.error.code, -32602);
+  }
+  assert.equal(client.calls.length, 0, 'Out-of-scope tools must not reach the app bridge');
+  const source = await client.request('tools/call', { name: 'get_canvas_source', arguments: {} });
+  assert.equal(source.result.isError, false);
+  assert.equal(source.result.structuredContent.revision, 7);
+  const preview = await client.request('tools/call', { name: 'render_canvas_preview', arguments: {} });
+  assert.equal(preview.result.content[1].type, 'image');
+});
 
 for (const version of ['2024-11-05', '2025-11-25']) {
   test(`native stdio MCP supports ${version}, real tool forwarding and structured failures`, async (t) => {

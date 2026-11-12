@@ -66,7 +66,7 @@ const NAV_ITEMS: Array<{
   {
     id: 'mcp',
     label: 'MCP 服务',
-    sublabel: '画布工具与外部服务',
+    sublabel: '让外部 Agent 画图改图',
     icon: <Plug className="w-4 h-4" />,
   },
   {
@@ -385,13 +385,13 @@ export const SettingsModal: React.FC = () => {
             <div className="flex items-center justify-between font-medium text-slate-700 mb-1">
               <span className="flex items-center gap-1">
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-                {activeSection === 'mcp' ? 'MCP 本机凭据' : '本机凭据与 BYOA'}
+                {activeSection === 'mcp' ? '外部接入授权' : '本机凭据与 BYOA'}
               </span>
-              <span className="font-mono text-[9.5px] text-slate-400">ACP v1</span>
+              <span className="font-mono text-[9.5px] text-slate-400">{activeSection === 'mcp' ? 'MCP stdio' : 'ACP v1'}</span>
             </div>
             <p className="leading-relaxed text-[10px] text-slate-500">
               {activeSection === 'mcp'
-                ? '敏感值保存在系统凭据库或本次运行内存；导出配置时排除密钥。'
+                ? '外部连接配置含临时令牌，仅交给受信任的本机客户端。关闭连接、切换画布或退出后失效。'
                 : 'ACP 复用本机 CLI 登录；内置 Pi 的 API Key 存入系统凭据库，并用于所选模型服务。'}
             </p>
           </div>

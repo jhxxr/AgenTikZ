@@ -103,6 +103,26 @@ pub fn builtin_tools() -> Vec<ToolSpec> {
     tools
 }
 
+/// The standalone drawing connection deliberately excludes manuscript access.
+pub fn canvas_tools() -> Vec<ToolSpec> {
+    builtin_tools()
+        .into_iter()
+        .filter(|tool| !matches!(tool.name.as_str(),
+            "get_project_context" | "read_project_file" | "propose_project_patch" | "get_paper_diagnostics"))
+        .map(|mut tool| {
+            if tool.name == "get_canvas_source" {
+                tool.description.push_str(" For external clients, also returns access (read/review/direct) and latestProposal status so you can observe user approval or rejection.");
+            } else if tool.name == "render_canvas_preview" {
+                tool.description = tool.description.replace(
+                    "At most 3 distinct renders per request",
+                    "At most 3 distinct renders per external draft; a new source proposal resets the budget",
+                );
+            }
+            tool
+        })
+        .collect()
+}
+
 impl ToolSpec {
     pub fn into_tool(self) -> Tool {
         Tool::new(

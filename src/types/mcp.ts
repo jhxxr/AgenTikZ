@@ -39,6 +39,16 @@ export interface CanvasTarget {
   canvasId: string;
 }
 
+export type ExternalMcpAccess = 'read' | 'review' | 'direct';
+
+export interface ExternalMcpConnection {
+  requestId: string;
+  target: CanvasTarget;
+  access: ExternalMcpAccess;
+  /** Temporary credentials; never persist this in settings or ordinary exports. */
+  clientConfig?: Record<string, unknown>;
+}
+
 export interface McpToolRequest {
   requestId: string;
   toolRequestId: string;

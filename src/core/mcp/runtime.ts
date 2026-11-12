@@ -17,6 +17,7 @@ import { renderAgentPreview } from '../agent/visual-review';
 import { imageDataUrl } from '../agent/image-attachments';
 import { preserveReproductionIntent } from '../agent/diagram-design-policy';
 import { maskLatexComments } from '../tex/source';
+import { getExternalProposal, publishExternalProposal } from './external';
 
 class ToolError extends Error {
   constructor(public code: string, message: string) { super(message); }
@@ -134,7 +135,10 @@ export async function executeMcpTool(event: McpToolRequest): Promise<unknown> {
         context.target.projectId !== event.target.projectId || context.target.canvasId !== event.target.canvasId) {
       fail('target_mismatch', '工具请求与原始画布不一致。');
     }
-    if (isProjectTool(event.toolName)) return executeProjectTool(event, context);
+    if (isProjectTool(event.toolName)) {
+      if (context.external) fail('unknown_tool', '外部绘图连接不开放论文文件访问。');
+      return executeProjectTool(event, context);
+    }
     validateArguments(event.toolName, event.arguments);
     const args = event.arguments;
     if (event.toolName === 'get_diagram_design_skill') {
@@ -156,9 +160,23 @@ export async function executeMcpTool(event: McpToolRequest): Promise<unknown> {
     };
     if (event.toolName === 'get_theme_palette') return JOURNAL_THEMES[themeId];
     const hash = await sourceHash(source);
-    const version = { ...context.target, revision, sourceHash: hash, themeId };
+    // Read-only responses must also remain bound across asynchronous hashing.
+    if (getMcpRequest(event.requestId) !== context || !useMcpStore.getState().config.builtinEnabled) {
+      fail('request_ended', 'MCP 请求已结束或工具授权已关闭。');
+    }
+    if (!sameCanvas(context.target)) fail('target_inactive', '画布已切换，请重新连接原画布。');
+    const hashedWorkspace = useWorkspaceStore.getState();
+    if (hashedWorkspace.tikzCode !== source || (hashedWorkspace.sourceRevision ?? 0) !== revision) {
+      fail('source_changed', '读取期间画布已变化，请重新读取。');
+    }
+    const version = { ...context.target, revision, sourceHash: hash, themeId,
+      ...(context.external ? { access: context.external.access } : {}) };
     const doc = parseTikzDocument(source, themeId);
-    if (event.toolName === 'get_canvas_source') return { ...version, source };
+    if (event.toolName === 'get_canvas_source') {
+      const latest = context.external ? getExternalProposal(event.requestId) : undefined;
+      return { ...version, source,
+        ...(latest ? { latestProposal: { proposalId: latest.id, status: latest.status, summary: latest.summary } } : {}) };
+    }
     if (event.toolName === 'get_canvas_ast') return { ...version, ast: doc };
     if (event.toolName === 'get_selected_elements') return {
       ...version, elements: [...doc.nodes, ...doc.edges, ...doc.charts]
@@ -166,9 +184,10 @@ export async function executeMcpTool(event: McpToolRequest): Promise<unknown> {
         .map((item) => ({ ...item, source: source.slice(item.span.start, item.span.end) })),
     };
     const session = useAgentStore.getState().sessions.find((s) => s.id === context.target.conversationId);
-    const currentProposal = session?.messages.find((message) => message.id === context.messageId)?.patchProposal;
+    const currentProposal = context.external ? getExternalProposal(event.requestId)
+      : session?.messages.find((message) => message.id === context.messageId)?.patchProposal;
     const inspectableProposal = currentProposal?.status === 'pending' ||
-      (currentProposal?.status === 'applied' && currentProposal.autoApplied);
+      (currentProposal?.status === 'applied' && (currentProposal.autoApplied || context.external));
     if (event.toolName === 'render_canvas_preview') {
       if (context.visualReviewEnabled === false) fail('preview_disabled', '本轮已关闭视觉复核。');
       if (args.proposalId && (args.proposalId !== currentProposal?.id || !inspectableProposal)) {
@@ -195,8 +214,9 @@ export async function executeMcpTool(event: McpToolRequest): Promise<unknown> {
       try { preview = await cache.get(key)!; } catch (error) { renderError = error; }
       const live = useWorkspaceStore.getState();
       const liveSettings = useSettingsStore.getState();
-      const liveProposal = useAgentStore.getState().sessions.find((s) => s.id === context.target.conversationId)
-        ?.messages.find((message) => message.id === context.messageId)?.patchProposal;
+      const liveProposal = context.external ? getExternalProposal(event.requestId)
+        : useAgentStore.getState().sessions.find((s) => s.id === context.target.conversationId)
+          ?.messages.find((message) => message.id === context.messageId)?.patchProposal;
       if (getMcpRequest(event.requestId) !== context || !useMcpStore.getState().config.builtinEnabled ||
           !sameCanvas(context.target) || live.sourceRevision !== revision || live.tikzCode !== source ||
           (live.activeThemeId ?? 'neurips') !== themeId || liveSettings.texEngine !== texEngine ||
@@ -206,11 +226,13 @@ export async function executeMcpTool(event: McpToolRequest): Promise<unknown> {
       if (!preview) fail('preview_failed', renderError instanceof Error ? renderError.message : String(renderError));
       const rendered = preview!;
       if (args.proposalId) {
-        useAgentStore.setState((state) => ({ sessions: state.sessions.map((s) => s.id === context.target.conversationId
+        const renderedProposal = { ...currentProposal!, renderPreview: {
+          dataUrl: imageDataUrl(rendered.image), sourceHash: previewSourceHash,
+        } };
+        if (context.external) useMcpStore.setState({ externalProposal: renderedProposal });
+        else useAgentStore.setState((state) => ({ sessions: state.sessions.map((s) => s.id === context.target.conversationId
           ? { ...s, messages: s.messages.map((message) => message.id === context.messageId
-            ? { ...message, patchProposal: { ...currentProposal!, renderPreview: {
-              dataUrl: imageDataUrl(rendered.image), sourceHash: previewSourceHash,
-            } } } : message) } : s) }));
+            ? { ...message, patchProposal: renderedProposal } : message) } : s) }));
       }
       return { ...version, previewSourceHash, proposalId: args.proposalId,
         applied: Boolean(args.proposalId && currentProposal?.status === 'applied'), cached,
@@ -231,12 +253,14 @@ export async function executeMcpTool(event: McpToolRequest): Promise<unknown> {
         report: analyzeTikzLayout(args.proposalId ? currentProposal!.newTikzCode : source, themeId),
       };
     }
-    if (!context.agentId || !context.messageId || !session) fail('read_only_request', '此连接只允许读取画布。');
-    if (currentProposal && currentProposal.status !== 'pending' &&
+    if (context.external ? context.external.access === 'read' : !context.agentId || !context.messageId || !session) {
+      fail('read_only_request', '此连接只允许读取画布。');
+    }
+    if (!context.external && currentProposal && currentProposal.status !== 'pending' &&
         !(context.autoMode && useSettingsStore.getState().agentAutoMode && currentProposal.status === 'applied' && currentProposal.autoApplied)) {
       fail('proposal_closed', '已审阅的提案不能被后台覆盖，请发起新一轮请求。');
     }
-    if (currentProposal?.status === 'applied' && proposalConflict(currentProposal, true)) {
+    if (!context.external && currentProposal?.status === 'applied' && proposalConflict(currentProposal, true)) {
       fail('source_changed', '上次应用后画布已变化，请发起新一轮请求，避免覆盖后续编辑。');
     }
     if (args.baseRevision !== revision || args.baseSourceHash !== hash) fail('source_changed', '画布已变化，请重新读取后生成提案。');
@@ -278,11 +302,14 @@ export async function executeMcpTool(event: McpToolRequest): Promise<unknown> {
         live.tikzCode !== source || (live.sourceRevision ?? 0) !== revision) {
       fail('source_changed', '画布或请求已变化，请重新读取后生成提案。');
     }
-    const previousTikzCode = currentProposal?.status === 'applied' && currentProposal.autoApplied
+    const previousTikzCode = !context.external && currentProposal?.status === 'applied' && currentProposal.autoApplied
       ? currentProposal.previousTikzCode : undefined;
     const diff = computeTikzDiff(previousTikzCode ?? source, nextSource);
     const proposal: TikzPatchProposal = {
-      id: `mcp_proposal_${event.requestId}`, summary: stringArg(args, 'summary'),
+      id: context.external
+        ? (currentProposal?.status === 'pending' ? currentProposal.id : `mcp_proposal_${event.toolRequestId}`)
+        : `mcp_proposal_${event.requestId}`,
+      summary: stringArg(args, 'summary'),
       rationale: typeof args.rationale === 'string' ? args.rationale : '由 MCP 工具提交的画布修改。',
       newTikzCode: nextSource, affectedElementIds: diff.affectedElementIds, status: 'pending', previousTikzCode,
       mode: event.toolName === 'propose_surgical_diff' ? 'surgical_diff' : 'full_replace',
@@ -290,12 +317,16 @@ export async function executeMcpTool(event: McpToolRequest): Promise<unknown> {
       layoutScore: analyzeTikzLayout(nextSource, themeId).score,
       targetCanvas: context.target, baseRevision: revision, baseSourceHash: hash, baseTikzCode: source,
     };
-    useAgentStore.setState((state) => ({ sessions: state.sessions.map((s) => s.id === context.target.conversationId
-      ? { ...s, messages: s.messages.map((message) => message.id === context.messageId
-          ? { ...message, patchProposal: proposal } : message) } : s) }));
-    autoApplyMcpProposal(event.requestId, 'canvas');
-    const published = useAgentStore.getState().sessions.find((s) => s.id === context.target.conversationId)
-      ?.messages.find((message) => message.id === context.messageId)?.patchProposal;
+    if (context.external) publishExternalProposal(event.requestId, proposal);
+    else {
+      useAgentStore.setState((state) => ({ sessions: state.sessions.map((s) => s.id === context.target.conversationId
+        ? { ...s, messages: s.messages.map((message) => message.id === context.messageId
+            ? { ...message, patchProposal: proposal } : message) } : s) }));
+      autoApplyMcpProposal(event.requestId, 'canvas');
+    }
+    const published = context.external ? getExternalProposal(event.requestId)
+      : useAgentStore.getState().sessions.find((s) => s.id === context.target.conversationId)
+        ?.messages.find((message) => message.id === context.messageId)?.patchProposal;
     const applied = published?.status === 'applied';
     const liveSource = useWorkspaceStore.getState().tikzCode;
     return { proposalId: proposal.id, status: published?.status ?? 'pending', applied,
@@ -332,14 +363,19 @@ export function ensureMcpRuntime(): Promise<void> {
             } : message) } : s) }));
       };
       update('running');
-      useMcpStore.setState({ sessionStatus: `正在执行项目工具：${event.toolName}…` });
+      if (context.external) useMcpStore.setState({ externalLastCall: `${event.toolName} · 执行中…` });
+      else useMcpStore.setState({ sessionStatus: `正在执行项目工具：${event.toolName}…` });
       const result = await executeMcpTool(event);
       try {
         await invoke('mcp_tool_result', { requestId: event.requestId, toolRequestId: event.toolRequestId, result });
         const failed = !!(result && typeof result === 'object' && 'error' in result);
         const elapsedMs = Math.round(performance.now() - started);
         update(failed ? 'failed' : 'completed');
-        useMcpStore.setState({
+        if (context.external) {
+          if (useMcpStore.getState().external?.requestId === event.requestId) {
+            useMcpStore.setState({ externalLastCall: `${event.toolName} · ${failed ? '失败' : '成功'} · ${elapsedMs} ms` });
+          }
+        } else useMcpStore.setState({
           lastBuiltinCall: `${event.toolName} · ${failed ? '失败' : '成功'} · ${elapsedMs} ms`,
           sessionStatus: failed
             ? `项目工具 ${event.toolName} 返回提示（${elapsedMs} ms），等待模型调整…`

@@ -1,11 +1,13 @@
 import { useProjectStore } from '../../store/useProjectStore';
 import { useWorkspaceStore } from '../../store/useWorkspaceStore';
 import type { AcpAgentId, TikzPatchProposal } from '../../types/acp';
-import type { CanvasTarget } from '../../types/mcp';
+import type { CanvasTarget, ExternalMcpAccess } from '../../types/mcp';
 import type { DiagramDesignMode } from '../agent/diagram-design-policy';
 
 export interface McpRequestContext {
   target: CanvasTarget;
+  /** Independent MCP client authorization, not an ACP/Pi agent identity. */
+  external?: { access: ExternalMcpAccess };
   agentId?: AcpAgentId;
   messageId?: string;
   /** Captured for this request; enabling auto mode later cannot approve older work. */

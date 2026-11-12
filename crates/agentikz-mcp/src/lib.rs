@@ -1,6 +1,6 @@
 pub mod manifest;
 
-use manifest::{builtin_tools, ToolSpec};
+use manifest::{builtin_tools, canvas_tools, ToolSpec};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use rmcp::{
     model::*,
@@ -20,6 +20,7 @@ pub struct CanvasBridge {
     client: reqwest::Client,
     endpoint: String,
     token: String,
+    canvas_only: bool,
 }
 
 impl CanvasBridge {
@@ -49,7 +50,17 @@ impl CanvasBridge {
             client,
             endpoint,
             token,
+            canvas_only: false,
         })
+    }
+
+    pub fn canvas_only(mut self) -> Self {
+        self.canvas_only = true;
+        self
+    }
+
+    fn tools(&self) -> Vec<ToolSpec> {
+        if self.canvas_only { canvas_tools() } else { builtin_tools() }
     }
 }
 
@@ -57,7 +68,11 @@ impl ServerHandler for CanvasBridge {
     fn get_info(&self) -> ServerConfig {
         let mut config = ServerConfig::new(ServerCapabilities::builder().enable_tools().build());
         config.server_info = Implementation::new("AgenTikZ", env!("CARGO_PKG_VERSION"));
-        config.instructions = Some("Use get_project_context to discover project files and read_project_file before proposing manuscript changes. Use get_canvas_source before canvas edits. Use render_canvas_preview to compile an exact figure draft and inspect its image before refining. Manual mode keeps proposals pending for user review; automatic mode immediately applies each valid propose_* edit with version checks. Trust returned status/applied and read the latest source/version before further edits. Previewing itself does not apply edits or validate manuscript builds.".into());
+        config.instructions = Some(if self.canvas_only {
+            "You are controlling the open AgenTikZ drawing application from an external MCP client. No in-app agent, model API key or ACP session is required. The connection is bound to the canvas explicitly shared by the user. Read get_canvas_source first; its access field is read, review or direct. In review mode propose_* creates a draft for approval in Settings > MCP; in direct mode valid edits immediately update the editor with undo support. Trust status/applied, and reread revision/sourceHash before every edit. render_canvas_preview returns real TeX pixels and never applies edits. Manuscript and arbitrary filesystem access are not exposed. If disconnected, ask the user to enable a new connection and replace the temporary client configuration."
+        } else {
+            "Use get_project_context to discover project files and read_project_file before proposing manuscript changes. Use get_canvas_source before canvas edits. Use render_canvas_preview to compile an exact figure draft and inspect its image before refining. Manual mode keeps proposals pending for user review; automatic mode immediately applies each valid propose_* edit with version checks. Trust returned status/applied and read the latest source/version before further edits. Previewing itself does not apply edits or validate manuscript builds."
+        }.into());
         config
     }
 
@@ -67,7 +82,7 @@ impl ServerHandler for CanvasBridge {
         _: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         Ok(ListToolsResult::with_all_items(
-            builtin_tools()
+            self.tools()
                 .into_iter()
                 .map(ToolSpec::into_tool)
                 .collect(),
@@ -79,7 +94,7 @@ impl ServerHandler for CanvasBridge {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        if !builtin_tools()
+        if !self.tools()
             .iter()
             .any(|tool| tool.name == request.name.as_ref())
         {
@@ -123,7 +138,13 @@ pub fn bridge_tool_result(mut body: Value) -> CallToolResult {
 pub async fn run_stdio() -> Result<(), String> {
     let endpoint = std::env::var("AGENTIKZ_MCP_ENDPOINT").map_err(|_| "Missing bridge endpoint")?;
     let token = std::env::var("AGENTIKZ_MCP_TOKEN").map_err(|_| "Missing bridge token")?;
-    let service = CanvasBridge::new(endpoint, token)?
+    let bridge = CanvasBridge::new(endpoint, token)?;
+    let bridge = match std::env::var("AGENTIKZ_MCP_SCOPE").as_deref() {
+        Ok("canvas") => bridge.canvas_only(),
+        Err(std::env::VarError::NotPresent) => bridge,
+        _ => return Err("Unsupported MCP tool scope".into()),
+    };
+    let service = bridge
         .serve(rmcp::transport::stdio())
         .await
         .map_err(|_| "Cannot start MCP stdio transport")?;

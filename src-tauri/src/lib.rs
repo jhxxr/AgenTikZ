@@ -1,3 +1,5 @@
+use tauri::Manager;
+
 pub mod acp;
 mod agent_image;
 pub mod image_gen;
@@ -14,6 +16,7 @@ pub mod tex {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(mcp::external::ExternalConnections::default())
         .setup(|app| {
             acp::init_bundled_adapters(app.handle());
             tex::engine::init(app.handle());
@@ -41,6 +44,8 @@ pub fn run() {
             mcp::mcp_test_server,
             mcp::bridge::mcp_tool_result,
             mcp::bridge::mcp_test_builtin,
+            mcp::external::mcp_start_external,
+            mcp::external::mcp_stop_external,
             image_gen::img_generate_illustration,
             image_gen::img_save_processed_asset,
             tex::compiler::tex_compile_preview,
@@ -76,6 +81,7 @@ pub fn run() {
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 mcp::bridge::revoke_window(window.label());
+                mcp::external::stop_window(window.app_handle(), window.label());
                 acp::cancel_window(window.label());
                 pi::close_window(window.label());
             }

@@ -5,6 +5,7 @@ import { useAgentStore } from '../../store/useAgentStore';
 import { parseMcpImport, exportMcpConfig } from '../../core/mcp/config';
 import type { McpServerConfig, McpValue } from '../../types/mcp';
 import { SettingsGroup, SettingsPageTitle, SettingsRow, SettingsSectionLabel, SettingsToggle, StatusBadge } from './SettingsLayout';
+import { ExternalMcpPane } from './ExternalMcpPane';
 
 const inputClass = 'w-full min-w-0 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-800 outline-none focus:border-blue-500';
 const buttonClass = 'inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-50 cursor-pointer';
@@ -76,23 +77,24 @@ export const McpSettingsPane: React.FC = () => {
     } catch (error) { setFormError(String(error)); }
   };
   return <div>
-    <SettingsPageTitle title="MCP 服务" subtitle="为 Agent 挂载画布工具与第三方服务。服务配置从下一次发送消息起生效，无需新建聊天。"
+    <SettingsPageTitle title="MCP 服务" subtitle="将 AgenTikZ 作为 MCP Server，让其他 Agent 软件直接读取、绘制和修改当前图形。"
       action={<button type="button" className={buttonClass} onClick={() => void load()} disabled={loading || saving}>刷新配置</button>} />
     {error && <div role="alert" className="mb-4 rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">{error}</div>}
     {loading && <p className="mb-4 text-xs text-slate-500">正在读取配置…</p>}
-    <SettingsSectionLabel title="AgenTikZ 内置工具" description="读取实际画布、选区和布局；修改生成待审核提案。" />
+    <ExternalMcpPane />
+    <SettingsSectionLabel title="AgenTikZ MCP 工具" description="外部接入提供 11 个绘图工具；应用内 Agent 还可使用 4 个项目/论文工具。" />
     <SettingsGroup>
-      <SettingsRow label="允许 Agent 使用 AgenTikZ 工具" description="关闭后当前轮内置工具授权也会撤销。画布修改需要点击应用。">
+      <SettingsRow label="AgenTikZ MCP 工具总开关" description="关闭后立即撤销外部接入和应用内 Agent 的工具授权。修改权限由各自的模式决定。">
         <SettingsToggle label="启用内置 MCP" checked={config.builtinEnabled} disabled={saving || loading}
           onChange={(checked) => void save({ ...config, builtinEnabled: checked })} />
       </SettingsRow>
       <div className="space-y-2 px-4 py-3">
         <div className="flex items-center justify-between gap-3">
           <div className="text-xs text-slate-600">
-            <span className="font-medium">9 个画布工具</span>
+            <span className="font-medium">11 个绘图工具 + 4 个项目工具</span>
             <p role={tests.builtin?.phase === 'error' ? 'alert' : undefined}
               className={`mt-1 text-[11px] ${tests.builtin?.phase === 'error' ? 'text-rose-600' : 'text-slate-500'}`}>
-              {tests.builtin?.message || '尚未测试；连接随每轮 Agent 请求建立。'}</p>
+              {tests.builtin?.message || '尚未测试；可验证 stdio 协议与真实画布读取，不会修改画布。'}</p>
           </div>
           <button type="button" className={buttonClass} disabled={!config.builtinEnabled || tests.builtin?.phase === 'testing' || saving}
             onClick={() => void testBuiltin()}>{tests.builtin?.phase === 'testing' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FlaskConical className="h-3.5 w-3.5" />}测试内置工具</button>
@@ -100,7 +102,9 @@ export const McpSettingsPane: React.FC = () => {
         {lastBuiltinCall && <p className="text-[11px] text-slate-500">最近调用：{lastBuiltinCall}</p>}
       </div>
     </SettingsGroup>
-    <SettingsSectionLabel title="外部 MCP 服务" description="启用即允许 Agent 使用该服务的工具。外部服务按自身权限运行，完整本机访问开关不会将其限制为只读。"
+    <details className="mb-5">
+    <summary className="mb-3 cursor-pointer text-xs font-semibold text-slate-600">高级：给应用内 Agent 挂载第三方 MCP 服务</summary>
+    <SettingsSectionLabel title="第三方工具服务（不是外部 Agent 接入入口）" description="此处是相反方向：应用内 ACP Agent 调用其他服务。第三方服务按自身权限运行，完整本机访问开关不会将其限制为只读。"
       right={<button type="button" className={buttonClass} disabled={saving} onClick={() => edit(newMcpServer())}><Plus className="h-3 w-3" />添加服务</button>} />
     <div className="mb-3 flex gap-2">
       <button type="button" className={buttonClass} onClick={() => { setImportOpen(!importOpen); setPreview(null); setFormError(''); }}><Upload className="h-3 w-3" />导入 JSON</button>
@@ -186,6 +190,7 @@ export const McpSettingsPane: React.FC = () => {
         </div>)}</div>}
       </div>)}
     </SettingsGroup>
+    </details>
     {(sessionStatus || isStreaming) && <div className="rounded-lg bg-slate-100 p-3 text-[11px] leading-relaxed text-slate-600">
       {sessionStatus || '等待当前 Agent 会话提交 MCP 配置。'}
       {isStreaming && <p className="mt-1">外部服务的变更从下一轮生效；当前轮继续使用发送时的配置。</p>}

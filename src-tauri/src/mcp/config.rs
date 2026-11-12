@@ -244,11 +244,13 @@ pub async fn mcp_get_config(app: AppHandle) -> Result<McpConfig, String> {
 #[tauri::command]
 pub async fn mcp_save_config(app: AppHandle, config: McpConfig) -> Result<McpConfig, String> {
     let enabled = config.builtin_enabled;
-    let result = tokio::task::spawn_blocking(move || save_config(&app, config))
+    let save_app = app.clone();
+    let result = tokio::task::spawn_blocking(move || save_config(&save_app, config))
         .await
         .map_err(|e| e.to_string())??;
     if !enabled {
         super::bridge::revoke_all();
+        super::external::stop_all(&app);
     }
     Ok(result)
 }

@@ -86,6 +86,8 @@ Configure local ACP agents (**Claude Code**, **OpenCode**, **Codex CLI**, **Gemi
 
 ## Architecture
 
+**External-agent control:** AgenTikZ can act as a standalone **MCP server** for another local agent application. Open **Settings → MCP 服务 → 让外部 Agent 操作 AgenTikZ**, choose read-only, reviewed edits, or direct edits, then copy the generated stdio configuration into that client. No in-app chat, ACP adapter, or model API key is needed. The connection is canvas-scoped and temporary; switching canvases or closing it revokes access. See the [MCP guide](docs/mcp-guide.zh-CN.md).
+
 ```mermaid
 flowchart TB
     subgraph Frontend["React 19 + Zustand + CodeMirror 6"]
@@ -107,6 +109,7 @@ flowchart TB
     Canvas -->|"Standalone .tex"| TexEngine
     AcpBridge <-->|"JSON-RPC 2.0 over stdio"| LocalAgents["Local ACP Agents\n(Claude Code · Codex · OpenCode · Gemini · Cursor · Kimi)"]
     LocalAgents <-->|"MCP stdio"| McpSidecar["Bundled Rust MCP Server"]
+    IndependentAgent["External Agent Application\nNo in-app chat required"] <-->|"MCP stdio · Explicit canvas authorization"| McpSidecar
     McpSidecar <-->|"Authenticated Loopback Bridge"| McpManifest
     McpManifest <-->|"Targeted Tool Requests"| Parser
     LocalAgents <-->|"MCP stdio / Streamable HTTP"| ExternalMcp["User-Configured MCP Services"]
@@ -114,7 +117,7 @@ flowchart TB
 
 - **Lossless CST/AST Engine**: Located in `src/core/parser/`, the parser resolves `\tikzset` style definitions, `\node` statements, orthogonal/curved/residual `\draw` edges, and `\begin{axis}...\end{axis}` PGFPlots environments using depth-aware bracket `[]` and brace `{}` matching so math expressions like `$p(x;\theta)$` never truncate statement boundaries.
 - **Official ACP v1 Transport**: Located in `src-tauri/src/acp/mod.rs`, the desktop backend launches locally installed ACP adapters over `stdio` with bounded initialization (`20s`), session creation (`20s`), prompt execution (`180s`), and transport shutdown timeouts.
-- **Release Scope**: **v0.8.1** applies each valid assistant tool edit immediately in automatic mode, with version-conflict checks, cumulative undo and real TeX previews of applied figures. Manual review remains available. The bundled TeX engine, CJK fonts, common packages and official paper template library introduced in v0.8.0 remain included. See [v0.8.1 release notes](docs/releases/v0.8.1.md).
+- **Release Scope**: **v0.9.0** exposes a standalone stdio MCP drawing server to external local agent applications, without an in-app chat or ACP session. Choose read-only, reviewed edits or direct edits; canvas/version checks, undo and real TeX previews remain in place. Existing in-app agents and the bundled TeX engine, CJK fonts and paper templates are retained. See [v0.9.0 release notes](docs/releases/v0.9.0.md).
 
 ## Paper Templates & Themes
 
@@ -297,6 +300,6 @@ cargo test --manifest-path src-tauri/Cargo.toml
   - **Configurable Local Access**: **Settings → Agent → 完整本机访问 (Full local access)** is off by default. Enabling it allows the agent to read and modify files outside the project and execute its native commands. This preference is saved locally and takes effect on the next message, including in an existing chat.
   - **Working Directory**: Restricted sessions use `app_data_dir()/agent-workspace`. With full access enabled, the working directory follows the current project, or a folder selected in Agent settings; without either, it uses the application workspace. Relative or missing custom directories produce an actionable error. A working directory is not an OS sandbox.
   - **Tool Permissions**: Restricted sessions cancel native filesystem/command permission requests; explicitly enabled MCP tools are authorized independently. Full access selects the agent's advertised full-access mode when available and enables ACP text-file read/write capabilities. Permission responses select `allow_once`; requests offering only persistent permission are cancelled. Native CLI tools retain their own capabilities and OS permissions. Canvas proposals still require clicking Apply.
-  - **MCP Services**: **Settings → MCP 服务** manages the bundled 9-tool canvas server and external stdio/Streamable HTTP services. Sensitive values use OS credentials or explicit session-only memory; exports omit them. Canvas proposals bind to their original canvas and source revision. See the [MCP guide](docs/mcp-guide.zh-CN.md).
+  - **MCP Server**: **Settings → MCP 服务** exposes 11 drawing tools to independent local agent clients via stdio, with read-only, review, or direct-edit authorization. Edits bind to the shared canvas and source revision and use the existing undo/save workflow. The copied connection configuration contains a temporary token; only share it with trusted clients. In-app agents retain 4 additional project tools. Third-party MCP service management remains under Advanced. See the [MCP guide](docs/mcp-guide.zh-CN.md).
   - **External Agent Privileges**: Note that an ACP agent CLI process you launch still runs under your OS user account and sends prompt context to the model provider configured in that CLI.
 - **License**: Released under the [MIT License](LICENSE).

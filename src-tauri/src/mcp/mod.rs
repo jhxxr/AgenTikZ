@@ -1,5 +1,6 @@
 pub mod bridge;
 mod config;
+pub mod external;
 
 pub use agentikz_mcp::manifest::{builtin_tools, ToolSpec};
 pub use config::*;

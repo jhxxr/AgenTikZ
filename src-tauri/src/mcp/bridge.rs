@@ -48,6 +48,7 @@ pub struct BridgeContext {
     token: String,
     active: AtomicBool,
     proposal_created: AtomicBool,
+    canvas_only: bool,
     pending: Mutex<HashMap<String, oneshot::Sender<Value>>>,
     dispatch: Arc<Dispatcher>,
 }
@@ -149,7 +150,12 @@ async fn call(
     {
         return Err(StatusCode::UNAUTHORIZED);
     }
-    if !super::builtin_tools()
+    let tools = if context.canvas_only {
+        agentikz_mcp::manifest::canvas_tools()
+    } else {
+        super::builtin_tools()
+    };
+    if !tools
         .iter()
         .any(|tool| tool.name == call.tool_name)
         || !call.arguments.is_object()
@@ -198,6 +204,16 @@ async fn start(
     target: CanvasTarget,
     dispatch: Arc<Dispatcher>,
 ) -> Result<BridgeLease, String> {
+    start_scoped(request_id, window_label, target, dispatch, false).await
+}
+
+async fn start_scoped(
+    request_id: String,
+    window_label: String,
+    target: CanvasTarget,
+    dispatch: Arc<Dispatcher>,
+    canvas_only: bool,
+) -> Result<BridgeLease, String> {
     if request_id.is_empty()
         || request_id.len() > 128
         || target.conversation_id.is_empty()
@@ -226,6 +242,7 @@ async fn start(
         ),
         active: AtomicBool::new(true),
         proposal_created: AtomicBool::new(false),
+        canvas_only,
         pending: Mutex::new(HashMap::new()),
         dispatch,
     });
@@ -269,6 +286,19 @@ pub async fn start_for_window(
     .await
 }
 
+pub async fn start_external_for_window(
+    app: AppHandle,
+    label: String,
+    request_id: String,
+    target: CanvasTarget,
+) -> Result<BridgeLease, String> {
+    let dispatch_label = label.clone();
+    start_scoped(request_id, label, target, Arc::new(move |event| {
+        app.emit_to(&dispatch_label, "mcp:call", event)
+            .map_err(|_| "画布窗口不可用。".into())
+    }), true).await
+}
+
 pub fn sidecar_path(app: &AppHandle) -> Result<PathBuf, String> {
     let filename = if cfg!(windows) {
         "agentikz-mcp.exe"
@@ -297,6 +327,22 @@ pub fn sidecar_path(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 impl BridgeLease {
+    pub fn external_client_config(&self, command: &std::path::Path) -> Value {
+        json!({
+            "mcpServers": {
+                "agentikz": {
+                    "command": command,
+                    "args": [],
+                    "env": {
+                        "AGENTIKZ_MCP_ENDPOINT": self.endpoint,
+                        "AGENTIKZ_MCP_TOKEN": self.context.token,
+                        "AGENTIKZ_MCP_SCOPE": "canvas"
+                    }
+                }
+            }
+        })
+    }
+
     pub(crate) fn runtime_connection(&self) -> Value {
         json!({ "endpoint": self.endpoint, "token": self.context.token })
     }
@@ -488,6 +534,42 @@ mod tests {
             .iter()
             .any(|tool| tool.name == "propose_surgical_diff"));
         assert!(lease.context.pending.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn external_config_connects_without_acp_and_limits_both_transports_to_canvas_tools() {
+        let filename = if cfg!(windows) { "agentikz-mcp.exe" } else { "agentikz-mcp" };
+        let executable = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries").join(filename);
+        let lease = start_scoped(
+            uuid::Uuid::new_v4().to_string(), "external-window".into(), target(),
+            Arc::new(dispatch), true,
+        ).await.unwrap();
+        let config = lease.external_client_config(&executable);
+        let server = &config["mcpServers"]["agentikz"];
+        assert_eq!(server["command"].as_str(), executable.to_str());
+        let env: HashMap<String, String> = serde_json::from_value(server["env"].clone()).unwrap();
+        assert_eq!(env["AGENTIKZ_MCP_SCOPE"], "canvas");
+        let tools = agentikz_mcp::probe_builtin(&executable, &env).await.unwrap();
+        assert_eq!(tools.len(), 11);
+        assert!(tools.iter().any(|tool| tool.name == "propose_tikz_patch"));
+        assert!(!tools.iter().any(|tool| tool.name == "read_project_file"));
+
+        // Even a caller bypassing stdio with the shared token cannot reach manuscript tools.
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let denied = client.post(&lease.endpoint).bearer_auth(&env["AGENTIKZ_MCP_TOKEN"])
+            .json(&json!({"toolName":"read_project_file","arguments":{"relativePath":"main.tex"}}))
+            .send().await.unwrap();
+        assert_eq!(denied.status(), StatusCode::BAD_REQUEST);
+        let browser = client.post(&lease.endpoint).bearer_auth(&env["AGENTIKZ_MCP_TOKEN"])
+            .header("Origin", "http://localhost")
+            .json(&json!({"toolName":"get_canvas_source","arguments":{}}))
+            .send().await.unwrap();
+        assert_eq!(browser.status(), StatusCode::UNAUTHORIZED);
+        lease.context.revoke();
+        let ended = client.post(&lease.endpoint).bearer_auth(&env["AGENTIKZ_MCP_TOKEN"])
+            .json(&json!({"toolName":"get_canvas_source","arguments":{}}))
+            .send().await.unwrap();
+        assert_eq!(ended.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
