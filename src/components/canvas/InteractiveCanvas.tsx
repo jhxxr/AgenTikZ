@@ -24,6 +24,7 @@ import {
   BookOpenText,
   Copy,
   Edit3,
+  X,
 } from 'lucide-react';
 
 const CM_TO_PX = 52; // 1 TikZ cm = 52px at 100% zoom
@@ -146,6 +147,8 @@ export const InteractiveCanvas: React.FC = () => {
     fitCanvasToContent,
     setZoom,
     setPan,
+    setPreviewMode,
+    setLeftTab,
     moveElementsByPosition,
     moveChartLegend,
     updateChartById,
@@ -187,6 +190,8 @@ export const InteractiveCanvas: React.FC = () => {
     fitCanvasToContent: s.fitCanvasToContent,
     setZoom: s.setZoom,
     setPan: s.setPan,
+    setPreviewMode: s.setPreviewMode,
+    setLeftTab: s.setLeftTab,
     moveElementsByPosition: s.moveElementsByPosition,
     moveChartLegend: s.moveChartLegend,
     updateChartById: s.updateChartById,
@@ -224,6 +229,7 @@ export const InteractiveCanvas: React.FC = () => {
     activeCanvasFileName: s.activeCanvasFileName,
   })));
   const lastAttemptRef = useRef<string | null>(null);
+  const previouslyRequiredExactPreview = useRef(false);
   const theme = JOURNAL_THEMES[activeThemeId];
   const nodesById = useMemo(() => {
     const index = new Map<string, TikzNodeElement>();
@@ -239,10 +245,19 @@ export const InteractiveCanvas: React.FC = () => {
     [parsedDoc.nodes]
   );
 
-  // Complex drawings bypass the editable subset. Recompile after edits, and
-  // retain real compiler errors rather than replacing them with an approximation.
+  // Offer a full-fidelity comparison on entering a complex drawing, but never
+  // replace the editor or reopen a preview the user has explicitly closed.
   useEffect(() => {
-    if (!requiresExactPreview && previewMode === 'interactive') {
+    if (requiresExactPreview && !previouslyRequiredExactPreview.current) {
+      setPreviewMode('tex_split');
+    }
+    previouslyRequiredExactPreview.current = requiresExactPreview;
+  }, [requiresExactPreview, setPreviewMode]);
+
+  // Preview is independent of editing. Recompile only while it is visible;
+  // in-flight compilation must not reopen it after the user returns to editing.
+  useEffect(() => {
+    if (previewMode === 'interactive') {
       lastAttemptRef.current = null;
       return;
     }
@@ -1526,8 +1541,19 @@ export const InteractiveCanvas: React.FC = () => {
       }}
       tabIndex={0}
     >
-      {/* Main Interactive Vector Canvas (Tavotto Studio Stage + Bounded Paper Artboard) */}
-      <div className="relative flex-1 w-full h-full flex">
+      {requiresExactPreview && (
+        <div className="flex shrink-0 items-center gap-3 border-b border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-900" role="note">
+          <span className="flex-1">
+            交互画布仅显示可解析图元；宏、复杂路径等完整细节以 TeX 精确预览为准。编辑不会移除未解析源码。
+          </span>
+          <button type="button" onClick={() => setLeftTab('code')} className="shrink-0 text-blue-700 cursor-pointer">编辑源码</button>
+          {previewMode === 'interactive' && (
+            <button type="button" onClick={() => setPreviewMode('tex_split')} className="shrink-0 text-blue-700 cursor-pointer">精确对照</button>
+          )}
+        </div>
+      )}
+      {/* Never hide the interactive editor just because precision preview is needed. */}
+      <div className="relative flex-1 min-h-0 w-full flex">
         <svg
           id="agentikz-canvas-svg"
           ref={svgRef}
@@ -1550,7 +1576,8 @@ export const InteractiveCanvas: React.FC = () => {
               addImageAssetToCanvas(relPath, snapX, snapY);
             }
           }}
-          className={requiresExactPreview ? 'hidden' : 'w-full h-full min-w-0 bg-slate-200/80'}
+          className="flex-1 w-full h-full min-w-0 bg-slate-200/80"
+          aria-label="可编辑 TikZ 画布"
           style={{
             cursor:
               dragState?.mode === 'pan'
@@ -2095,24 +2122,25 @@ export const InteractiveCanvas: React.FC = () => {
           </g>
         </svg>
 
-        {/* Exact TeX preview overlay or split view */}
-        {(requiresExactPreview || previewMode === 'tex_overlay' || previewMode === 'tex_split') && (
+        {/* Legacy overlay mode also stays side-by-side so it cannot obscure editing. */}
+        {previewMode !== 'interactive' && (
           <div
-            className={`${
-              requiresExactPreview
-                ? 'w-full min-w-0 bg-slate-50/40'
-                : previewMode === 'tex_split'
-                ? 'w-1/2 shrink-0 border-l border-slate-200 bg-slate-50/40'
-                : 'absolute inset-0 bg-white/85 pointer-events-none'
-            } flex flex-col items-center p-4 overflow-auto`}
+            aria-label="TeX 精确对照预览"
+            className="w-1/2 min-w-0 shrink-0 border-l border-slate-200 bg-slate-50/40 flex flex-col items-center p-4 overflow-auto"
           >
-            <div className="text-xs font-medium text-slate-600 mb-3 flex items-center gap-2 bg-white px-3 py-1 rounded-full border border-slate-200 shadow-2xs shrink-0">
-              <span className={`w-2 h-2 shrink-0 rounded-full ${isCompilingTex ? 'bg-blue-500 animate-pulse' : compiledSvg ? 'bg-emerald-500' : 'bg-amber-500'}`} />
-              <span className="whitespace-pre-wrap select-text">
-                {compiledSvg || !vectorPreview
-                  ? texCompilerStatus || '准备 TeX 精确预览…'
-                  : isCompilingTex ? 'SVG 兼容预览 · 正在编译 TeX 精确版本…' : 'SVG 兼容预览 · TeX 尚未编译成功'}
-              </span>
+            <div className="w-full flex items-center justify-between gap-2 mb-3 shrink-0">
+              <div className="text-xs font-medium text-slate-600 min-w-0 flex items-center gap-2 bg-white px-3 py-1 rounded-full border border-slate-200 shadow-2xs">
+                <span className={`w-2 h-2 shrink-0 rounded-full ${isCompilingTex ? 'bg-blue-500 animate-pulse' : compiledSvg ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                <span className="whitespace-pre-wrap select-text">
+                  {compiledSvg || !vectorPreview
+                    ? texCompilerStatus || '准备 TeX 精确预览…'
+                    : isCompilingTex ? 'SVG 兼容预览（近似）· 正在编译 TeX 精确版本…' : 'SVG 兼容预览（近似）· TeX 尚未编译成功'}
+                </span>
+              </div>
+              <button type="button" onClick={() => setPreviewMode('interactive')} aria-label="关闭精确预览，继续编辑"
+                title="关闭精确预览，继续编辑" className="shrink-0 p-1 text-slate-500 hover:bg-slate-200 rounded cursor-pointer">
+                <X size={16} />
+              </button>
             </div>
             {compiledSvg ? (
               <div

@@ -12,8 +12,8 @@ import {
   buildPaperFigureEnvironment,
   buildStandaloneLatexDocument,
 } from '../../core/tex/document';
-import { getExactPreviewReasons } from '../../core/tex/source';
 import { compileWorkspaceTexPreview } from '../../core/tex/preview';
+import { resolveFigureSvgForExport } from '../../core/export/figure-svg';
 import { CompileMenu, type CompileMenuAction } from '../tex/CompileMenu';
 import { usePaperBuildStore } from '../../store/usePaperBuildStore';
 import { hasDrawableFigure } from '../../core/paper/figure-insertion';
@@ -187,8 +187,6 @@ const FigureTopToolbar: React.FC = () => {
   })));
 
   const stem = activeCanvasFileName.replace(/\.canvas\.json$/i, '') || 'figure';
-  const requiresExactPreview = getExactPreviewReasons(tikzCode).length > 0;
-
   const [showExportMenu, setShowExportMenu] = useState(false);
   const exportMenuRef = useRef<HTMLDivElement>(null);
 
@@ -236,11 +234,12 @@ const FigureTopToolbar: React.FC = () => {
   ];
 
   const handleCompileTex = async () => {
-    if (useWorkspaceStore.getState().isCompilingTex) return;
-    if (previewMode !== 'interactive' && !requiresExactPreview) {
+    if (previewMode !== 'interactive') {
       setPreviewMode('interactive');
       return;
     }
+    setPreviewMode('tex_split');
+    if (useWorkspaceStore.getState().isCompilingTex) return;
     await compileWorkspaceTexPreview();
   };
 
@@ -256,28 +255,24 @@ const FigureTopToolbar: React.FC = () => {
         return;
       }
     }
+    setPreviewMode('tex_split');
     await compileWorkspaceTexPreview();
   };
 
-  const getFigureSvg = (): string | null => {
-    const compiled = useWorkspaceStore.getState().compiledSvg;
-    if (compiled) return compiled;
-    const svgEl = document.getElementById(requiresExactPreview
-      ? 'agentikz-vector-preview-svg' : 'agentikz-canvas-svg') as SVGSVGElement | null;
-    if (svgEl) return exportCleanCanvasSvg(svgEl);
-    void compileWorkspaceTexPreview();
-    return null;
-  };
+  const getFigureSvg = () => resolveFigureSvgForExport(() => {
+    const svgEl = document.getElementById('agentikz-canvas-svg') as SVGSVGElement | null;
+    return svgEl ? exportCleanCanvasSvg(svgEl) : null;
+  });
 
-  const handleExportSvg = () => {
-    const svg = getFigureSvg();
+  const handleExportSvg = async () => {
+    const svg = await getFigureSvg();
     if (!svg) return;
     triggerFileDownload(`${stem}.svg`, svg, 'image/svg+xml;charset=utf-8');
     setShowExportMenu(false);
   };
 
   const handleExportPng = async () => {
-    const svg = getFigureSvg();
+    const svg = await getFigureSvg();
     if (!svg) return;
     setShowExportMenu(false);
     try {
@@ -301,14 +296,14 @@ const FigureTopToolbar: React.FC = () => {
   };
 
   const handleProjectExportSvg = async () => {
-    const svg = getFigureSvg();
+    const svg = await getFigureSvg();
     if (!svg) return;
     setShowExportMenu(false);
     await exportFileToProject(`${stem}.svg`, svg, false);
   };
 
   const handleProjectExportPng = async () => {
-    const svg = getFigureSvg();
+    const svg = await getFigureSvg();
     if (!svg) return;
     setShowExportMenu(false);
     try {
@@ -466,14 +461,14 @@ const FigureTopToolbar: React.FC = () => {
         </div>
 
         <div className="flex items-stretch">
-          <button onClick={handleCompileTex} disabled={isCompilingTex} title="使用内置 TeX 引擎编译精确预览"
+          <button onClick={handleCompileTex} title="打开或关闭 TeX 精确对照，不影响画布编辑"
             className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-l-lg text-[11px] font-medium border transition-all cursor-pointer ${
               previewMode !== 'interactive'
                 ? 'bg-emerald-50 text-emerald-700 border-emerald-200 shadow-sm'
                 : 'bg-white/70 text-slate-600 border-slate-200/70 hover:bg-white shadow-sm'
             }`}>
             {previewMode !== 'interactive' ? <Eye className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-            <span>{isCompilingTex ? '编译中…' : requiresExactPreview ? '重新编译 TeX' : previewMode !== 'interactive' ? '退出预览' : 'TeX'}</span>
+            <span>{previewMode !== 'interactive' ? '收起对照' : isCompilingTex ? '编译中…' : 'TeX 对照'}</span>
           </button>
           <CompileMenu disabled={isCompilingTex} onAction={(action) => void handleCompileMenu(action)}
             buttonClassName="flex h-full items-center px-1.5 rounded-r-lg border border-l-0 border-slate-200/70 bg-white/70 text-slate-600 hover:bg-white shadow-sm cursor-pointer" />

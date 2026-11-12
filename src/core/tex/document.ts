@@ -1,12 +1,37 @@
 import { JOURNAL_THEMES } from '../themes/journal-presets';
-import { normalizeLatexDocument, isCompleteLatexDocument } from './source';
+import { normalizeLatexDocument, isCompleteLatexDocument, maskLatexComments } from './source';
+
+/**
+ * Full documents bypass the generated preamble, but still need CJK fonts when
+ * none were configured. Insert only the bundled font package, before the user's
+ * packages so explicit font choices still win. Never rewrite their TikZ body.
+ */
+function ensureFullDocumentCjkFonts(source: string): string {
+  const code = maskLatexComments(source);
+  if (!/[\u3000-\u30ff\u3400-\u9fff\uff00-\uffef]/.test(code)) return source;
+  const begin = /\\begin\s*\{document\}/.exec(code);
+  if (!begin) return source;
+  const preamble = code.slice(0, begin.index);
+  const hasCjkPackage = Array.from(
+    preamble.matchAll(/\\(?:usepackage|RequirePackage)(?:\s*\[[^\]]*\])?\s*\{([^}]+)\}/g)
+  ).some((match) => match[1].split(',').some((name) =>
+    ['agentikz-fonts', 'xeCJK', 'ctex', 'CJK', 'CJKutf8'].includes(name.trim())
+  ));
+  if (hasCjkPackage ||
+      /\\documentclass(?:\s*\[[^\]]*\])?\s*\{ctex[^}]*\}/.test(preamble) ||
+      /\\setCJK(?:main|sans|mono)font\b/.test(preamble)) return source;
+  const documentClass = /\\documentclass(?:\s*\[[^\]]*\])?\s*\{[^}]+\}/.exec(preamble);
+  if (!documentClass) return source;
+  const insertAt = documentClass.index + documentClass[0].length;
+  return `${source.slice(0, insertAt)}\n\\usepackage{agentikz-fonts}${source.slice(insertAt)}`;
+}
 
 export function buildStandaloneLatexDocument(
   tikzCode: string,
   themeId: keyof typeof JOURNAL_THEMES
 ): string {
   const normalized = normalizeLatexDocument(tikzCode);
-  if (isCompleteLatexDocument(normalized)) return normalized;
+  if (isCompleteLatexDocument(normalized)) return ensureFullDocumentCjkFonts(normalized);
   tikzCode = normalized;
   const theme = JOURNAL_THEMES[themeId] || JOURNAL_THEMES.neurips;
   const roles = theme.colorRoles;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import nestedSwsa from './fixtures/swsa-nested.tex?raw';
+import complexCjkDiagram from './fixtures/complex-cjk-diagram.tex?raw';
 import { buildStandaloneLatexDocument } from '../document';
 import { getExactPreviewReasons, maskLatexComments, normalizeLatexDocument } from '../source';
 import { buildVectorPreview, evaluatePreviewNumber, expandPreviewMacros } from '../vector-preview';
@@ -33,6 +34,30 @@ describe('full documents and path-based TikZ rendering', () => {
     expect(normalizeLatexDocument(`% \\documentclass{bad}\n${doc}`)).toBe(`% \\documentclass{bad}\n${doc}`);
   });
 
+  it('loads bundled CJK fonts for a full document without changing any drawing commands', () => {
+    const prepared = buildStandaloneLatexDocument(complexCjkDiagram, 'neurips');
+    expect(prepared).toContain('\\usepackage{agentikz-fonts}');
+    expect(prepared.replace('\n\\usepackage{agentikz-fonts}', '')).toBe(complexCjkDiagram);
+    expect(buildStandaloneLatexDocument(prepared, 'nature')).toBe(prepared);
+    expect(prepared.match(/\\documentclass\b/g)).toHaveLength(1);
+    expect(prepared.split('\\begin{document}')[1]).toBe(complexCjkDiagram.split('\\begin{document}')[1]);
+  });
+
+  it('does not override existing CJK setup or mistake comments for font configuration', () => {
+    for (const setup of [
+      '\\usepackage{xeCJK}\\setCJKmainfont{MyFont}',
+      '\\usepackage[UTF8]{ctex}',
+      '\\usepackage{tikz,agentikz-fonts}',
+    ]) {
+      const source = `\\documentclass{standalone}\n${setup}\n\\begin{document}中文\\end{document}`;
+      expect(buildStandaloneLatexDocument(source, 'neurips')).toBe(source);
+    }
+    const commented = '\\documentclass{standalone}\n% \\usepackage{xeCJK}\n\\begin{document}中文\\end{document}';
+    expect(buildStandaloneLatexDocument(commented, 'neurips')).toContain('\\documentclass{standalone}\n\\usepackage{agentikz-fonts}');
+    const latin = '\\documentclass{standalone}\n% 中文注释\n\\begin{document}Latin only\\end{document}';
+    expect(buildStandaloneLatexDocument(latin, 'neurips')).toBe(latin);
+  });
+
   it('expands the sample macros, renders all tiles and preserves clipping and curves', () => {
     const expanded = expandPreviewMacros(nestedSwsa);
     expect(expanded).not.toMatch(/\\(?:vblock|lifneuron|addnode|mulnode|X|Y|yA|yB)\b/);
@@ -63,5 +88,19 @@ describe('full documents and path-based TikZ rendering', () => {
     expect(() => expandPreviewMacros('\\newcommand{\\loop}{\\loop}\\loop')).toThrow(/recursion/i);
     expect(buildVectorPreview('\\begin{tikzpicture}\\foreach \\x in {1,2} {\\draw (0,0)--(1,1);}\\end{tikzpicture}')).toBeNull();
     expect(maskLatexComments('A\\%B % hidden\nC')).toBe('A\\%B         \nC');
+  });
+
+  it('retains colored, rotated labels instead of failing the entire compatibility scene', () => {
+    const scene = buildVectorPreview(String.raw`\definecolor{accent}{HTML}{C9211E}
+\begin{tikzpicture}[x=0.25mm,y=-0.25mm]
+\fill[accent] (0,0) rectangle (30,40);
+\node[text=white,rotate=90] at (15,20) {Details $x^2$};
+\draw[blue,->] (30,20) -- (50,20);
+\end{tikzpicture}`);
+    expect(scene).not.toBeNull();
+    expect(scene!.elements).toHaveLength(3);
+    expect(scene!.elements[0]).toMatchObject({ kind: 'path', fill: '#C9211E' });
+    expect(scene!.elements[1]).toMatchObject({ kind: 'label', color: '#FFFFFF', rotate: -90 });
+    expect(scene!.elements[2]).toMatchObject({ kind: 'path', stroke: '#0000FF', arrow: true });
   });
 });

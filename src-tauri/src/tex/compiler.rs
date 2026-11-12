@@ -55,6 +55,23 @@ fn preview_log_excerpt(log: &str) -> String {
         .collect()
 }
 
+/// XeTeX may exit successfully and still omit text. Such a PDF is not an exact
+/// preview and must never be published or exported as a complete drawing.
+fn missing_glyph_diagnostic(log: &str) -> Option<String> {
+    let missing: Vec<&str> = log
+        .lines()
+        .filter(|line| line.trim_start().starts_with("Missing character:"))
+        .collect();
+    if missing.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "检测到缺字（{} 处），渲染结果不完整，未作为精确预览发布。\n{}\n请配置覆盖这些字符的字体；中文可使用内置 agentikz-fonts 宏包。",
+        missing.len(),
+        missing.iter().take(8).copied().collect::<Vec<_>>().join("\n")
+    ))
+}
+
 fn command_error(error: &std::io::Error, seconds: u64) -> String {
     if error.kind() == std::io::ErrorKind::TimedOut {
         format!("编译超时（{seconds} 秒）。首次使用新宏包需要联网下载，请检查网络或减少图形复杂度后重试。")
@@ -214,15 +231,18 @@ async fn compile_preview_in(
         Err(error) => return TexCompileResult::failed(command_error(&error, SECONDS)),
     };
     let pdf = fs::read(temp_dir.join("figure.pdf")).ok().filter(|bytes| !bytes.is_empty());
+    let log = fs::read_to_string(temp_dir.join("figure.log")).unwrap_or_default();
     let Some(pdf) = pdf.filter(|_| output.status.success()) else {
         let console = engine_output(&output);
-        let log = fs::read_to_string(temp_dir.join("figure.log")).unwrap_or_default();
         let excerpt = preview_log_excerpt(if log.contains("\n! ") { &log } else { &console });
         return TexCompileResult::failed(format!(
             "{engine_name} 编译失败：\n{excerpt}{}",
             failure_hint(&format!("{console}\n{log}"))
         ));
     };
+    if let Some(diagnostic) = missing_glyph_diagnostic(&log) {
+        return TexCompileResult::failed(format!("{engine_name} 编译结果不完整：\n{diagnostic}"));
+    }
     match tokio::task::spawn_blocking(move || pdf_to_svg(pdf)).await {
         Ok(Ok(svg)) => TexCompileResult {
             ok: true,
@@ -523,6 +543,52 @@ mod tests {
         assert!(failure_hint("error: failed to download ctex.sty").contains("联网"));
         assert!(failure_hint("! TeX capacity exceeded, sorry [main memory size=5000000].").contains("内存上限"));
         assert!(failure_hint("! Undefined control sequence.").is_empty());
+    }
+
+    #[test]
+    fn missing_glyphs_are_not_a_successful_precision_preview() {
+        assert!(missing_glyph_diagnostic("Output written on figure.pdf").is_none());
+        let diagnostic = missing_glyph_diagnostic(
+            "Missing character: There is no 中 (U+4E2D) in font lmroman!\n\
+             Missing character: There is no γ (U+03B3) in font lmroman!\n",
+        )
+        .unwrap();
+        assert!(diagnostic.contains("2 处") && diagnostic.contains("U+4E2D"));
+        assert!(diagnostic.contains("U+03B3") && diagnostic.contains("agentikz-fonts"));
+    }
+
+    /// Minimal public fixture: real engine -> PDF -> outlined SVG.
+    #[tokio::test]
+    async fn bundled_engine_renders_complex_cjk_fixture_without_missing_glyphs() {
+        if !engine::tests::use_staged_runtime() {
+            eprintln!("skipped: the built-in TeX runtime is not staged");
+            return;
+        }
+        let fixture = include_str!("../../../src/core/tex/__tests__/fixtures/complex-cjk-diagram.tex");
+        // The frontend supplies this missing preamble package; the drawing stays verbatim.
+        let source = fixture.replacen(
+            "\\usepackage{tikz}",
+            "\\usepackage{agentikz-fonts}\n\\usepackage{tikz}",
+            1,
+        );
+        let root = temp_project("cjk_render");
+        let preview = compile_preview_in(&root, &source, "xelatex", None).await;
+        assert!(preview.ok, "{}", preview.message);
+        let svg = preview.svg.unwrap();
+        let log = fs::read_to_string(root.join("figure.log")).unwrap();
+        assert!(missing_glyph_diagnostic(&log).is_none());
+        assert!(svg.starts_with("<svg") && svg.matches("<path").count() > 20);
+        assert!(!svg.contains("<text") && !svg.contains("font-family"));
+        fs::remove_dir_all(root).unwrap();
+
+        let incomplete = tex_compile_preview(
+            "\\documentclass{standalone}\\begin{document}中文 γ\\end{document}".into(),
+            None,
+            None,
+        )
+        .await;
+        assert!(!incomplete.ok && incomplete.svg.is_none());
+        assert!(incomplete.message.contains("缺字"), "{}", incomplete.message);
     }
 
     #[test]

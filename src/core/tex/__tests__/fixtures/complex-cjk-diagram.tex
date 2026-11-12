@@ -1,0 +1,36 @@
+% Minimal regression fixture for full-document fonts and detailed TikZ rendering.
+\documentclass[tikz,border=6pt]{standalone}
+\usepackage{tikz}
+\usepackage{xcolor}
+\usepackage{amsmath,amssymb}
+\usetikzlibrary{arrows.meta,calc,positioning}
+\definecolor{ink}{HTML}{334155}
+\definecolor{accent}{HTML}{2B5B84}
+\definecolor{tint}{HTML}{DCE8F5}
+\definecolor{signal}{HTML}{B83B4A}
+\begin{document}
+\begin{tikzpicture}[
+  x=0.25mm,y=-0.25mm,
+  >={Triangle[length=4pt,width=3pt]},
+  arr/.style={draw=ink,line width=1pt,->}
+]
+\useasboundingbox (0,0) rectangle (320,160);
+\filldraw[fill=tint,draw=accent,rounded corners=5pt] (8,8) rectangle (150,150);
+\fill[accent,rounded corners=3pt] (8,8) rectangle (150,32);
+\node[anchor=west,font=\bfseries\scriptsize,text=white] at (16,20) {中文标题 A};
+\draw[signal,line width=0.8pt] (20,70)
+  .. controls (40,30) and (60,110) .. (85,70)
+  .. controls (105,30) and (125,110) .. (140,70);
+\node[font=\scriptsize,text=ink] at (79,115) {$X\in\mathbb{R}^{C\times T}$};
+\draw[arr,rounded corners=3pt] (150,80) -- (170,80) -- (170,50) -- (190,50);
+\filldraw[fill=white,draw=accent,densely dashed,rounded corners=5pt] (190,8) rectangle (310,150);
+\node[rotate=90,font=\bfseries\scriptsize,text=accent] at (210,80) {旋转标签};
+\begin{scope}
+  \clip (265,60) circle (24);
+  \fill[tint] (235,30) rectangle (295,90);
+  \draw[signal,line width=1pt] (235,60) -- (255,60) -- (265,30) -- (275,90) -- (295,60);
+\end{scope}
+\draw[accent,line width=1pt] (265,60) circle (24);
+\node[font=\scriptsize,text=ink] at (265,110) {权重 γ};
+\end{tikzpicture}
+\end{document}

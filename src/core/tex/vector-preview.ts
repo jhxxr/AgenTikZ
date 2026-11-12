@@ -22,6 +22,7 @@ export interface VectorLabel {
   lines: string[];
   fontSize: number;
   bold: boolean;
+  color: string;
   rotate: number;
   clips: string[];
 }
@@ -261,7 +262,7 @@ export function buildVectorPreview(source: string, onUnsupported?: (error: unkno
       }
       if (command === 'node') {
         const opts = options();
-        if (Object.keys(opts).some((key) => !['font', 'rotate', 'align', 'inner sep'].includes(key))) throw new Error('Node style needs TeX');
+        if (Object.keys(opts).some((key) => !['font', 'rotate', 'align', 'inner sep', 'text'].includes(key))) throw new Error('Node style needs TeX');
         c.space();
         if (expanded[c.i] === '(') c.group('(', ')'); // Optional source name.
         consume('at');
@@ -274,6 +275,7 @@ export function buildVectorPreview(source: string, onUnsupported?: (error: unkno
           kind: 'label', x, y,
           lines: label.split(/\\\\(?:\[[^\]]*\])?/),
           fontSize, bold: /\\bfseries\b/.test(opts.font || ''),
+          color: color(opts.text || 'black'),
           rotate: -Number(opts.rotate || 0), clips: [...clips],
         });
         continue;

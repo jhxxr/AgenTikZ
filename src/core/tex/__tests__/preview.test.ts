@@ -56,4 +56,44 @@ describe('real TeX preview results', () => {
     expect(invoke.mock.calls[0][1].texSource).toBe(source);
     expect(useWorkspaceStore.getState().compiledSvg).toBe('<svg/>');
   });
+
+  it.each(['interactive', 'tex_split', 'tex_overlay'] as const)(
+    'does not switch away from %s when compilation succeeds',
+    async (mode) => {
+      useWorkspaceStore.getState().setPreviewMode(mode);
+      invoke.mockResolvedValue({ ok: true, svg: '<svg/>', message: 'compiled' });
+      expect(await compileWorkspaceTexPreview()).toBe('<svg/>');
+      expect(useWorkspaceStore.getState().previewMode).toBe(mode);
+    }
+  );
+
+  it('does not reopen a preview closed while the engine was running', async () => {
+    let finish!: (result: TexPreviewResult) => void;
+    invoke.mockImplementation(() => new Promise<TexPreviewResult>((resolve) => { finish = resolve; }));
+    useWorkspaceStore.getState().setPreviewMode('tex_split');
+    const pending = compileWorkspaceTexPreview();
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledOnce());
+    useWorkspaceStore.getState().setPreviewMode('interactive');
+    finish({ ok: true, svg: '<svg/>', message: 'compiled' });
+    await pending;
+    expect(useWorkspaceStore.getState().previewMode).toBe('interactive');
+  });
+
+  it('shares an in-flight compilation with export instead of requiring another click', async () => {
+    let finish!: (result: TexPreviewResult) => void;
+    invoke.mockImplementation(() => new Promise<TexPreviewResult>((resolve) => { finish = resolve; }));
+    const preview = compileWorkspaceTexPreview();
+    const exporting = compileWorkspaceTexPreview();
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledOnce());
+    finish({ ok: true, svg: '<svg id="real"/>', message: 'compiled' });
+    expect(await preview).toBe('<svg id="real"/>');
+    expect(await exporting).toBe('<svg id="real"/>');
+  });
+
+  it('keeps editing available when the compiler rejects a drawing', async () => {
+    invoke.mockRejectedValue(new Error('engine unavailable'));
+    expect(await compileWorkspaceTexPreview()).toBeNull();
+    expect(useWorkspaceStore.getState().previewMode).toBe('interactive');
+    expect(useWorkspaceStore.getState().texCompilerStatus).toContain('engine unavailable');
+  });
 });

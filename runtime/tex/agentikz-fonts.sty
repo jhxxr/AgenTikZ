@@ -1,7 +1,7 @@
 %% AgenTikZ built-in font setup. Shipped inside the app; nothing has to be
 %% installed on the system, and no system font lookup is involved.
 \NeedsTeXFormat{LaTeX2e}
-\ProvidesPackage{agentikz-fonts}[2026/11/11 v1.0 AgenTikZ bundled Noto Sans CJK SC]
+\ProvidesPackage{agentikz-fonts}[2026/11/12 v1.1 AgenTikZ bundled Noto Sans CJK SC]
 
 \RequirePackage{fontspec}
 \RequirePackage{xeCJK}
@@ -20,6 +20,9 @@
 ]
 \setCJKsansfont{NotoSansCJKsc-Regular.otf}[BoldFont=NotoSansCJKsc-Bold.otf]
 \setCJKmonofont{NotoSansCJKsc-Regular.otf}
+%% Literal Greek in mixed-text labels (e.g. "weight γ") is absent from Latin
+%% Modern Roman. Route it to the bundled font without changing Latin or math.
+\xeCJKDeclareCharClass{CJK}{"0370 -> "03FF}
 %% The Latin roman and math fonts stay Latin Modern, matching LaTeX defaults.
 %% xeCJK supplies CJK spacing and line-break opportunities. Do not also set
 %% XeTeXlinebreaklocale: portable/static engines may omit ICU locale data.

@@ -9,10 +9,22 @@ export interface TexPreviewResult {
   message: string;
 }
 
-/** Shared by the toolbar and debounced automatic preview. Never fake success. */
-export async function compileWorkspaceTexPreview(): Promise<void> {
+let pendingPreview: Promise<string | null> | null = null;
+
+/** Shared by preview and export. Compilation must never change the editing mode. */
+export function compileWorkspaceTexPreview(): Promise<string | null> {
+  if (pendingPreview) return pendingPreview;
+  const task = compileCurrentWorkspaceTexPreview();
+  pendingPreview = task;
+  void task.finally(() => {
+    if (pendingPreview === task) pendingPreview = null;
+  });
+  return task;
+}
+
+async function compileCurrentWorkspaceTexPreview(): Promise<string | null> {
   const workspace = useWorkspaceStore.getState();
-  if (workspace.isCompilingTex) return;
+  if (workspace.isCompilingTex) return null;
   const { tikzCode, activeThemeId, sourceRevision } = workspace;
   const { projectDir, activeCanvasFileName } = useProjectStore.getState();
   const { texEngine } = useSettingsStore.getState();
@@ -42,13 +54,14 @@ export async function compileWorkspaceTexPreview(): Promise<void> {
         projectDir,
       });
     }
-    if (!isCurrent()) return;
-    workspace.setCompiledSvg(result.ok && result.svg ? result.svg : null, result.message);
-    workspace.setPreviewMode('tex_split');
+    if (!isCurrent()) return null;
+    const svg = result.ok && result.svg ? result.svg : null;
+    workspace.setCompiledSvg(svg, result.message);
+    return svg;
   } catch (error) {
-    if (!isCurrent()) return;
+    if (!isCurrent()) return null;
     workspace.setCompiledSvg(null, `TeX 编译失败：${error instanceof Error ? error.message : String(error)}`);
-    workspace.setPreviewMode('tex_split');
+    return null;
   } finally {
     workspace.setIsCompilingTex(false);
   }
