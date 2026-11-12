@@ -32,18 +32,21 @@ describe('coordinate path editing with source spans', () => {
     expect(after.elements[0].bounds[1]).toBeCloseTo(scene.elements[0].bounds[1] + 26);
   });
 
-  it('moves all Bezier endpoints and control points by the same physical delta', () => {
-    const scene = sceneFor();
+  it.each(['\n', '\r\n'])('moves all Bezier endpoints and control points by the same physical delta with %j line endings', (lineEnding) => {
+    const source = fixture.replace(/\r?\n/g, lineEnding);
+    const scene = sceneFor(source);
     const index = scene.elements.findIndex((el) => el.kind === 'path' && el.d.includes(' C '));
     const before = scene.elements[index].source!;
-    const next = patchGeometryElements(fixture, scene, [index], { dx: 13, dy: -13 });
+    const next = patchGeometryElements(source, scene, [index], { dx: 13, dy: -13 });
     const after = sceneFor(next).elements[index].source!;
     expect(after.coordinates).toHaveLength(7);
     for (let i = 0; i < before.coordinates.length; i++) {
       expect(after.coordinates[i].x.value).toBeCloseTo(before.coordinates[i].x.value + 10);
       expect(after.coordinates[i].y.value).toBeCloseTo(before.coordinates[i].y.value - 10);
     }
-    expect(next).toContain('\\begin{scope}\n  \\clip');
+    expect(next).toContain(`\\begin{scope}${lineEnding}  \\clip`);
+    expect(next.slice(0, after.span.start)).toBe(source.slice(0, before.span.start));
+    expect(next.slice(after.span.end)).toBe(source.slice(before.span.end));
   });
 
   it('edits a control point without modifying the other coordinates', () => {
