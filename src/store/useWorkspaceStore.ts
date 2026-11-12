@@ -30,6 +30,7 @@ import { JOURNAL_THEMES } from '../core/themes/journal-presets';
 import { resolveTikzColor } from '../core/themes/journal-presets';
 import { useSettingsStore } from './useSettingsStore';
 import { patchElementGeometry, patchMacroGeometry, type GeometryEdit } from '../core/parser/path-patcher';
+import { CM_TO_PX, centerCanvasView, clampCanvasZoom, getCanvasContentBounds } from '../core/canvas/viewport';
 
 export type LeftSidebarTab = 'project' | 'library' | 'code';
 export type ColumnGuideMode = 'none' | 'single' | 'double';
@@ -310,97 +311,19 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     set({ canvasWidthCm: w, canvasHeightCm: h });
   },
   fitCanvasToContent: (paddingCm = 1.0, viewport) => {
-    const { parsedDoc } = get();
-    if (parsedDoc.coordinateScene && (parsedDoc.coordinateScene.transformed || parsedDoc.paths?.length || parsedDoc.nodes.some((node) => node.macroSource))) {
-      const [left, top, width, height] = parsedDoc.coordinateScene.viewBox;
-      const zoom = viewport ? Math.max(0.05, Math.min(1,
-        (viewport.width - 100) / (width + paddingCm * 104),
-        (viewport.height - 100) / (height + paddingCm * 104))) : get().zoom;
-      set({
-        canvasWidthCm: Math.max(4, Math.min(120, width / 52 + paddingCm * 2)),
-        canvasHeightCm: Math.max(4, Math.min(120, height / 52 + paddingCm * 2)),
-        zoom,
-        pan: { x: (viewport ? (viewport.width / zoom - width) / 2 : 92) - left,
-          y: (viewport ? (viewport.height / zoom - height) / 2 : 100) - top },
-      });
-      return;
-    }
-    if (parsedDoc.nodes.length === 0 && parsedDoc.charts.length === 0) {
-      set({
-        canvasWidthCm: 16.0,
-        canvasHeightCm: 10.0,
-        pan: { x: 90, y: 495 },
-      });
-      return;
-    }
-
-    let minX = Infinity;
-    let maxX = -Infinity;
-    let minY = Infinity;
-    let maxY = -Infinity;
-
-    for (const node of parsedDoc.nodes) {
-      const hw = node.width / 2;
-      const hh = node.height / 2;
-      const depthExtraX =
-        node.subtype === 'cuboid' ? (node.depth || 0.55) * 0.75 : 0;
-      const depthExtraY =
-        node.subtype === 'cuboid' ? (node.depth || 0.55) * 0.6 : 0;
-      const bottomExtraY = node.sublabel || node.channels ? 0.5 : 0;
-      minX = Math.min(minX, node.x - hw);
-      maxX = Math.max(maxX, node.x + hw + depthExtraX);
-      minY = Math.min(minY, node.y - hh - bottomExtraY);
-      maxY = Math.max(maxY, node.y + hh + depthExtraY);
-    }
-
-    for (const chart of parsedDoc.charts) {
-      minX = Math.min(minX, chart.x - 1.1);
-      maxX = Math.max(maxX, chart.x + chart.width + 0.5);
-      minY = Math.min(minY, chart.y - (chart.subcaption ? 1.3 : 0.9));
-      maxY = Math.max(maxY, chart.y + chart.height + 0.7);
-    }
-
-    // The fixed artboard top-left corner sits at (-1.0, 8.5) in TikZ coordinates.
-    // Shift all elements so content's top-left starts at (-1.0 + paddingCm, 8.5 - paddingCm)
-    const targetMinX = -1.0 + paddingCm;
-    const targetMaxY = 8.5 - paddingCm;
-    const dx = Number((targetMinX - minX).toFixed(2));
-    const dy = Number((targetMaxY - maxY).toFixed(2));
-
-    if (Math.abs(dx) >= 0.15 || Math.abs(dy) >= 0.15) {
-      const moves: Array<{ id: string; x: number; y: number }> = [];
-      for (const n of parsedDoc.nodes) {
-        moves.push({ id: n.id, x: n.x + dx, y: n.y + dy });
-      }
-      for (const c of parsedDoc.charts) {
-        moves.push({ id: c.id, x: c.x + dx, y: c.y + dy });
-      }
-      if (moves.length > 0) {
-        get().moveElementsByPosition(moves, true);
-      }
-    }
-
-    const contentSpanW = Math.max(2.0, maxX - minX);
-    const contentSpanH = Math.max(2.0, maxY - minY);
-    const nextW = Math.max(
-      4.0,
-      Math.min(40.0, Math.round((contentSpanW + paddingCm * 2) * 10) / 10)
-    );
-    const nextH = Math.max(
-      4.0,
-      Math.min(40.0, Math.round((contentSpanH + paddingCm * 2) * 10) / 10)
-    );
-
-    set({
-      canvasWidthCm: nextW,
-      canvasHeightCm: nextH,
-      pan: {
-        x: 92,
-        y: 495,
-      },
-    });
+    const measured = typeof document !== 'undefined'
+      ? document.getElementById('agentikz-canvas-svg')?.getBoundingClientRect()
+      : undefined;
+    const size = viewport || measured;
+    if (!size || size.width <= 0 || size.height <= 0) return;
+    const bounds = getCanvasContentBounds(get().parsedDoc);
+    const padding = 48 + Math.max(0, paddingCm) * CM_TO_PX;
+    const zoom = bounds ? clampCanvasZoom(Math.min(1,
+      Math.max(1, size.width - padding * 2) / Math.max(1, bounds.width),
+      Math.max(1, size.height - padding * 2) / Math.max(1, bounds.height))) : 1;
+    set(centerCanvasView(bounds, size, zoom));
   },
-  setZoom: (zoom) => set({ zoom: Math.max(0.05, Math.min(2.5, zoom)) }),
+  setZoom: (zoom) => set({ zoom: clampCanvasZoom(zoom) }),
   setPan: (pan) => set({ pan }),
   setPreviewMode: (previewMode) => set({ previewMode }),
   setCompiledSvg: (compiledSvg, texCompilerStatus = null) =>

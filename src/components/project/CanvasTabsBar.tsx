@@ -47,13 +47,9 @@ export const CanvasTabsBar: React.FC = () => {
   const {
     isInspectorDrawerOpen,
     toggleInspectorDrawer,
-    canvasWidthCm,
-    canvasHeightCm,
   } = useWorkspaceStore(useShallow((s) => ({
     isInspectorDrawerOpen: s.isInspectorDrawerOpen,
     toggleInspectorDrawer: s.toggleInspectorDrawer,
-    canvasWidthCm: s.canvasWidthCm,
-    canvasHeightCm: s.canvasHeightCm,
   })));
 
   const [editingFileName, setEditingFileName] = useState<string | null>(null);
@@ -246,7 +242,7 @@ export const CanvasTabsBar: React.FC = () => {
         <button
           type="button"
           onClick={toggleInspectorDrawer}
-          title="展开/收起画布尺寸、整图 Caption 与详细参数抽屉"
+          title="展开/收起画布属性、整图 Caption 与详细参数抽屉"
           className={`flex items-center gap-1 px-2 py-1 rounded-md border text-[10.5px] font-medium transition-colors cursor-pointer ${
             isInspectorDrawerOpen
               ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xs'
@@ -255,7 +251,7 @@ export const CanvasTabsBar: React.FC = () => {
         >
           <Sliders className="w-3 h-3" />
           <span className="hidden md:inline">
-            画布属性 ({canvasWidthCm.toFixed(0)}×{canvasHeightCm.toFixed(0)}cm)
+            画布属性 · 无限
           </span>
         </button>
       </div>

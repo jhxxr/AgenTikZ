@@ -76,13 +76,14 @@ describe('native paths use the original workspace operations', () => {
     expect(doc.paths![0].x).toBeCloseTo(doc.nodes[0].x);
   });
 
-  it('fits the original artboard without rewriting imported path source or undo history', () => {
+  it('frames imported paths without rewriting source, page size or undo history', () => {
     const before = store.getState();
     store.getState().fitCanvasToContent(0.5, { width: 900, height: 700 });
     expect(store.getState().tikzCode).toBe(fixture);
     expect(store.getState().undoStack).toBe(before.undoStack);
     expect(store.getState().previewMode).toBe('interactive');
-    expect(store.getState().canvasWidthCm).toBeGreaterThan(8);
+    expect(store.getState().canvasWidthCm).toBe(before.canvasWidthCm);
+    expect(store.getState().canvasHeightCm).toBe(before.canvasHeightCm);
   });
 
   it('keeps original named nodes, edges and charts in the same AST as coordinate paths', () => {

@@ -353,9 +353,6 @@ export const PropertyPanel: React.FC = () => {
     setSelectedIds,
     activeThemeId,
     setActiveTheme,
-    canvasWidthCm,
-    canvasHeightCm,
-    setCanvasSizeCm,
     fitCanvasToContent,
     showGrid,
     setShowGrid,
@@ -382,9 +379,6 @@ export const PropertyPanel: React.FC = () => {
     setSelectedIds: s.setSelectedIds,
     activeThemeId: s.activeThemeId,
     setActiveTheme: s.setActiveTheme,
-    canvasWidthCm: s.canvasWidthCm,
-    canvasHeightCm: s.canvasHeightCm,
-    setCanvasSizeCm: s.setCanvasSizeCm,
     fitCanvasToContent: s.fitCanvasToContent,
     showGrid: s.showGrid,
     setShowGrid: s.setShowGrid,
@@ -445,13 +439,6 @@ export const PropertyPanel: React.FC = () => {
     selectedNode || selectedEdge || selectedChart || selectedPath
   );
   const theme = JOURNAL_THEMES[activeThemeId];
-
-  const canvasPresets = [
-    { label: '单栏插图 (8.5 × 6.5 cm)', w: 8.5, h: 6.5 },
-    { label: '双栏跨栏 (16.0 × 10.0 cm)', w: 16.0, h: 10.0 },
-    { label: '宽幅海报 (20.0 × 12.0 cm)', w: 20.0, h: 12.0 },
-    { label: '方形画布 (10.0 × 10.0 cm)', w: 10.0, h: 10.0 },
-  ];
 
   return (
     <aside
@@ -521,108 +508,33 @@ export const PropertyPanel: React.FC = () => {
           <button
             onClick={() => setSelectedIds([])}
             className="w-full py-1 px-2 rounded-md bg-white hover:bg-blue-50/70 text-slate-600 hover:text-blue-700 border border-slate-200/80 hover:border-blue-200 text-[11px] font-medium flex items-center justify-center gap-1 transition-colors cursor-pointer"
-            title="取消选中并返回画布与页面属性设置"
+            title="取消选中并返回画布属性设置"
           >
             <ChevronLeft className="w-3 h-3" />
-            <span>返回画布页面设置</span>
+            <span>返回画布设置</span>
           </button>
         )}
       </div>
 
       {/* Scrollable Content Body */}
       <div className="flex-1 overflow-y-auto p-3 space-y-3 text-xs">
-        {/* 0. CANVAS & PAGE INSPECTOR (When no element is selected) */}
+        {/* Canvas properties when no element is selected. */}
         {!hasSelectedElement && (
           <div className="space-y-3.5">
-            {/* Section A: Adjustable Fixed Canvas Artboard */}
             <div className="p-2.5 rounded-xl bg-slate-50/70 border border-slate-200/80 space-y-2.5">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-semibold text-slate-700 flex items-center gap-1.5">
-                  <LayoutTemplate className="w-3.5 h-3.5 text-blue-600" />
-                  固定画布尺寸调节 (Artboard)
-                </span>
-                <span className="text-[10px] text-slate-400">支持边缘拖拽</span>
+              <div className="text-[11px] font-semibold text-slate-700 flex items-center gap-1.5">
+                <LayoutTemplate className="w-3.5 h-3.5 text-blue-600" />
+                无限画布
               </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="text-[10px] text-slate-500 block mb-0.5">
-                    画布宽度 (cm)
-                  </label>
-                  <input
-                    type="number"
-                    step="0.5"
-                    min="4"
-                    max="120"
-                    value={canvasWidthCm}
-                    onChange={(e) =>
-                      setCanvasSizeCm(
-                        parseFloat(e.target.value) || 16.0,
-                        canvasHeightCm
-                      )
-                    }
-                    className="w-full px-2 py-1 bg-white border border-slate-200 rounded font-mono text-xs focus:outline-none focus:border-blue-500"
-                  />
-                </div>
-                <div>
-                  <label className="text-[10px] text-slate-500 block mb-0.5">
-                    画布高度 (cm)
-                  </label>
-                  <input
-                    type="number"
-                    step="0.5"
-                    min="4"
-                    max="120"
-                    value={canvasHeightCm}
-                    onChange={(e) =>
-                      setCanvasSizeCm(
-                        canvasWidthCm,
-                        parseFloat(e.target.value) || 10.0
-                      )
-                    }
-                    className="w-full px-2 py-1 bg-white border border-slate-200 rounded font-mono text-xs focus:outline-none focus:border-blue-500"
-                  />
-                </div>
-              </div>
-
-              {/* 2x2 Quick Preset Buttons */}
-              <div>
-                <label className="text-[10px] text-slate-400 block mb-1">
-                  常用版面尺寸预设
-                </label>
-                <div className="grid grid-cols-2 gap-1.5">
-                  {canvasPresets.map((preset) => {
-                    const isActive =
-                      Math.abs(canvasWidthCm - preset.w) < 0.05 &&
-                      Math.abs(canvasHeightCm - preset.h) < 0.05;
-                    return (
-                      <button
-                        key={preset.label}
-                        onClick={() => setCanvasSizeCm(preset.w, preset.h)}
-                        className={`px-2 py-1.5 rounded-lg border text-[10.5px] font-medium text-left truncate transition-colors cursor-pointer ${
-                          isActive
-                            ? 'bg-blue-50 border-blue-400 text-blue-700'
-                            : 'bg-white border-slate-200 text-slate-600 hover:border-blue-300 hover:text-blue-600'
-                        }`}
-                        title={preset.label}
-                      >
-                        {preset.label}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Fit to Content Button */}
+              <p className="text-[11px] leading-relaxed text-slate-500">
+                内容按原始坐标自由排布。拖拽空白处或按住空格拖拽平移，滚轮缩放。
+              </p>
               <button
-                onClick={() => {
-                  const bounds = document.getElementById('agentikz-canvas-svg')?.getBoundingClientRect();
-                  fitCanvasToContent(0.5, bounds ? { width: bounds.width, height: bounds.height } : undefined);
-                }}
+                onClick={() => fitCanvasToContent(0.5)}
                 className="w-full py-1.5 px-2.5 rounded-lg bg-white hover:bg-blue-50 text-slate-700 hover:text-blue-700 border border-slate-200 hover:border-blue-300 text-[11px] font-medium flex items-center justify-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
               >
                 <Maximize2 className="w-3.5 h-3.5 text-blue-600" />
-                <span>自适应包裹画布内容 (Fit to Content)</span>
+                <span>查看全部内容 (Fit)</span>
               </button>
             </div>
 

@@ -16,10 +16,13 @@ import { VectorPathPreview } from './VectorPathPreview';
 import { CanvasGeometry } from './CanvasGeometry';
 import { LatexLabel } from './LatexLabel';
 import { ChartSubTarget, PgfChartRenderer } from './PgfChartRenderer';
+import { CM_TO_PX, centerCanvasView, getCanvasContentBounds, zoomCanvasAt } from '../../core/canvas/viewport';
 import {
   ZoomIn,
   ZoomOut,
   Maximize2,
+  LocateFixed,
+  Infinity as InfinityIcon,
   Grid,
   Magnet,
   BookOpenText,
@@ -27,8 +30,6 @@ import {
   Edit3,
   X,
 } from 'lucide-react';
-
-const CM_TO_PX = 52; // 1 TikZ cm = 52px at 100% zoom
 
 type ResizeHandleDir =
   | 'n'
@@ -131,8 +132,6 @@ export const InteractiveCanvas: React.FC = () => {
     showGrid,
     snapToGrid,
     columnGuideMode,
-    canvasWidthCm,
-    canvasHeightCm,
     zoom,
     pan,
     previewMode,
@@ -144,9 +143,7 @@ export const InteractiveCanvas: React.FC = () => {
     setShowGrid,
     setSnapToGrid,
     setColumnGuideMode,
-    setCanvasSizeCm,
     fitCanvasToContent,
-    setZoom,
     setPan,
     setPreviewMode,
     setLeftTab,
@@ -175,8 +172,6 @@ export const InteractiveCanvas: React.FC = () => {
     showGrid: s.showGrid,
     snapToGrid: s.snapToGrid,
     columnGuideMode: s.columnGuideMode,
-    canvasWidthCm: s.canvasWidthCm,
-    canvasHeightCm: s.canvasHeightCm,
     zoom: s.zoom,
     pan: s.pan,
     previewMode: s.previewMode,
@@ -188,9 +183,7 @@ export const InteractiveCanvas: React.FC = () => {
     setShowGrid: s.setShowGrid,
     setSnapToGrid: s.setSnapToGrid,
     setColumnGuideMode: s.setColumnGuideMode,
-    setCanvasSizeCm: s.setCanvasSizeCm,
     fitCanvasToContent: s.fitCanvasToContent,
-    setZoom: s.setZoom,
     setPan: s.setPan,
     setPreviewMode: s.setPreviewMode,
     setLeftTab: s.setLeftTab,
@@ -220,6 +213,12 @@ export const InteractiveCanvas: React.FC = () => {
   })));
 
   const svgRef = useRef<SVGSVGElement | null>(null);
+  const canvasRef = useRef<HTMLDivElement | null>(null);
+  const [viewport, setViewport] = useState({ width: 0, height: 0 });
+  const [spacePressed, setSpacePressed] = useState(false);
+  const spacePressedRef = useRef(false);
+  const centeredDocuments = useRef(new Set<string>());
+  const contentBounds = useMemo(() => getCanvasContentBounds(parsedDoc), [parsedDoc]);
   const exactPreviewReasons = useMemo(() => getExactPreviewReasons(tikzCode), [tikzCode]);
   const requiresExactPreview = exactPreviewReasons.length > 0 &&
     (!parsedDoc.coordinateScene || parsedDoc.coordinateScene.elements.some((element) => !element.source && !element.macro));
@@ -235,7 +234,6 @@ export const InteractiveCanvas: React.FC = () => {
     activeCanvasFileName: s.activeCanvasFileName,
   })));
   const lastAttemptRef = useRef<string | null>(null);
-  const geometryFitTarget = useRef('');
   const theme = JOURNAL_THEMES[activeThemeId];
   const nodesById = useMemo(() => {
     const index = new Map<string, TikzNodeElement>();
@@ -251,15 +249,61 @@ export const InteractiveCanvas: React.FC = () => {
     [parsedDoc.nodes]
   );
 
-  // Preview is explicitly requested. Unsupported source must never switch editors.
+  // Observe the visible area; the drawing itself has no page dimensions.
   useEffect(() => {
-    if (!hasNativeGeometry || !svgRef.current) return;
+    const svg = svgRef.current;
+    if (!svg) return;
+    const update = () => {
+      const { width, height } = svg.getBoundingClientRect();
+      setViewport({ width, height });
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(svg);
+    return () => observer.disconnect();
+  }, []);
+
+  // First content opens at its original scale. Later edits keep the user's camera.
+  useEffect(() => {
+    if (!contentBounds || !viewport.width || !viewport.height) return;
     const key = `${projectDir}:${activeCanvasFileName}`;
-    if (geometryFitTarget.current === key) return;
-    geometryFitTarget.current = key;
-    const { width, height } = svgRef.current.getBoundingClientRect();
-    if (width > 0 && height > 0) fitCanvasToContent(0.5, { width, height });
-  }, [hasNativeGeometry, projectDir, activeCanvasFileName, fitCanvasToContent]);
+    if (centeredDocuments.current.has(key)) return;
+    centeredDocuments.current.add(key);
+    const view = useWorkspaceStore.getState();
+    if (view.zoom === 1 && view.pan.x === 80 && view.pan.y === 495) {
+      setPan(centerCanvasView(contentBounds, viewport, 1).pan);
+    }
+  }, [contentBounds, viewport, projectDir, activeCanvasFileName, setPan]);
+
+  // A native non-passive listener prevents browser zoom while navigating the canvas.
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const view = useWorkspaceStore.getState();
+      const rect = svg.getBoundingClientRect();
+      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? rect.height : 1;
+      useWorkspaceStore.setState(zoomCanvasAt(view,
+        view.zoom * Math.exp(-event.deltaY * unit * 0.0015),
+        { x: event.clientX - rect.left, y: event.clientY - rect.top }));
+    };
+    svg.addEventListener('wheel', onWheel, { passive: false });
+    const releaseSpace = () => {
+      spacePressedRef.current = false;
+      setSpacePressed(false);
+    };
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.code === 'Space') releaseSpace();
+    };
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', releaseSpace);
+    return () => {
+      svg.removeEventListener('wheel', onWheel);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', releaseSpace);
+    };
+  }, []);
 
   // Preview is independent of editing. Recompile only while it is visible;
   // in-flight compilation must not reopen it after the user returns to editing.
@@ -296,7 +340,7 @@ export const InteractiveCanvas: React.FC = () => {
     }
   }, [parsedDoc.nodes, ensureAssetDataUrl]);
 
-  // Unified drag state: move, pan, connect, resize_node, route_edge, move_edge_label, or resize_canvas
+  // All interactions share the same unbounded coordinate system.
   const [dragState, setDragState] = useState<{
     mode:
       | 'move'
@@ -304,8 +348,7 @@ export const InteractiveCanvas: React.FC = () => {
       | 'connect'
       | 'resize_node'
       | 'route_edge'
-      | 'move_edge_label'
-      | 'resize_canvas';
+      | 'move_edge_label';
     pathPoint?: { id: string; index: number; x: number; y: number };
     startClientX: number;
     startClientY: number;
@@ -332,11 +375,6 @@ export const InteractiveCanvas: React.FC = () => {
       id: string;
       initX: number;
       initY: number;
-    };
-    canvasResizeTarget?: {
-      dir: 'e' | 's' | 'se';
-      initW: number;
-      initH: number;
     };
   } | null>(null);
 
@@ -395,9 +433,10 @@ export const InteractiveCanvas: React.FC = () => {
     e: React.PointerEvent,
     elementId: string
   ) => {
+    if (e.button !== 0) return;
     e.stopPropagation();
 
-    svgRef.current?.parentElement?.parentElement?.focus();
+    canvasRef.current?.focus();
     if ((activeTool === 'edge' || activeTool === 'residual') && nodesById.has(elementId)) {
       if (selectedIds.length === 1 && selectedIds[0] !== elementId) {
         addEdgeBetweenNodes(
@@ -491,25 +530,6 @@ export const InteractiveCanvas: React.FC = () => {
     });
   };
 
-  const handleStartCanvasResize = (
-    e: React.PointerEvent,
-    dir: 'e' | 's' | 'se'
-  ) => {
-    e.stopPropagation();
-    setDragState({
-      mode: 'resize_canvas',
-      startClientX: e.clientX,
-      startClientY: e.clientY,
-      initialPan: { ...pan },
-      initialPositions: [],
-      canvasResizeTarget: {
-        dir,
-        initW: canvasWidthCm,
-        initH: canvasHeightCm,
-      },
-    });
-  };
-
   const handlePortPointerDown = (e: React.PointerEvent, nodeId: string) => {
     e.stopPropagation();
     const pt = clientToTikzCm(e.clientX, e.clientY);
@@ -525,7 +545,11 @@ export const InteractiveCanvas: React.FC = () => {
   };
 
   const handleCanvasPointerDown = (e: React.PointerEvent) => {
-    if (e.button === 1 || e.altKey) {
+    canvasRef.current?.focus();
+    if (e.button === 1 || e.altKey || spacePressedRef.current) {
+      e.preventDefault();
+      e.stopPropagation();
+      svgRef.current?.setPointerCapture(e.pointerId);
       setDragState({
         mode: 'pan',
         startClientX: e.clientX,
@@ -535,6 +559,7 @@ export const InteractiveCanvas: React.FC = () => {
       });
       return;
     }
+    if (e.button !== 0) return;
 
     const coords = clientToTikzCm(e.clientX, e.clientY);
     const snapX = snapToGrid ? Math.round(coords.x * 5) / 5 : coords.x;
@@ -558,9 +583,18 @@ export const InteractiveCanvas: React.FC = () => {
       return;
     }
 
-    // Left-click on empty canvas: just deselect, don't start panning.
-    // Panning is reserved for middle-click / alt-click (handled above).
     setSelectedIds([]);
+    if (activeTool === 'select') {
+      e.preventDefault();
+      svgRef.current?.setPointerCapture(e.pointerId);
+      setDragState({
+        mode: 'pan',
+        startClientX: e.clientX,
+        startClientY: e.clientY,
+        initialPan: { ...pan },
+        initialPositions: [],
+      });
+    }
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
@@ -589,23 +623,6 @@ export const InteractiveCanvas: React.FC = () => {
         ...dragState,
         connectCurrentPt: { x: pt.svgX, y: pt.svgY },
       });
-      return;
-    }
-
-    if (dragState.mode === 'resize_canvas' && dragState.canvasResizeTarget) {
-      const { dir, initW, initH } = dragState.canvasResizeTarget;
-      const dxCm = (e.clientX - dragState.startClientX) / zoom / CM_TO_PX;
-      const dyCm = (e.clientY - dragState.startClientY) / zoom / CM_TO_PX;
-
-      let nextW = initW;
-      let nextH = initH;
-      if (dir === 'e' || dir === 'se') {
-        nextW = Math.max(4.0, Math.min(120.0, Math.round((initW + dxCm) * 10) / 10));
-      }
-      if (dir === 's' || dir === 'se') {
-        nextH = Math.max(4.0, Math.min(120.0, Math.round((initH + dyCm) * 10) / 10));
-      }
-      setCanvasSizeCm(nextW, nextH);
       return;
     }
 
@@ -716,6 +733,9 @@ export const InteractiveCanvas: React.FC = () => {
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
+    if (svgRef.current?.hasPointerCapture(e.pointerId)) {
+      svgRef.current.releasePointerCapture(e.pointerId);
+    }
     if (dragState?.mode === 'connect' && dragState.connectFromId) {
       const pt = clientToTikzCm(e.clientX, e.clientY);
       const targetNode = parsedDoc.nodes.find(
@@ -1559,28 +1579,28 @@ export const InteractiveCanvas: React.FC = () => {
     </g>;
   };
 
-  // Tavotto-style bounded Paper Artboard geometry in SVG coordinates:
-  // Top-left anchored at (-1.0 cm, 8.5 cm) so resizing width/height expands rightward & downward cleanly
-  const pageLeft = hasNativeGeometry ? originX + (parsedDoc.coordinateScene?.viewBox[0] || 0) - 26 : originX - 1.0 * CM_TO_PX;
-  const pageTop = hasNativeGeometry ? originY + (parsedDoc.coordinateScene?.viewBox[1] || 0) - 26 : originY - 8.5 * CM_TO_PX;
-  const pageW = canvasWidthCm * CM_TO_PX;
-  const pageH = canvasHeightCm * CM_TO_PX;
-  const pagePresetTag =
-    Math.abs(canvasWidthCm - 8.5) < 0.2 && Math.abs(canvasHeightCm - 6.5) < 0.2
-      ? '单栏插图'
-      : Math.abs(canvasWidthCm - 16.0) < 0.2 &&
-          Math.abs(canvasHeightCm - 10.0) < 0.2
-        ? '双栏跨栏'
-        : Math.abs(canvasWidthCm - 20.0) < 0.2 &&
-            Math.abs(canvasHeightCm - 12.0) < 0.2
-          ? '宽幅海报'
-          : '可调画幅';
+  const zoomAtCenter = (nextZoom: number) => {
+    const view = useWorkspaceStore.getState();
+    useWorkspaceStore.setState(zoomCanvasAt(view, nextZoom, {
+      x: viewport.width / 2, y: viewport.height / 2,
+    }));
+  };
+  const visibleWidth = viewport.width / zoom;
+  const visibleHeight = viewport.height / zoom;
+  const gridStep = CM_TO_PX * zoom * 5 ** Math.ceil(Math.log(16 / (CM_TO_PX * zoom)) / Math.log(5));
 
   return (
     <div
-      className="relative flex-1 h-full bg-slate-200/80 overflow-hidden select-none flex flex-col"
+      ref={canvasRef}
+      className="relative flex-1 h-full bg-slate-50 overflow-hidden select-none flex flex-col outline-none"
       onKeyDown={(e) => {
-        if (inlineEditor) return;
+        if (inlineEditor || (e.target instanceof HTMLElement && e.target.closest('input, textarea, [contenteditable="true"]'))) return;
+        if (e.code === 'Space') {
+          e.preventDefault();
+          spacePressedRef.current = true;
+          setSpacePressed(true);
+          return;
+        }
         if (e.key === 'Delete' || e.key === 'Backspace') {
           deleteSelectedElements();
         } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd') {
@@ -1631,9 +1651,16 @@ export const InteractiveCanvas: React.FC = () => {
         <svg
           id="agentikz-canvas-svg"
           ref={svgRef}
+          onPointerDownCapture={(e) => {
+            if (e.button === 1 || e.altKey || spacePressedRef.current) {
+              handleCanvasPointerDown(e);
+            }
+          }}
           onPointerDown={handleCanvasPointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
+          onPointerCancel={() => { setDragState(null); setAlignmentGuides({}); }}
+          onLostPointerCapture={() => { setDragState(null); setAlignmentGuides({}); }}
           onDragOver={(e) => {
             e.preventDefault();
             e.dataTransfer.dropEffect = 'copy';
@@ -1650,75 +1677,33 @@ export const InteractiveCanvas: React.FC = () => {
               addImageAssetToCanvas(relPath, snapX, snapY);
             }
           }}
-          className="flex-1 w-full h-full min-w-0 bg-slate-200/80"
+          className="flex-1 w-full h-full min-w-0 bg-slate-50"
           aria-label="可编辑 TikZ 画布"
+          data-canvas-mode="infinite"
           style={{
+            touchAction: 'none',
             cursor:
               dragState?.mode === 'pan'
                 ? 'grabbing'
-                : activeTool !== 'select'
-                  ? 'crosshair'
-                  : 'default',
+                : spacePressed
+                  ? 'grab'
+                  : activeTool !== 'select'
+                    ? 'crosshair'
+                    : 'default',
           }}
         >
           <defs>
             {parsedDoc.coordinateScene?.clips.map((clip) => <clipPath key={clip.id} id={`canvas-${clip.id}`}><path d={clip.d} /></clipPath>)}
             <pattern
-              id="tikz-subgrid"
-              width={CM_TO_PX / 4}
-              height={CM_TO_PX / 4}
-              patternUnits="userSpaceOnUse"
-              data-export-ignore="true"
-            >
-              <circle cx={1} cy={1} r={0.65} fill="#E2E8F0" />
-            </pattern>
-            <pattern
               id="tikz-grid"
-              width={CM_TO_PX}
-              height={CM_TO_PX}
+              width={gridStep}
+              height={gridStep}
               patternUnits="userSpaceOnUse"
-              patternTransform={`translate(${originX % CM_TO_PX}, ${originY % CM_TO_PX})`}
+              patternTransform={`translate(${(originX * zoom - 1) % gridStep}, ${(originY * zoom - 1) % gridStep})`}
               data-export-ignore="true"
             >
-              <rect
-                width={CM_TO_PX}
-                height={CM_TO_PX}
-                fill="url(#tikz-subgrid)"
-              />
-              <path
-                d={`M ${CM_TO_PX} 0 L 0 0 0 ${CM_TO_PX}`}
-                fill="none"
-                stroke="#F1F5F9"
-                strokeWidth="1"
-              />
+              <circle cx={1} cy={1} r={1} fill="#CBD5E1" />
             </pattern>
-
-            <clipPath id="tikz-page-clip" data-export-ignore="true">
-              <rect
-                x={pageLeft}
-                y={pageTop}
-                width={pageW}
-                height={pageH}
-                rx={4}
-              />
-            </clipPath>
-
-            <filter
-              id="tikz-page-shadow"
-              x="-8%"
-              y="-8%"
-              width="120%"
-              height="120%"
-              data-export-ignore="true"
-            >
-              <feDropShadow
-                dx="0"
-                dy="4"
-                stdDeviation="8"
-                floodColor="#0F172A"
-                floodOpacity="0.09"
-              />
-            </filter>
 
             <marker
               id="tikz-arrow"
@@ -1745,270 +1730,25 @@ export const InteractiveCanvas: React.FC = () => {
             </marker>
           </defs>
 
-          {/* Studio Desk Backdrop */}
-          <rect
-            width="100%"
-            height="100%"
-            fill="#E2E8F0"
-            data-export-ignore="true"
-            data-canvas-ui="true"
-          />
+          {/* The grid fills the viewport and follows the camera without any paper bounds. */}
+          <rect width="100%" height="100%" fill="#F8FAFC"
+            data-export-ignore="true" data-canvas-ui="true" />
+          {showGrid && <rect width="100%" height="100%" fill="url(#tikz-grid)"
+            pointerEvents="none" data-export-ignore="true" data-canvas-ui="true" />}
 
           <g id="agentikz-scene-root" transform={`scale(${zoom})`}>
-            {/* Bounded Paper Artboard Frame & Clipped Grid */}
-            <g data-export-ignore="true" data-canvas-ui="true">
-              <rect
-                x={pageLeft}
-                y={pageTop}
-                width={pageW}
-                height={pageH}
-                rx={4}
-                fill="#FFFFFF"
-                stroke={
-                  dragState?.mode === 'resize_canvas' ? '#2563EB' : '#CBD5E1'
-                }
-                strokeWidth={dragState?.mode === 'resize_canvas' ? 2 : 1.5}
-                filter="url(#tikz-page-shadow)"
-              />
-
-              {showGrid && (
-                <g clipPath="url(#tikz-page-clip)">
-                  <rect
-                    x={pageLeft}
-                    y={pageTop}
-                    width={pageW}
-                    height={pageH}
-                    fill="url(#tikz-grid)"
-                  />
-                  <g opacity={0.45} pointerEvents="none">
-                    <line
-                      x1={originX - 10}
-                      y1={originY}
-                      x2={originX + 10}
-                      y2={originY}
-                      stroke="#94A3B8"
-                      strokeWidth={1}
-                    />
-                    <line
-                      x1={originX}
-                      y1={originY - 10}
-                      x2={originX}
-                      y2={originY + 10}
-                      stroke="#94A3B8"
-                      strokeWidth={1}
-                    />
-                    <text
-                      x={originX + 4}
-                      y={originY + 12}
-                      fontSize={8.5}
-                      fill="#94A3B8"
-                      fontFamily="monospace"
-                    >
-                      (0,0)
-                    </text>
-                  </g>
-                </g>
-              )}
-
-              {/* Tavotto-style Top-Left Artboard Header Badge + Quick Size Preset Pills */}
-              <g transform={`translate(${pageLeft}, ${pageTop - 26})`}>
-                <rect
-                  x={0}
-                  y={0}
-                  width={238}
-                  height={20}
-                  rx={4}
-                  fill="#FFFFFF"
-                  fillOpacity={0.92}
-                  stroke="#CBD5E1"
-                  strokeWidth={1}
-                />
-                <text
-                  x={8}
-                  y={13.5}
-                  fontSize={9.5}
-                  fontWeight={600}
-                  fill="#334155"
-                  fontFamily="sans-serif"
-                >
-                  📄 {activeCanvasName.slice(0, 14)} ·{' '}
-                  {canvasWidthCm.toFixed(1)}×{canvasHeightCm.toFixed(1)} cm (
-                  {pagePresetTag})
-                </text>
-
-                {/* Quick Preset Pills on Artboard Header */}
-                {[
-                  { label: '单栏 8.5×6.5', w: 8.5, h: 6.5, xOff: 244, wPx: 72 },
-                  {
-                    label: '双栏 16×10',
-                    w: 16.0,
-                    h: 10.0,
-                    xOff: 320,
-                    wPx: 66,
-                  },
-                  {
-                    label: '宽幅 20×12',
-                    w: 20.0,
-                    h: 12.0,
-                    xOff: 390,
-                    wPx: 66,
-                  },
-                ].map((preset) => {
-                  const isActive =
-                    Math.abs(canvasWidthCm - preset.w) < 0.15 &&
-                    Math.abs(canvasHeightCm - preset.h) < 0.15;
-                  return (
-                    <g
-                      key={preset.label}
-                      transform={`translate(${preset.xOff}, 0)`}
-                      className="cursor-pointer"
-                      onPointerDown={(e) => e.stopPropagation()}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setCanvasSizeCm(preset.w, preset.h);
-                      }}
-                    >
-                      <rect
-                        x={0}
-                        y={0}
-                        width={preset.wPx}
-                        height={20}
-                        rx={4}
-                        fill={isActive ? '#2563EB' : '#FFFFFF'}
-                        fillOpacity={isActive ? 1 : 0.85}
-                        stroke={isActive ? '#1D4ED8' : '#CBD5E1'}
-                        strokeWidth={1}
-                      />
-                      <text
-                        x={preset.wPx / 2}
-                        y={13.5}
-                        textAnchor="middle"
-                        fontSize={9}
-                        fontWeight={500}
-                        fill={isActive ? '#FFFFFF' : '#475569'}
-                        fontFamily="sans-serif"
-                      >
-                        {preset.label}
-                      </text>
-                    </g>
-                  );
-                })}
-
-                {/* Fit to Content Pill */}
-                <g
-                  transform="translate(460, 0)"
-                  className="cursor-pointer"
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    const bounds = svgRef.current?.getBoundingClientRect();
-                    fitCanvasToContent(0.5, bounds ? { width: bounds.width, height: bounds.height } : undefined);
-                  }}
-                >
-                  <rect
-                    x={0}
-                    y={0}
-                    width={76}
-                    height={20}
-                    rx={4}
-                    fill="#F8FAFC"
-                    stroke="#94A3B8"
-                    strokeWidth={1}
-                  />
-                  <text
-                    x={38}
-                    y={13.5}
-                    textAnchor="middle"
-                    fontSize={9}
-                    fontWeight={600}
-                    fill="#0F172A"
-                    fontFamily="sans-serif"
-                  >
-                    自适应 (Fit)
-                  </text>
-                </g>
-              </g>
-
-              {/* East (Right Edge) Page Resize Handle */}
-              <g
-                transform={`translate(${pageLeft + pageW}, ${pageTop + pageH / 2})`}
-                className="cursor-ew-resize"
-                onPointerDown={(e) => handleStartCanvasResize(e, 'e')}
-              >
-                <title>左右拖拽直接调节画布纸张宽度 (cm)</title>
-                <rect
-                  x={-3.5}
-                  y={-22}
-                  width={7}
-                  height={44}
-                  rx={3.5}
-                  fill="#FFFFFF"
-                  stroke="#64748B"
-                  strokeWidth={1.2}
-                />
-                <line
-                  x1={0}
-                  y1={-10}
-                  x2={0}
-                  y2={10}
-                  stroke="#94A3B8"
-                  strokeWidth={1.2}
-                />
-              </g>
-
-              {/* South (Bottom Edge) Page Resize Handle */}
-              <g
-                transform={`translate(${pageLeft + pageW / 2}, ${pageTop + pageH})`}
-                className="cursor-ns-resize"
-                onPointerDown={(e) => handleStartCanvasResize(e, 's')}
-              >
-                <title>上下拖拽直接调节画布纸张高度 (cm)</title>
-                <rect
-                  x={-22}
-                  y={-3.5}
-                  width={44}
-                  height={7}
-                  rx={3.5}
-                  fill="#FFFFFF"
-                  stroke="#64748B"
-                  strokeWidth={1.2}
-                />
-                <line
-                  x1={-10}
-                  y1={0}
-                  x2={10}
-                  y2={0}
-                  stroke="#94A3B8"
-                  strokeWidth={1.2}
-                />
-              </g>
-
-              {/* South-East (Bottom-Right Corner) Page Resize Handle */}
-              <g
-                transform={`translate(${pageLeft + pageW}, ${pageTop + pageH})`}
-                className="cursor-nwse-resize"
-                onPointerDown={(e) => handleStartCanvasResize(e, 'se')}
-              >
-                <title>拖拽右下角同时调节画布宽高 (cm)</title>
-                <rect
-                  x={-5.5}
-                  y={-5.5}
-                  width={11}
-                  height={11}
-                  rx={2.5}
-                  fill="#2563EB"
-                  stroke="#FFFFFF"
-                  strokeWidth={1.5}
-                />
-              </g>
-            </g>
+            {showGrid && <g opacity={0.6} pointerEvents="none" data-export-ignore="true" data-canvas-ui="true">
+              <path d={`M ${originX - 8 / zoom} ${originY} H ${originX + 8 / zoom} M ${originX} ${originY - 8 / zoom} V ${originY + 8 / zoom}`}
+                stroke="#94A3B8" strokeWidth={1 / zoom} />
+              <text x={originX + 5 / zoom} y={originY + 16 / zoom} fontSize={10 / zoom} fill="#94A3B8" fontFamily="monospace">(0,0)</text>
+            </g>}
 
             {alignmentGuides.xCm !== undefined && (
               <line
                 x1={originX + alignmentGuides.xCm * CM_TO_PX}
                 y1={0}
                 x2={originX + alignmentGuides.xCm * CM_TO_PX}
-                y2={2000}
+                y2={visibleHeight}
                 stroke="#3B82F6"
                 strokeWidth={1}
                 strokeDasharray="4 3"
@@ -2019,7 +1759,7 @@ export const InteractiveCanvas: React.FC = () => {
               <line
                 x1={0}
                 y1={originY - alignmentGuides.yCm * CM_TO_PX}
-                x2={2400}
+                x2={visibleWidth}
                 y2={originY - alignmentGuides.yCm * CM_TO_PX}
                 stroke="#3B82F6"
                 strokeWidth={1}
@@ -2042,9 +1782,9 @@ export const InteractiveCanvas: React.FC = () => {
                   <g data-export-ignore="true" pointerEvents="none">
                     <rect
                       x={guideLeft}
-                      y={pageTop + 8}
+                      y={0}
                       width={colWidthPx}
-                      height={pageH - 16}
+                      height={visibleHeight}
                       fill="none"
                       stroke="#E11D48"
                       strokeWidth={1.1}
@@ -2053,7 +1793,7 @@ export const InteractiveCanvas: React.FC = () => {
                     />
                     <rect
                       x={guideRight - 142}
-                      y={pageTop + 12}
+                      y={12 / zoom}
                       width={138}
                       height={17}
                       rx={3}
@@ -2063,7 +1803,7 @@ export const InteractiveCanvas: React.FC = () => {
                     />
                     <text
                       x={guideRight - 73}
-                      y={pageTop + 23.5}
+                      y={23.5 / zoom}
                       textAnchor="middle"
                       fontSize={8.5}
                       fontWeight={600}
@@ -2574,10 +2314,15 @@ export const InteractiveCanvas: React.FC = () => {
       )}
 
       {/* Bottom Floating Status & Canvas Controls Bar */}
+      <div className="no-print absolute top-3 left-3 flex items-center gap-2 rounded-lg border border-slate-200/80 bg-white/90 px-2.5 py-1.5 text-[11px] text-slate-500 pointer-events-none">
+        <InfinityIcon className="w-3.5 h-3.5 text-blue-600" />
+        <span className="font-medium text-slate-700">无限画布</span>
+        <span className="max-w-40 truncate">{activeCanvasName}</span>
+      </div>
       <div className="no-print absolute bottom-2.5 left-3 right-3 flex items-center justify-between pointer-events-none">
         <div className="flex items-center gap-1.5 bg-white/95 border border-slate-200/90 shadow-xs rounded-lg px-2 py-1 pointer-events-auto">
           <button
-            onClick={() => setZoom(zoom - 0.1)}
+            onClick={() => zoomAtCenter(zoom / 1.2)}
             className="p-1 text-slate-600 hover:bg-slate-100 rounded"
             title="缩小画布"
           >
@@ -2587,7 +2332,7 @@ export const InteractiveCanvas: React.FC = () => {
             {Math.round(zoom * 100)}%
           </span>
           <button
-            onClick={() => setZoom(zoom + 0.1)}
+            onClick={() => zoomAtCenter(zoom * 1.2)}
             className="p-1 text-slate-600 hover:bg-slate-100 rounded"
             title="放大画布"
           >
@@ -2595,11 +2340,17 @@ export const InteractiveCanvas: React.FC = () => {
           </button>
           <button
             onClick={() => {
-              setZoom(1);
-              setPan({ x: 90, y: 510 });
+              useWorkspaceStore.setState(centerCanvasView(contentBounds, viewport, 1));
             }}
             className="p-1 text-slate-600 hover:bg-slate-100 rounded"
             title="重置视图 (100%)"
+          >
+            <LocateFixed className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={() => fitCanvasToContent(0.5, viewport)}
+            className="p-1 text-slate-600 hover:bg-slate-100 rounded"
+            title="查看全部内容 (Fit)，仅调整视图"
           >
             <Maximize2 className="w-3.5 h-3.5" />
           </button>
@@ -2667,8 +2418,8 @@ export const InteractiveCanvas: React.FC = () => {
           )}
         </div>
 
-        <div className="bg-white/95 border border-slate-200/90 shadow-xs rounded-lg px-2.5 py-1 text-[11px] text-slate-500 flex items-center gap-3 pointer-events-auto">
-          <span>支持双击任意文字/轴标签/图注原地编辑 · 8向控点拖拽缩放</span>
+        <div className="hidden xl:flex bg-white/95 border border-slate-200/90 shadow-xs rounded-lg px-2.5 py-1 text-[11px] text-slate-500 items-center gap-3 pointer-events-auto">
+          <span>拖拽空白处平移 · 空格/中键拖拽 · 滚轮缩放</span>
           <span className="text-emerald-600 font-medium flex items-center gap-1">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
             AST 无损同步

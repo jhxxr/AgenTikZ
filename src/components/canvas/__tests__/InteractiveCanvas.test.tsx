@@ -64,14 +64,18 @@ describe('editing and TeX preview coexist', () => {
     expect(useWorkspaceStore.getState().tikzCode).toBe(complexSource);
   });
 
-  it('renders coordinate paths inside the original artboard and scene with original element IDs', () => {
+  it('renders coordinate paths on an infinite canvas with original element IDs', () => {
     useWorkspaceStore.getState().setTikzCode(coordinateDiagram);
     const html = renderToStaticMarkup(<InteractiveCanvas />);
     expect(html).toContain('id="agentikz-canvas-svg"');
     expect(html).toContain('id="agentikz-scene-root"');
     expect(html.match(/data-element-id="/g)).toHaveLength(12);
     expect(html).toContain('data-element-id="path_1"');
-    expect(html).toContain('画布纸张宽度');
+    expect(html).toContain('data-canvas-mode="infinite"');
+    expect(html).toContain('无限画布');
+    expect(html).not.toContain('tikz-page-clip');
+    expect(html).not.toContain('画布纸张宽度');
+    expect(html).not.toContain('单栏 8.5×6.5');
     expect(html).not.toContain('路径元素编辑器');
     expect(html).toContain('中文标题 A');
     expect(html).toContain('旋转标签');
