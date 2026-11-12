@@ -1,6 +1,6 @@
 [package]
 name = "agentikz-mcp"
-version = "0.9.1"
+version = "0.9.2"
 edition = "2021"
 license = "MIT"
 description = "AgenTikZ stdio MCP bridge and transport diagnostics"

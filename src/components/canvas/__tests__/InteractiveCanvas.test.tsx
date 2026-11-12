@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useWorkspaceStore } from '../../../store/useWorkspaceStore';
 import { InteractiveCanvas } from '../InteractiveCanvas';
+import coordinateDiagram from '../../../core/tex/__tests__/fixtures/complex-cjk-diagram.tex?raw';
 
 // Render chosen live Zustand state, not the fixed server initial snapshot.
 vi.mock('../../../store/useWorkspaceStore', async (importOriginal) => {
@@ -40,7 +41,7 @@ describe('editing and TeX preview coexist', () => {
       expect(canvasTag).not.toMatch(/class="[^"]*\bhidden\b/);
       expect(canvasTag).toContain('aria-label="可编辑 TikZ 画布"');
       expect(html).toContain('Editable label');
-      expect(html).toContain('编辑源码');
+      expect(html).toContain('data-element-id="macro_1"');
       expect(html.includes('aria-label="TeX 精确对照预览"')).toBe(previewMode !== 'interactive');
       if (previewMode !== 'interactive') expect(html).toContain('关闭精确预览，继续编辑');
     }
@@ -61,5 +62,20 @@ describe('editing and TeX preview coexist', () => {
     expect(useWorkspaceStore.getState().tikzCode).toBe(complexSource.replace('Editable label', 'Updated label'));
     useWorkspaceStore.getState().undo();
     expect(useWorkspaceStore.getState().tikzCode).toBe(complexSource);
+  });
+
+  it('renders coordinate paths inside the original artboard and scene with original element IDs', () => {
+    useWorkspaceStore.getState().setTikzCode(coordinateDiagram);
+    const html = renderToStaticMarkup(<InteractiveCanvas />);
+    expect(html).toContain('id="agentikz-canvas-svg"');
+    expect(html).toContain('id="agentikz-scene-root"');
+    expect(html.match(/data-element-id="/g)).toHaveLength(12);
+    expect(html).toContain('data-element-id="path_1"');
+    expect(html).toContain('画布纸张宽度');
+    expect(html).not.toContain('路径元素编辑器');
+    expect(html).toContain('中文标题 A');
+    expect(html).toContain('旋转标签');
+    expect(html).not.toContain('aria-label="TeX 精确对照预览"');
+    expect(html).not.toContain('交互画布仅显示可解析图元');
   });
 });

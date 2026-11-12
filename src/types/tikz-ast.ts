@@ -1,4 +1,5 @@
 import { NodeSalienceRole } from './theme';
+import type { CoordinateLabel, CoordinatePath, CoordinateScene, MacroSource } from '../core/parser/path-geometry';
 import {
   AgentImageDirective,
   FigureContract,
@@ -93,6 +94,26 @@ export interface TikzNodeElement {
   coordSpan?: SourceSpan;
   optionsSpan?: SourceSpan;
   labelSpan?: SourceSpan;
+  /** Native path coordinates, converted to the canvas's shared cm space. */
+  coordinateGeometry?: CoordinateLabel;
+  /** Plain TikZ labels use their actual anchor, font and rotation. */
+  geometry?: CoordinateLabel;
+  geometryGroup?: Array<CoordinatePath | CoordinateLabel>;
+  macroSource?: MacroSource;
+}
+
+export interface TikzPathElement {
+  kind: 'path';
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  depth?: undefined;
+  rawOptions: Record<string, string>;
+  span: SourceSpan;
+  optionsSpan?: SourceSpan;
+  geometry: CoordinatePath;
 }
 
 export interface TikzEdgeElement {
@@ -119,6 +140,8 @@ export interface TikzEdgeElement {
   span: SourceSpan;
   optionsSpan?: SourceSpan;
   routeSpan?: SourceSpan;
+  geometry?: CoordinatePath;
+  coordinateScaleX?: number;
 }
 
 export interface TikzChartElement {
@@ -163,6 +186,7 @@ export type SceneElement =
   | TikzNodeElement
   | TikzEdgeElement
   | TikzChartElement
+  | TikzPathElement
   | TikzRawElement;
 
 export interface ParsedTikzDocument {
@@ -177,6 +201,8 @@ export interface ParsedTikzDocument {
   nodes: TikzNodeElement[];
   edges: TikzEdgeElement[];
   charts: TikzChartElement[];
+  paths?: TikzPathElement[];
+  coordinateScene?: CoordinateScene;
   diagnostics: Array<{
     line: number;
     message: string;

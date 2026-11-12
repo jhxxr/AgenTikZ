@@ -4,9 +4,11 @@ import {
   TikzChartElement,
   TikzEdgeElement,
   TikzNodeElement,
+  TikzPathElement,
 } from '../../types/tikz-ast';
 import { formatTikzOptions } from './parser';
 import { useSettingsStore } from '../../store/useSettingsStore';
+import { patchElementGeometry, patchMacroGeometry } from './path-patcher';
 
 export function formatCoordNum(val: number): string {
   const precision = useSettingsStore.getState().coordPrecision;
@@ -26,23 +28,33 @@ export function formatCoordNum(val: number): string {
 export function patchElementsCoordinates(
   source: string,
   updates: Array<{
-    element: TikzNodeElement | TikzChartElement;
+    element: TikzNodeElement | TikzChartElement | TikzPathElement;
     x: number;
     y: number;
   }>
 ): string {
-  const validUpdates = updates
-    .filter((u) => u.element.coordSpan !== undefined)
-    .sort((a, b) => a.element.coordSpan!.start - b.element.coordSpan!.start);
+  const replacements = updates.flatMap(({ element, x, y }) => {
+    if (element.kind === 'node' && element.macroSource) {
+      const next = patchMacroGeometry(source, element, { dx: (x - element.x) * 52, dy: -(y - element.y) * 52 });
+      return [{ start: element.span.start, end: element.span.end,
+        text: next.slice(element.span.start, next.length - (source.length - element.span.end)) }];
+    }
+    const geometry = element.kind === 'path' ? element.geometry : element.kind === 'node' ? element.coordinateGeometry : undefined;
+    if (geometry?.source) {
+      const span = geometry.source.span;
+      const next = patchElementGeometry(source, geometry, { dx: (x - element.x) * 52, dy: -(y - element.y) * 52 });
+      return [{ start: span.start, end: span.end, text: next.slice(span.start, next.length - (source.length - span.end)) }];
+    }
+    if (element.kind === 'path' || !element.coordSpan) return [];
+    return [{ start: element.coordSpan.start, end: element.coordSpan.end, text: `${formatCoordNum(x)}, ${formatCoordNum(y)}` }];
+  }).sort((a, b) => a.start - b.start);
 
   const parts: string[] = [];
   let cursor = 0;
-  for (const { element, x, y } of validUpdates) {
-    const span = element.coordSpan!;
-    if (span.start < cursor) continue;
-    const coordStr = `${formatCoordNum(x)}, ${formatCoordNum(y)}`;
-    parts.push(source.slice(cursor, span.start), coordStr);
-    cursor = span.end;
+  for (const patch of replacements) {
+    if (patch.start < cursor) continue;
+    parts.push(source.slice(cursor, patch.start), patch.text);
+    cursor = patch.end;
   }
   parts.push(source.slice(cursor));
   return parts.join('');
@@ -105,6 +117,47 @@ export function patchNodeOptions(
   node: TikzNodeElement,
   optionPatches: Record<string, string | undefined>
 ): string {
+  if (node.macroSource) {
+    const width = optionPatches['minimum width'], height = optionPatches['minimum height'];
+    if (width || height) {
+      const extent = (axis: 0 | 1, scale: number): [number, number] => {
+        const center = axis === 0 ? node.x * 52 : -node.y * 52;
+        const bounds = (node.geometryGroup || []).map((geometry) => {
+          const min = geometry.bounds[axis], size = geometry.bounds[axis + 2];
+          if (geometry.kind === 'label') {
+            const anchor = axis === 0 ? geometry.x : geometry.y;
+            const at = center + (anchor - center) * scale;
+            return [at + min - anchor, at + min - anchor + size];
+          }
+          return [center + (min - center) * scale, center + (min + size - center) * scale];
+        });
+        return [Math.min(...bounds.map((item) => item[0])), Math.max(...bounds.map((item) => item[1]))];
+      };
+      const fit = (axis: 0 | 1, desired?: string) => {
+        if (!desired) return 1;
+        const target = parseFloat(desired) * 52;
+        let low = 0.001, high = 1;
+        while (extent(axis, high)[1] - extent(axis, high)[0] < target && high < 1024) high *= 2;
+        for (let i = 0; i < 40; i++) {
+          const middle = (low + high) / 2, bounds = extent(axis, middle);
+          if (bounds[1] - bounds[0] < target) low = middle; else high = middle;
+        }
+        return (low + high) / 2;
+      };
+      const x = fit(0, width), y = fit(1, height);
+      const xb = extent(0, x), yb = extent(1, y);
+      return patchMacroGeometry(source, node, {
+        scale: { x, y, originX: node.x * 52, originY: -node.y * 52 },
+        dx: node.x * 52 - (xb[0] + xb[1]) / 2, dy: -node.y * 52 - (yb[0] + yb[1]) / 2,
+      });
+    }
+    return source;
+  }
+  if (node.subtype !== 'image' && node.coordinateGeometry?.source && Object.values(optionPatches).every((value) => value !== undefined && value !== '')) {
+    return patchElementGeometry(source, node.coordinateGeometry, {
+      options: Object.fromEntries(Object.entries(optionPatches).map(([key, value]) => [key, value!])),
+    });
+  }
   const updatedOpts: Record<string, string> = { ...node.rawOptions };
   for (const [k, v] of Object.entries(optionPatches)) {
     if (v === undefined || v === '') {
@@ -198,6 +251,12 @@ export function patchEdgeElement(
     lineStyle?: 'solid' | 'dashed' | 'dotted' | 'densely_dashed' | 'densely_dotted';
   }
 ): string {
+  if (edge.geometry?.source && Object.keys(updates).every((key) => ['stroke', 'lineWidth'].includes(key))) {
+    return patchElementGeometry(source, edge.geometry, { options: {
+      ...(updates.stroke !== undefined ? { draw: updates.stroke } : {}),
+      ...(updates.lineWidth !== undefined ? { 'line width': updates.lineWidth } : {}),
+    } });
+  }
   const nextRoute = updates.routeType ?? edge.routeType;
   const nextOffset = updates.residualOffset ?? edge.residualOffset ?? 1.4;
   const nextBend = updates.bendAngle ?? edge.bendAngle ?? 28;
@@ -271,7 +330,7 @@ export function patchEdgeElement(
         : formatCoordNum(-Math.abs(nextOffset));
     const fAnchor = edge.fromAnchor || (nextRoute === 'residual_right' ? 'east' : 'west');
     const tAnchor = edge.toAnchor || (nextRoute === 'residual_right' ? 'east' : 'west');
-    newStmt = `\\draw[${optStr}] (${edge.from}.${fAnchor}) -- ++(${signedDx}, 0) |-${labelSegment}(${edge.to}.${tAnchor});`;
+    newStmt = `\\draw[${optStr}] (${edge.from}.${fAnchor}) -- ++(${signedDx}${edge.coordinateScaleX !== undefined ? 'cm' : ''}, 0) |-${labelSegment}(${edge.to}.${tAnchor});`;
   } else if (nextRoute === 'curved') {
     const dir = nextBend >= 0 ? 'bend left' : 'bend right';
     newStmt = `\\draw[${optStr}] (${fromRef}) to[${dir}=${Math.abs(nextBend)}]${labelSegment}(${toRef});`;
@@ -556,7 +615,7 @@ export function patchFigureCaptionAndLabel(
  */
 export function duplicateElementsInSource(
   source: string,
-  elements: Array<TikzNodeElement | TikzChartElement>,
+  elements: Array<TikzNodeElement | TikzChartElement | TikzPathElement>,
   suffixSeed: number
 ): { nextSource: string; newIds: string[] } {
   let nextSource = source;
@@ -570,7 +629,19 @@ export function duplicateElementsInSource(
     const nx = formatCoordNum(el.x + 0.45);
     const ny = formatCoordNum(el.y - 0.45);
 
-    if (el.kind === 'node') {
+    const geometry = el.kind === 'path' ? el.geometry : el.kind === 'node' ? el.coordinateGeometry : undefined;
+    if (el.kind === 'node' && el.macroSource) {
+      const updated = patchMacroGeometry(source, el, { dx: 0.45 * 52, dy: 0.45 * 52 });
+      const cloned = updated.slice(el.span.start, updated.length - (source.length - el.span.end))
+        .replace(new RegExp(`local bounding box\\s*=\\s*${el.id}(?=[,\\]])`), `local bounding box=${newId}`);
+      nextSource = insertTikzStatement(nextSource, cloned);
+    } else if (geometry?.source) {
+      const updated = patchElementGeometry(source, geometry, { dx: 0.45 * 52, dy: 0.45 * 52 });
+      const span = geometry.source.span;
+      let cloned = updated.slice(span.start, updated.length - (source.length - span.end));
+      if (el.kind === 'node' && el.namedInSource) cloned = cloned.replace(new RegExp(`\\(\\s*${el.id}\\s*\\)`), `(${newId})`);
+      nextSource = insertTikzStatement(nextSource, cloned);
+    } else if (el.kind === 'node') {
       let cloned = rawSnippet
         .replace(new RegExp(`\\(\\s*${el.id}\\s*\\)`), `(${newId})`)
         .replace(

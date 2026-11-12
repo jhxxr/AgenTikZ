@@ -75,7 +75,7 @@ describe('full documents and path-based TikZ rendering', () => {
   it('does not interpret macro definitions as visible source nodes', () => {
     const doc = parseTikzDocument(nestedSwsa);
     expect(doc.nodes.every((node) => !node.label.includes('#6'))).toBe(true);
-    expect(doc.diagnostics.some((d) => d.message.includes('TeX'))).toBe(true);
+    expect(doc.nodes.some((node) => node.macroSource && node.geometryGroup?.length)).toBe(true);
     expect(getExactPreviewReasons('% \\fill (0,0) circle (1);\n\\node (a) at (0,0) {A};')).toEqual([]);
     expect(getExactPreviewReasons('\\draw (a.east) -- (2,0) |- (b.west);')).toEqual([]);
   });

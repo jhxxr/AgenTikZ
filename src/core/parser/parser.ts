@@ -1,3 +1,6 @@
+import { parseTikzOptionString, formatTikzOptions } from './options';
+import { parseCoordinateGeometry } from './path-geometry';
+export { parseTikzOptionString, formatTikzOptions } from './options';
 import {
   BoxplotStat,
   ChartDataPoint,
@@ -12,6 +15,7 @@ import {
   TikzChartElement,
   TikzEdgeElement,
   TikzNodeElement,
+  TikzPathElement,
 } from '../../types/tikz-ast';
 import { JournalThemeId, NodeSalienceRole } from '../../types/theme';
 import {
@@ -141,81 +145,7 @@ function createSpanFactory(source: string): SpanFactory {
   });
 }
 
-/**
- * Splits a TikZ `[key=val, flag, foo={a,b}]` option list at top-level commas.
- */
-export function parseTikzOptionString(optStr: string): Record<string, string> {
-  const result: Record<string, string> = {};
-  let depth = 0;
-  let current = '';
-
-  const commit = (token: string) => {
-    const trimmed = token.trim();
-    if (!trimmed) return;
-    const eqIdx = trimmed.indexOf('=');
-    if (eqIdx === -1) {
-      result[trimmed] = 'true';
-    } else {
-      const k = trimmed.slice(0, eqIdx).trim();
-      let v = trimmed.slice(eqIdx + 1).trim();
-      if (v.startsWith('{') && v.endsWith('}')) {
-        v = v.slice(1, -1).trim();
-      }
-      result[k] = v;
-    }
-  };
-
-  for (let i = 0; i < optStr.length; i++) {
-    const ch = optStr[i];
-    if (ch === '{' || ch === '(') depth++;
-    else if (ch === '}' || ch === ')') depth = Math.max(0, depth - 1);
-
-    if (ch === ',' && depth === 0) {
-      commit(current);
-      current = '';
-    } else {
-      current += ch;
-    }
-  }
-  commit(current);
-  return result;
-}
-
-export function formatTikzOptions(options: Record<string, string>): string {
-  const parts: string[] = [];
-  for (const [k, v] of Object.entries(options)) {
-    if (v === undefined || v === '') continue;
-    if (v === 'true') {
-      parts.push(k);
-    } else if (
-      k === 'channels' ||
-      k === 'sublabel' ||
-      v.includes(',') ||
-      v.includes('\\')
-    ) {
-      parts.push(`${k}={${v}}`);
-    } else if (v.includes(' ')) {
-      if (
-        k === 'minimum width' ||
-        k === 'minimum height' ||
-        k === 'minimum size' ||
-        k === 'rounded corners' ||
-        k === 'line width' ||
-        k === 'inner sep' ||
-        k === 'text width' ||
-        k === 'align'
-      ) {
-        parts.push(`${k}=${v}`);
-      } else {
-        parts.push(`${k}={${v}}`);
-      }
-    } else {
-      parts.push(`${k}=${v}`);
-    }
-  }
-  return parts.join(', ');
-}
-
+/** Convert explicit TikZ dimensions to the canvas's shared cm unit. */
 function parseCmValue(val: string | undefined, fallback: number): number {
   if (!val) return fallback;
   const num = parseFloat(val.replace(/cm|pt|mm/g, '').trim());
@@ -424,8 +354,10 @@ function parseSingleNodeStatement(
   // Locate node ID `(id)` before `at` or `{`
   let id = `node_${autoIdx}`;
   let namedInSource = false;
-  const withoutAt = rawStmt.replace(/at\s*\(\s*[-+0-9.a-zA-Z]+\s*,\s*[-+0-9.a-zA-Z]+\s*\)/, '   ');
-  const idMatch = /\(\s*([a-zA-Z0-9_:-]+)\s*\)/.exec(withoutAt);
+  const afterOptions = nodePrefix ? rawStmt[nodePrefix[0].length] === '['
+    ? (extractBracketContent(rawStmt, nodePrefix[0].length)?.closeIdx ?? nodePrefix[0].length) + 1
+    : nodePrefix[0].length : 0;
+  const idMatch = /^\s*\(\s*([a-zA-Z0-9_:-]+)\s*\)/.exec(rawStmt.slice(afterOptions));
   if (idMatch) {
     id = idMatch[1].trim();
     namedInSource = true;
@@ -1220,6 +1152,110 @@ export function parseTikzDocument(
     }
   }
 
+  const paths: TikzPathElement[] = [];
+  const coordinateScene = exactPreviewReasons.length ? parseCoordinateGeometry(source, undefined, preambleStyles) : null;
+  if (coordinateScene) {
+    const macroGroups = new Map<number, { source: NonNullable<typeof coordinateScene.elements[0]['macro']>; elements: typeof coordinateScene.elements }>();
+    for (let index = 0; index < coordinateScene.elements.length; index++) {
+      const geometry = coordinateScene.elements[index];
+      if (geometry.macro) {
+        const key = geometry.macro.editScope?.span.start ?? geometry.macro.span.start;
+        const group = macroGroups.get(key) || { source: geometry.macro, elements: [] };
+        group.elements.push(geometry); macroGroups.set(key, group);
+        continue;
+      }
+      if (!geometry.source) continue;
+      const binding = geometry.source;
+      const [left, top, width, height] = geometry.bounds;
+      const x = (left + width / 2) / 52, y = -(top + height / 2) / 52;
+      if (geometry.kind === 'path') {
+        const edge = edges.find((edge) => edge.span.start === binding.span.start);
+        if (edge) {
+          edge.geometry = geometry;
+          edge.coordinateScaleX = coordinateScene.coordinateScale[0] / 52;
+          if (edge.residualOffset !== undefined) {
+            const offset = /\+\+\(\s*([-+\d.]+)\s*(cm|mm|pt|in)?/.exec(source.slice(edge.span.start, edge.span.end));
+            if (offset) edge.residualOffset = Math.abs(parseFloat(offset[1])) * (offset[2]
+              ? ({ cm: 1, mm: 0.1, pt: 1 / 28.45274, in: 2.54 }[offset[2]]!) : Math.abs(edge.coordinateScaleX));
+          }
+          continue;
+        }
+        const path: TikzPathElement = {
+          kind: 'path', id: `path_${paths.length + 1}`, x, y, width: width / 52, height: height / 52,
+          geometry, rawOptions: binding.rawOptions, span: makeSpan(binding.span.start, binding.span.end),
+          optionsSpan: binding.optionsSpan ? makeSpan(binding.optionsSpan.start, binding.optionsSpan.end) : undefined,
+        };
+        paths.push(path);
+        elements.push(path);
+      } else {
+        let node = nodes.find((item) => item.span.start === binding.span.start);
+        if (!node) {
+          node = {
+            kind: 'node', id: `node_${nodeIdx++}`, namedInSource: false, subtype: 'math',
+            x, y, width: width / 52, height: height / 52, label: geometry.lines.join('\\\\'),
+            rawOptions: binding.rawOptions, span: makeSpan(binding.span.start, binding.span.end),
+          };
+          nodes.push(node); elements.push(node);
+        }
+        node.coordinateGeometry = geometry;
+        node.x = x; node.y = y;
+        node.labelSpan = binding.labelSpan ? makeSpan(binding.labelSpan.start, binding.labelSpan.end) : node.labelSpan;
+        const merged = Object.entries(binding.rawOptions).reduce<Record<string, string>>((options, [key, value]) =>
+          ({ ...options, ...(value === 'true' ? preambleStyles[key] : {}), [key]: value }), {});
+        const hasShape = ['draw', 'fill'].some((key) => merged[key] && merged[key] !== 'none') ||
+          ['circle', 'ellipse', 'rectangle', 'shape'].some((key) => merged[key] && merged[key] !== 'false') ||
+          node.subtype === 'image' || node.subtype === 'cuboid';
+        if (!hasShape) {
+          node.geometry = geometry;
+          node.subtype = 'math';
+          node.label = node.labelSpan ? source.slice(node.labelSpan.start, node.labelSpan.end) : geometry.lines.join('\\\\');
+          node.sublabel = undefined;
+          node.width = width / 52; node.height = height / 52;
+          node.textColor = geometry.color;
+        }
+      }
+    }
+    let macroIndex = 1;
+    const occupied = new Set([...nodes.map((node) => node.id),
+      ...[...macroGroups.values()].flatMap((group) => group.source.editScope?.name ? [group.source.editScope.name] : [])]);
+    for (const group of macroGroups.values()) {
+      const invocation = group.source.span;
+      for (const collection of [elements, nodes, edges]) {
+        for (let index = collection.length - 1; index >= 0; index--) {
+          const element = collection[index];
+          if (element.span.start >= invocation.start && element.span.end <= invocation.end) collection.splice(index, 1);
+        }
+      }
+      const left = Math.min(...group.elements.map((item) => item.bounds[0]));
+      const top = Math.min(...group.elements.map((item) => item.bounds[1]));
+      const right = Math.max(...group.elements.map((item) => item.bounds[0] + item.bounds[2]));
+      const bottom = Math.max(...group.elements.map((item) => item.bounds[1] + item.bounds[3]));
+      const span = group.source.editScope?.span || group.source.span;
+      const text = group.elements.find((item) => item.kind === 'label');
+      const content = text?.kind === 'label' ? text.lines.join('\\\\').trim() : undefined;
+      const matchingArgs = group.source.args.filter((arg) => arg.value.trim() === content);
+      const labelSpan = matchingArgs.length === 1 ? matchingArgs[0] : undefined;
+      while (occupied.has(`macro_${macroIndex}`)) macroIndex++;
+      const id = group.source.editScope?.name || `macro_${macroIndex++}`;
+      occupied.add(id);
+      const node: TikzNodeElement = {
+        kind: 'node', id,
+        namedInSource: !!group.source.editScope?.name, subtype: 'math',
+        x: (left + right) / 104, y: -(top + bottom) / 104,
+        width: (right - left) / 52, height: (bottom - top) / 52,
+        label: labelSpan ? source.slice(labelSpan.start, labelSpan.end) : source.slice(group.source.span.start, group.source.span.end).match(/^\\\w+/)?.[0] || '宏实例',
+        labelSpan: labelSpan ? makeSpan(labelSpan.start, labelSpan.end) : undefined,
+        rawOptions: {}, span: makeSpan(span.start, span.end),
+        macroSource: group.source, geometryGroup: group.elements,
+      };
+      nodes.push(node); elements.push(node);
+    }
+    elements.sort((a, b) => a.span.start - b.span.start);
+    if (coordinateScene.elements.every((element) => element.source || element.macro)) {
+      const index = diagnostics.findIndex((item) => item.message.startsWith('包含'));
+      if (index >= 0) diagnostics.splice(index, 1);
+    }
+  }
   return {
     fullSource: source,
     figureCaption,
@@ -1232,6 +1268,8 @@ export function parseTikzDocument(
     nodes,
     edges,
     charts,
+    paths,
+    coordinateScene: coordinateScene || undefined,
     diagnostics,
   };
 }

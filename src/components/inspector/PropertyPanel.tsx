@@ -28,6 +28,10 @@ import {
   X,
 } from 'lucide-react';
 
+function tikzRgb(hex: string) {
+  return `{rgb,255:red,${parseInt(hex.slice(1, 3), 16)};green,${parseInt(hex.slice(3, 5), 16)};blue,${parseInt(hex.slice(5, 7), 16)}}`;
+}
+
 /**
  * Figma / Excalidraw-inspired Floating Contextual Selection Bar.
  * Surfaces 90% of daily node/edge/chart actions right above the canvas without eating permanent sidebar width.
@@ -43,6 +47,7 @@ export const FloatingSelectionBar: React.FC = () => {
     updateNodeOptionsById,
     updateEdgeById,
     updateChartById,
+    updatePathById,
     duplicateSelectedElements,
     deleteSelectedElements,
     setLeftTab,
@@ -56,6 +61,7 @@ export const FloatingSelectionBar: React.FC = () => {
     updateNodeOptionsById: s.updateNodeOptionsById,
     updateEdgeById: s.updateEdgeById,
     updateChartById: s.updateChartById,
+    updatePathById: s.updatePathById,
     duplicateSelectedElements: s.duplicateSelectedElements,
     deleteSelectedElements: s.deleteSelectedElements,
     setLeftTab: s.setLeftTab,
@@ -72,7 +78,8 @@ export const FloatingSelectionBar: React.FC = () => {
     ? parsedDoc.charts.find((c) => c.id === firstId)
     : undefined;
 
-  if (!selectedNode && !selectedEdge && !selectedChart) return null;
+  const selectedPath = parsedDoc.paths?.find((path) => path.id === firstId);
+  if (!selectedNode && !selectedEdge && !selectedChart && !selectedPath) return null;
 
   const theme = JOURNAL_THEMES[activeThemeId];
 
@@ -82,6 +89,23 @@ export const FloatingSelectionBar: React.FC = () => {
       onPointerDown={(e) => e.stopPropagation()}
     >
       {/* NODE CONTEXTUAL CONTROLS */}
+      {selectedPath && <>
+        <span className="font-mono text-[10px] text-slate-600">{selectedPath.id}</span>
+        <label className="flex items-center gap-1 whitespace-nowrap text-xs">填充
+          <input aria-label="路径填充颜色" type="color" value={selectedPath.geometry.fill === 'none' ? '#ffffff' : selectedPath.geometry.fill}
+            onChange={(event) => updatePathById(selectedPath.id, { options: { fill: tikzRgb(event.target.value) } })} className="h-5 w-7 border-0 bg-transparent" />
+        </label>
+        <label className="flex items-center gap-1 whitespace-nowrap text-xs">线条
+          <input aria-label="路径线条颜色" type="color" value={selectedPath.geometry.stroke === 'none' ? '#000000' : selectedPath.geometry.stroke}
+            onChange={(event) => updatePathById(selectedPath.id, { options: { draw: tikzRgb(event.target.value) } })} className="h-5 w-7 border-0 bg-transparent" />
+        </label>
+        <label className="flex items-center gap-1 whitespace-nowrap text-xs">线宽
+          <input aria-label="路径线宽" type="number" min="0.1" step="0.1"
+            value={Number((selectedPath.geometry.strokeWidth / (52 / 28.45274)).toFixed(2))}
+            onChange={(event) => { const value = Number(event.target.value); if (value > 0) updatePathById(selectedPath.id, { options: { 'line width': `${value}pt` } }); }}
+            className="w-14 rounded border border-slate-200 px-1 text-xs" />
+        </label>
+      </>}
       {selectedNode && (
         <>
           <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-mono text-[10px] font-semibold shrink-0">
@@ -91,6 +115,7 @@ export const FloatingSelectionBar: React.FC = () => {
           <input
             type="text"
             value={selectedNode.label}
+            disabled={!!selectedNode.macroSource && !selectedNode.labelSpan}
             onChange={(e) =>
               updateNodeLabelById(
                 selectedNode.id,
@@ -345,6 +370,8 @@ export const PropertyPanel: React.FC = () => {
     updateFigureCaption,
     updateEdgeById,
     updateChartById,
+    updatePathById,
+    updateMacroArgumentById,
     moveChartLegend,
     duplicateSelectedElements,
     deleteSelectedElements,
@@ -372,6 +399,8 @@ export const PropertyPanel: React.FC = () => {
     updateFigureCaption: s.updateFigureCaption,
     updateEdgeById: s.updateEdgeById,
     updateChartById: s.updateChartById,
+    updatePathById: s.updatePathById,
+    updateMacroArgumentById: s.updateMacroArgumentById,
     moveChartLegend: s.moveChartLegend,
     duplicateSelectedElements: s.duplicateSelectedElements,
     deleteSelectedElements: s.deleteSelectedElements,
@@ -411,8 +440,9 @@ export const PropertyPanel: React.FC = () => {
   const selectedChart = firstId
     ? parsedDoc.charts.find((c) => c.id === firstId)
     : undefined;
+  const selectedPath = parsedDoc.paths?.find((path) => path.id === firstId);
   const hasSelectedElement = Boolean(
-    selectedNode || selectedEdge || selectedChart
+    selectedNode || selectedEdge || selectedChart || selectedPath
   );
   const theme = JOURNAL_THEMES[activeThemeId];
 
@@ -446,7 +476,7 @@ export const PropertyPanel: React.FC = () => {
                     ? `连线属性 (${selectedEdge.from} → ${selectedEdge.to})`
                     : selectedChart
                       ? `图表与数据编辑 (${selectedChart.id})`
-                      : `已选中 ${selectedIds.length} 项`}
+                      : selectedPath ? `路径图元属性 (${selectedPath.id})` : `已选中 ${selectedIds.length} 项`}
             </span>
           </div>
 
@@ -523,7 +553,7 @@ export const PropertyPanel: React.FC = () => {
                     type="number"
                     step="0.5"
                     min="4"
-                    max="40"
+                    max="120"
                     value={canvasWidthCm}
                     onChange={(e) =>
                       setCanvasSizeCm(
@@ -542,7 +572,7 @@ export const PropertyPanel: React.FC = () => {
                     type="number"
                     step="0.5"
                     min="4"
-                    max="40"
+                    max="120"
                     value={canvasHeightCm}
                     onChange={(e) =>
                       setCanvasSizeCm(
@@ -585,7 +615,10 @@ export const PropertyPanel: React.FC = () => {
 
               {/* Fit to Content Button */}
               <button
-                onClick={() => fitCanvasToContent()}
+                onClick={() => {
+                  const bounds = document.getElementById('agentikz-canvas-svg')?.getBoundingClientRect();
+                  fitCanvasToContent(0.5, bounds ? { width: bounds.width, height: bounds.height } : undefined);
+                }}
                 className="w-full py-1.5 px-2.5 rounded-lg bg-white hover:bg-blue-50 text-slate-700 hover:text-blue-700 border border-slate-200 hover:border-blue-300 text-[11px] font-medium flex items-center justify-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
               >
                 <Maximize2 className="w-3.5 h-3.5 text-blue-600" />
@@ -767,7 +800,34 @@ export const PropertyPanel: React.FC = () => {
         )}
 
         {/* 1. NODE & SUBCAPTION & IMAGE INSPECTOR */}
-        {selectedNode && (
+        {selectedNode?.macroSource && <div className="space-y-2 rounded-xl border border-slate-200 p-3">
+          <div className="text-xs font-semibold text-slate-700">宏实例参数</div>
+          {selectedNode.macroSource.args.map((arg, index) => <label key={`${selectedNode.id}:${index}:${arg.value}`} className="block text-[11px] text-slate-500">
+            参数 {index + 1}
+            <input aria-label={`宏参数 ${index + 1}`} defaultValue={arg.value}
+              onBlur={(event) => { if (event.target.value !== arg.value) updateMacroArgumentById(selectedNode.id, index, event.target.value); }}
+              className="mt-1 w-full rounded border border-slate-200 px-2 py-1 font-mono text-xs" />
+          </label>)}
+          <p className="text-[11px] text-slate-500">移动、缩放、复制只作用于当前宏调用，保留共用宏定义。</p>
+        </div>}
+        {selectedPath && <div className="space-y-3 rounded-xl border border-slate-200 p-3">
+          <div className="text-xs font-semibold text-slate-700">坐标与尺寸 (cm)</div>
+          <div className="grid grid-cols-2 gap-2">
+            {(['x', 'y', 'width', 'height'] as const).map((field) => <label key={field} className="text-[11px] text-slate-500">
+              {{ x: '中心 X', y: '中心 Y', width: '宽度', height: '高度' }[field]}
+              <input aria-label={`路径${field}`} type="number" step="0.05" value={Number(selectedPath[field].toFixed(4))}
+                onChange={(event) => {
+                  const value = Number(event.target.value);
+                  if (!Number.isFinite(value)) return;
+                  if (field === 'x' || field === 'y') moveElementsByPosition([{ id: selectedPath.id, x: selectedPath.x, y: selectedPath.y, [field]: value }], true);
+                  else if (value > 0) updatePathById(selectedPath.id, { [field]: value });
+                }} className="mt-1 w-full rounded border border-slate-200 px-2 py-1 font-mono text-xs" />
+            </label>)}
+          </div>
+          <button className="text-xs text-blue-700" onClick={() => updatePathById(selectedPath.id, { options: { fill: 'none' } })}>移除填充</button>
+          <p className="text-[11px] text-slate-500">在画布拖动八向控点缩放，蓝色圆点调整路径坐标及曲线控制点。</p>
+        </div>}
+        {selectedNode && !selectedNode.macroSource && (
           <div className="space-y-2.5">
             {/* Image Asset Inspector (\includegraphics) */}
             {selectedNode.subtype === 'image' && (

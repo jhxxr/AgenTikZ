@@ -179,7 +179,7 @@ export async function executeMcpTool(event: McpToolRequest): Promise<unknown> {
     }
     if (event.toolName === 'get_canvas_ast') return { ...version, ast: doc };
     if (event.toolName === 'get_selected_elements') return {
-      ...version, elements: [...doc.nodes, ...doc.edges, ...doc.charts]
+      ...version, elements: [...doc.nodes, ...doc.edges, ...doc.charts, ...(doc.paths || [])]
         .filter((item) => workspace.selectedIds.includes(item.id))
         .map((item) => ({ ...item, source: source.slice(item.span.start, item.span.end) })),
     };

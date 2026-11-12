@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useWorkspaceStore } from '../../store/useWorkspaceStore';
 import { useProjectStore } from '../../store/useProjectStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
-import { TikzEdgeElement, TikzNodeElement } from '../../types/tikz-ast';
+import { TikzEdgeElement, TikzNodeElement, TikzPathElement } from '../../types/tikz-ast';
 import {
   JOURNAL_THEMES,
   ptToPx,
@@ -13,6 +13,7 @@ import { getExactPreviewReasons } from '../../core/tex/source';
 import { compileWorkspaceTexPreview } from '../../core/tex/preview';
 import { buildVectorPreview } from '../../core/tex/vector-preview';
 import { VectorPathPreview } from './VectorPathPreview';
+import { CanvasGeometry } from './CanvasGeometry';
 import { LatexLabel } from './LatexLabel';
 import { ChartSubTarget, PgfChartRenderer } from './PgfChartRenderer';
 import {
@@ -157,6 +158,7 @@ export const InteractiveCanvas: React.FC = () => {
     addEdgeBetweenNodes,
     updateNodeLabelById,
     updateNodeOptionsById,
+    updatePathById,
     updateEdgeById,
     updateFigureCaption,
     duplicateSelectedElements,
@@ -200,6 +202,7 @@ export const InteractiveCanvas: React.FC = () => {
     addEdgeBetweenNodes: s.addEdgeBetweenNodes,
     updateNodeLabelById: s.updateNodeLabelById,
     updateNodeOptionsById: s.updateNodeOptionsById,
+    updatePathById: s.updatePathById,
     updateEdgeById: s.updateEdgeById,
     updateFigureCaption: s.updateFigureCaption,
     duplicateSelectedElements: s.duplicateSelectedElements,
@@ -218,7 +221,10 @@ export const InteractiveCanvas: React.FC = () => {
 
   const svgRef = useRef<SVGSVGElement | null>(null);
   const exactPreviewReasons = useMemo(() => getExactPreviewReasons(tikzCode), [tikzCode]);
-  const requiresExactPreview = exactPreviewReasons.length > 0;
+  const requiresExactPreview = exactPreviewReasons.length > 0 &&
+    (!parsedDoc.coordinateScene || parsedDoc.coordinateScene.elements.some((element) => !element.source && !element.macro));
+  const hasNativeGeometry = !!parsedDoc.coordinateScene &&
+    (parsedDoc.coordinateScene.transformed || !!parsedDoc.paths?.length || parsedDoc.nodes.some((node) => node.macroSource));
   const vectorPreview = useMemo(() => requiresExactPreview ? buildVectorPreview(tikzCode) : null, [tikzCode, requiresExactPreview]);
   const { texEngine, openSettings } = useSettingsStore(useShallow((s) => ({
     texEngine: s.texEngine,
@@ -229,7 +235,7 @@ export const InteractiveCanvas: React.FC = () => {
     activeCanvasFileName: s.activeCanvasFileName,
   })));
   const lastAttemptRef = useRef<string | null>(null);
-  const previouslyRequiredExactPreview = useRef(false);
+  const geometryFitTarget = useRef('');
   const theme = JOURNAL_THEMES[activeThemeId];
   const nodesById = useMemo(() => {
     const index = new Map<string, TikzNodeElement>();
@@ -245,14 +251,15 @@ export const InteractiveCanvas: React.FC = () => {
     [parsedDoc.nodes]
   );
 
-  // Offer a full-fidelity comparison on entering a complex drawing, but never
-  // replace the editor or reopen a preview the user has explicitly closed.
+  // Preview is explicitly requested. Unsupported source must never switch editors.
   useEffect(() => {
-    if (requiresExactPreview && !previouslyRequiredExactPreview.current) {
-      setPreviewMode('tex_split');
-    }
-    previouslyRequiredExactPreview.current = requiresExactPreview;
-  }, [requiresExactPreview, setPreviewMode]);
+    if (!hasNativeGeometry || !svgRef.current) return;
+    const key = `${projectDir}:${activeCanvasFileName}`;
+    if (geometryFitTarget.current === key) return;
+    geometryFitTarget.current = key;
+    const { width, height } = svgRef.current.getBoundingClientRect();
+    if (width > 0 && height > 0) fitCanvasToContent(0.5, { width, height });
+  }, [hasNativeGeometry, projectDir, activeCanvasFileName, fitCanvasToContent]);
 
   // Preview is independent of editing. Recompile only while it is visible;
   // in-flight compilation must not reopen it after the user returns to editing.
@@ -299,6 +306,7 @@ export const InteractiveCanvas: React.FC = () => {
       | 'route_edge'
       | 'move_edge_label'
       | 'resize_canvas';
+    pathPoint?: { id: string; index: number; x: number; y: number };
     startClientX: number;
     startClientY: number;
     initialPan: { x: number; y: number };
@@ -389,7 +397,8 @@ export const InteractiveCanvas: React.FC = () => {
   ) => {
     e.stopPropagation();
 
-    if (activeTool === 'edge' || activeTool === 'residual') {
+    svgRef.current?.parentElement?.parentElement?.focus();
+    if ((activeTool === 'edge' || activeTool === 'residual') && nodesById.has(elementId)) {
       if (selectedIds.length === 1 && selectedIds[0] !== elementId) {
         addEdgeBetweenNodes(
           selectedIds[0],
@@ -423,6 +432,8 @@ export const InteractiveCanvas: React.FC = () => {
       if (n) initialPositions.push({ id: n.id, x: n.x, y: n.y });
       const c = parsedDoc.charts.find((item) => item.id === id);
       if (c) initialPositions.push({ id: c.id, x: c.x, y: c.y });
+      const p = parsedDoc.paths?.find((item) => item.id === id);
+      if (p) initialPositions.push({ id: p.id, x: p.x, y: p.y });
     }
 
     setDragState({
@@ -436,7 +447,7 @@ export const InteractiveCanvas: React.FC = () => {
 
   const handleStartNodeResize = (
     e: React.PointerEvent,
-    node: TikzNodeElement,
+    node: TikzNodeElement | TikzPathElement,
     dir: ResizeHandleDir
   ) => {
     e.stopPropagation();
@@ -554,6 +565,13 @@ export const InteractiveCanvas: React.FC = () => {
 
   const handlePointerMove = (e: React.PointerEvent) => {
     if (!dragState) return;
+    if (dragState.pathPoint) {
+      const { id, index, x, y } = dragState.pathPoint;
+      updatePathById(id, { point: { index,
+        x: x + (e.clientX - dragState.startClientX) / zoom,
+        y: y + (e.clientY - dragState.startClientY) / zoom } }, false);
+      return;
+    }
 
     if (dragState.mode === 'pan') {
       const dx = (e.clientX - dragState.startClientX) / zoom;
@@ -582,10 +600,10 @@ export const InteractiveCanvas: React.FC = () => {
       let nextW = initW;
       let nextH = initH;
       if (dir === 'e' || dir === 'se') {
-        nextW = Math.max(4.0, Math.min(40.0, Math.round((initW + dxCm) * 10) / 10));
+        nextW = Math.max(4.0, Math.min(120.0, Math.round((initW + dxCm) * 10) / 10));
       }
       if (dir === 's' || dir === 'se') {
-        nextH = Math.max(4.0, Math.min(40.0, Math.round((initH + dyCm) * 10) / 10));
+        nextH = Math.max(4.0, Math.min(120.0, Math.round((initH + dyCm) * 10) / 10));
       }
       setCanvasSizeCm(nextW, nextH);
       return;
@@ -607,13 +625,18 @@ export const InteractiveCanvas: React.FC = () => {
 
       let nextW = initW;
       let nextH = initH;
-      if (dir.includes('e')) nextW = Math.max(0.5, initW + dxCm * 2);
-      if (dir.includes('w')) nextW = Math.max(0.5, initW - dxCm * 2);
-      if (dir.includes('n')) nextH = Math.max(0.4, initH + dyCm * 2);
-      if (dir.includes('s')) nextH = Math.max(0.4, initH - dyCm * 2);
+      const nativePath = parsedDoc.paths?.some((path) => path.id === id) || parsedDoc.nodes.some((node) => node.id === id && node.macroSource);
+      if (dir.includes('e')) nextW = Math.max(nativePath ? 0.01 : 0.5, initW + dxCm * 2);
+      if (dir.includes('w')) nextW = Math.max(nativePath ? 0.01 : 0.5, initW - dxCm * 2);
+      if (dir.includes('n')) nextH = Math.max(nativePath ? 0.01 : 0.4, initH + dyCm * 2);
+      if (dir.includes('s')) nextH = Math.max(nativePath ? 0.01 : 0.4, initH - dyCm * 2);
 
       const wRounded = Number(nextW.toFixed(2));
       const hRounded = Number(nextH.toFixed(2));
+      if (parsedDoc.paths?.some((path) => path.id === id)) {
+        updatePathById(id, { width: wRounded, height: hRounded }, false);
+        return;
+      }
       updateNodeOptionsById(
         id,
         {
@@ -673,7 +696,7 @@ export const InteractiveCanvas: React.FC = () => {
           nx = Math.round(nx * 10) / 10;
           ny = Math.round(ny * 10) / 10;
         }
-        for (const other of parsedDoc.nodes) {
+        for (const other of snapToGrid ? parsedDoc.nodes : []) {
           if (movingIds.has(other.id)) continue;
           if (Math.abs(other.x - nx) < 0.08) {
             nx = other.x;
@@ -835,6 +858,7 @@ export const InteractiveCanvas: React.FC = () => {
         <title data-export-ignore="true">
           点击选中连线 · 双击直接编辑连线文字/公式标注
         </title>
+        {edge.geometry && <g transform={`translate(${originX} ${originY})`}><CanvasGeometry geometry={edge.geometry} id={edge.id} /></g>}
         <path
           d={pathD}
           fill="none"
@@ -845,6 +869,7 @@ export const InteractiveCanvas: React.FC = () => {
         />
         <path
           d={pathD}
+          visibility={edge.geometry ? 'hidden' : undefined}
           fill="none"
           stroke={strokeHex}
           strokeWidth={strokeW}
@@ -988,9 +1013,13 @@ export const InteractiveCanvas: React.FC = () => {
     return (
       <g
         key={node.id}
+        data-element-id={node.id}
         onPointerDown={(e) => handleElementPointerDown(e, node.id)}
         onDoubleClick={(e) => {
           e.stopPropagation();
+          if (node.macroSource && !node.labelSpan) {
+            setSelectedIds([node.id]); useWorkspaceStore.getState().setInspectorDrawerOpen(true); return;
+          }
           setInlineEditor({
             type: 'node',
             id: node.id,
@@ -1002,6 +1031,12 @@ export const InteractiveCanvas: React.FC = () => {
         }}
         className="cursor-move group"
       >
+        {node.geometry && <g transform={`translate(${originX} ${originY})`} style={{ fontFamily: parsedDoc.coordinateScene?.fontFamily }}>
+          <CanvasGeometry geometry={node.geometry} id={node.id} />
+        </g>}
+        {node.geometryGroup && <g transform={`translate(${originX} ${originY})`} style={{ fontFamily: parsedDoc.coordinateScene?.fontFamily }}>
+          {node.geometryGroup.map((geometry, index) => <CanvasGeometry key={index} geometry={geometry} id={`${node.id}-${index}`} />)}
+        </g>}
         {/* 1. CONTAINER / STAGE DASHED BOX */}
         {node.subtype === 'container' && (
           <g>
@@ -1196,7 +1231,7 @@ export const InteractiveCanvas: React.FC = () => {
         )}
 
         {/* 5. STANDALONE MATH FORMULA */}
-        {node.subtype === 'math' && (
+        {node.subtype === 'math' && !node.geometry && !node.geometryGroup && (
           <g>
             <rect
               x={left - 4}
@@ -1437,6 +1472,7 @@ export const InteractiveCanvas: React.FC = () => {
             ).map((hItem) => (
               <rect
                 key={hItem.dir}
+                data-resize-dir={hItem.dir}
                 x={hItem.hx - 3.5}
                 y={hItem.hy - 3.5}
                 width={7}
@@ -1485,10 +1521,48 @@ export const InteractiveCanvas: React.FC = () => {
     );
   };
 
+  const renderPath = (path: TikzPathElement, selectionOnly = false) => {
+    const selected = selectedIds.includes(path.id);
+    const cx = originX + path.x * CM_TO_PX, cy = originY - path.y * CM_TO_PX;
+    const w = path.width * CM_TO_PX, h = path.height * CM_TO_PX;
+    const left = cx - w / 2, top = cy - h / 2;
+    const handles: Array<{ dir: ResizeHandleDir; x: number; y: number }> = [
+      { dir: 'nw', x: left, y: top }, { dir: 'n', x: cx, y: top }, { dir: 'ne', x: left + w, y: top },
+      { dir: 'w', x: left, y: cy }, { dir: 'e', x: left + w, y: cy },
+      { dir: 'sw', x: left, y: top + h }, { dir: 's', x: cx, y: top + h }, { dir: 'se', x: left + w, y: top + h },
+    ];
+    return <g key={`${path.id}${selectionOnly ? '-selection' : ''}`} data-element-id={selectionOnly ? undefined : path.id}
+      data-path-selection-id={selectionOnly ? path.id : undefined} className="cursor-move group"
+      onPointerDown={(event) => handleElementPointerDown(event, path.id)}
+      onDoubleClick={(event) => { event.stopPropagation(); setSelectedIds([path.id]); useWorkspaceStore.getState().setInspectorDrawerOpen(true); }}>
+      {!selectionOnly && <g transform={`translate(${originX} ${originY})`}>
+        {path.geometry.fill === 'none' && <path d={path.geometry.d} stroke="transparent" strokeWidth={Math.max(7, path.geometry.strokeWidth)}
+          fill="none" pointerEvents="stroke" data-export-ignore="true" />}
+        <CanvasGeometry geometry={path.geometry} id={path.id} />
+      </g>}
+      {selected && selectionOnly && <g data-export-ignore="true">
+        <rect x={left - 3} y={top - 3} width={w + 6} height={h + 6} fill="none" stroke="#2563eb" strokeWidth={1.1} strokeDasharray="3 2" pointerEvents="none" />
+        {handles.map((handle) => <rect key={handle.dir} data-resize-dir={handle.dir}
+          x={handle.x - 3.5} y={handle.y - 3.5} width={7} height={7} fill="white" stroke="#2563eb" strokeWidth={1.5}
+          style={{ cursor: `${handle.dir}-resize` }} onPointerDown={(event) => handleStartNodeResize(event, path, handle.dir)}>
+          <title>拖拽直接缩放图元宽高</title>
+        </rect>)}
+        {path.geometry.source?.coordinates.map((point, index) => <circle key={index} data-path-point={index}
+          cx={originX + point.x.value * point.x.basis + (point.x.offset || 0)} cy={originY + point.y.value * point.y.basis + (point.y.offset || 0)}
+          r={3.2} fill="#DBEAFE" stroke="#2563eb" strokeWidth={1}
+          onPointerDown={(event) => {
+            event.stopPropagation(); useWorkspaceStore.getState().pushUndoSnapshot();
+            setDragState({ mode: 'move', startClientX: event.clientX, startClientY: event.clientY, initialPan: { ...pan }, initialPositions: [],
+              pathPoint: { id: path.id, index, x: point.x.value * point.x.basis + (point.x.offset || 0), y: point.y.value * point.y.basis + (point.y.offset || 0) } });
+          }} />)}
+      </g>}
+    </g>;
+  };
+
   // Tavotto-style bounded Paper Artboard geometry in SVG coordinates:
   // Top-left anchored at (-1.0 cm, 8.5 cm) so resizing width/height expands rightward & downward cleanly
-  const pageLeft = originX - 1.0 * CM_TO_PX;
-  const pageTop = originY - 8.5 * CM_TO_PX;
+  const pageLeft = hasNativeGeometry ? originX + (parsedDoc.coordinateScene?.viewBox[0] || 0) - 26 : originX - 1.0 * CM_TO_PX;
+  const pageTop = hasNativeGeometry ? originY + (parsedDoc.coordinateScene?.viewBox[1] || 0) - 26 : originY - 8.5 * CM_TO_PX;
   const pageW = canvasWidthCm * CM_TO_PX;
   const pageH = canvasHeightCm * CM_TO_PX;
   const pagePresetTag =
@@ -1588,6 +1662,7 @@ export const InteractiveCanvas: React.FC = () => {
           }}
         >
           <defs>
+            {parsedDoc.coordinateScene?.clips.map((clip) => <clipPath key={clip.id} id={`canvas-${clip.id}`}><path d={clip.d} /></clipPath>)}
             <pattern
               id="tikz-subgrid"
               width={CM_TO_PX / 4}
@@ -1826,7 +1901,8 @@ export const InteractiveCanvas: React.FC = () => {
                   onPointerDown={(e) => e.stopPropagation()}
                   onClick={(e) => {
                     e.stopPropagation();
-                    fitCanvasToContent();
+                    const bounds = svgRef.current?.getBoundingClientRect();
+                    fitCanvasToContent(0.5, bounds ? { width: bounds.width, height: bounds.height } : undefined);
                   }}
                 >
                   <rect
@@ -2059,17 +2135,24 @@ export const InteractiveCanvas: React.FC = () => {
                 );
               })}
 
+            {/* All native paths join the original scene and original event handlers. */}
+            {hasNativeGeometry && parsedDoc.elements.map((element) =>
+              element.kind === 'node' ? renderNode(element) :
+              element.kind === 'path' ? renderPath(element) :
+              element.kind === 'edge' ? renderEdge(element) : null)}
+            {(parsedDoc.paths || []).filter((path) => selectedIds.includes(path.id)).map((path) => renderPath(path, true))}
+
             {/* Layer 1: Background Stage Containers */}
             {sortedNodes
-              .filter((n) => n.subtype === 'container')
+              .filter((n) => !hasNativeGeometry && n.subtype === 'container')
               .map(renderNode)}
 
             {/* Layer 2: Edges & Residual Skip Connections */}
-            {parsedDoc.edges.map(renderEdge)}
+            {!hasNativeGeometry && parsedDoc.edges.map(renderEdge)}
 
             {/* Layer 3: Foreground Neural Blocks, 3D Cubes, Operators, Sub-captions, Math */}
             {sortedNodes
-              .filter((n) => n.subtype !== 'container')
+              .filter((n) => !hasNativeGeometry && n.subtype !== 'container')
               .map(renderNode)}
 
             {/* Layer 4: PGFPlots Scientific Data Charts */}

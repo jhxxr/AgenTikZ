@@ -6,6 +6,7 @@ import {
   TikzChartElement,
   TikzEdgeElement,
   TikzNodeElement,
+  TikzPathElement,
 } from '../types/tikz-ast';
 import { JournalThemeId } from '../types/theme';
 import { parseTikzDocument } from '../core/parser/parser';
@@ -26,7 +27,9 @@ import {
 import { PRIMITIVE_LIBRARY } from '../core/tikz/primitives';
 import { EMPTY_TIKZ_CODE } from '../core/templates/blank-document';
 import { JOURNAL_THEMES } from '../core/themes/journal-presets';
+import { resolveTikzColor } from '../core/themes/journal-presets';
 import { useSettingsStore } from './useSettingsStore';
+import { patchElementGeometry, patchMacroGeometry, type GeometryEdit } from '../core/parser/path-patcher';
 
 export type LeftSidebarTab = 'project' | 'library' | 'code';
 export type ColumnGuideMode = 'none' | 'single' | 'double';
@@ -100,7 +103,7 @@ interface WorkspaceState {
   setShowGrid: (show: boolean) => void;
   setSnapToGrid: (snap: boolean) => void;
   setCanvasSizeCm: (widthCm: number, heightCm: number) => void;
-  fitCanvasToContent: (paddingCm?: number) => void;
+  fitCanvasToContent: (paddingCm?: number, viewport?: { width: number; height: number }) => void;
   setZoom: (zoom: number) => void;
   setPan: (pan: { x: number; y: number }) => void;
   setPreviewMode: (mode: PreviewMode) => void;
@@ -122,6 +125,11 @@ interface WorkspaceState {
     optionPatches: Record<string, string | undefined>,
     recordUndo?: boolean
   ) => void;
+  updatePathById: (id: string, updates: {
+    width?: number; height?: number; options?: Record<string, string>;
+    point?: { index: number; x: number; y: number };
+  }, recordUndo?: boolean) => void;
+  updateMacroArgumentById: (id: string, index: number, value: string) => void;
   updateEdgeById: (
     id: string,
     updates: {
@@ -297,12 +305,26 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   setShowGrid: (showGrid) => set({ showGrid }),
   setSnapToGrid: (snapToGrid) => set({ snapToGrid }),
   setCanvasSizeCm: (widthCm, heightCm) => {
-    const w = Math.max(4.0, Math.min(40.0, Math.round(widthCm * 10) / 10));
-    const h = Math.max(4.0, Math.min(40.0, Math.round(heightCm * 10) / 10));
+    const w = Math.max(4.0, Math.min(120.0, Math.round(widthCm * 10) / 10));
+    const h = Math.max(4.0, Math.min(120.0, Math.round(heightCm * 10) / 10));
     set({ canvasWidthCm: w, canvasHeightCm: h });
   },
-  fitCanvasToContent: (paddingCm = 1.0) => {
+  fitCanvasToContent: (paddingCm = 1.0, viewport) => {
     const { parsedDoc } = get();
+    if (parsedDoc.coordinateScene && (parsedDoc.coordinateScene.transformed || parsedDoc.paths?.length || parsedDoc.nodes.some((node) => node.macroSource))) {
+      const [left, top, width, height] = parsedDoc.coordinateScene.viewBox;
+      const zoom = viewport ? Math.max(0.05, Math.min(1,
+        (viewport.width - 100) / (width + paddingCm * 104),
+        (viewport.height - 100) / (height + paddingCm * 104))) : get().zoom;
+      set({
+        canvasWidthCm: Math.max(4, Math.min(120, width / 52 + paddingCm * 2)),
+        canvasHeightCm: Math.max(4, Math.min(120, height / 52 + paddingCm * 2)),
+        zoom,
+        pan: { x: (viewport ? (viewport.width / zoom - width) / 2 : 92) - left,
+          y: (viewport ? (viewport.height / zoom - height) / 2 : 100) - top },
+      });
+      return;
+    }
     if (parsedDoc.nodes.length === 0 && parsedDoc.charts.length === 0) {
       set({
         canvasWidthCm: 16.0,
@@ -378,7 +400,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       },
     });
   },
-  setZoom: (zoom) => set({ zoom: Math.max(0.35, Math.min(2.5, zoom)) }),
+  setZoom: (zoom) => set({ zoom: Math.max(0.05, Math.min(2.5, zoom)) }),
   setPan: (pan) => set({ pan }),
   setPreviewMode: (previewMode) => set({ previewMode }),
   setCompiledSvg: (compiledSvg, texCompilerStatus = null) =>
@@ -446,15 +468,16 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
   moveElementsByPosition: (positions, recordUndo = false) => {
     const { tikzCode, parsedDoc } = get();
-    const elementsById = new Map<string, TikzNodeElement | TikzChartElement>();
+    const elementsById = new Map<string, TikzNodeElement | TikzChartElement | TikzPathElement>();
     for (const node of parsedDoc.nodes) {
       if (!elementsById.has(node.id)) elementsById.set(node.id, node);
     }
     for (const chart of parsedDoc.charts) {
       if (!elementsById.has(chart.id)) elementsById.set(chart.id, chart);
     }
+    for (const path of parsedDoc.paths || []) elementsById.set(path.id, path);
     const updates: Array<{
-      element: TikzNodeElement | TikzChartElement;
+      element: TikzNodeElement | TikzChartElement | TikzPathElement;
       x: number;
       y: number;
       oldCoordStr: string;
@@ -483,7 +506,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     const nextDoc = get().parsedDoc;
     const updatedEl =
       nextDoc.nodes.find((n) => n.id === primary.element.id) ||
-      nextDoc.charts.find((c) => c.id === primary.element.id);
+      nextDoc.charts.find((c) => c.id === primary.element.id) ||
+      nextDoc.paths?.find((p) => p.id === primary.element.id);
     if (updatedEl) {
       const newCoordStr = `${formatCoordNum(primary.x)}, ${formatCoordNum(primary.y)}`;
       set({
@@ -500,13 +524,30 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
             startLine: updatedEl.span.startLine,
             endLine: updatedEl.span.endLine,
           },
-          valueSpan: updatedEl.coordSpan
+          valueSpan: updatedEl.kind !== 'path' && updatedEl.coordSpan
             ? { from: updatedEl.coordSpan.start, to: updatedEl.coordSpan.end }
             : undefined,
           timestamp: Date.now(),
         },
       });
     }
+  },
+
+  updatePathById: (id, updates, recordUndo = true) => {
+    const { tikzCode, parsedDoc } = get();
+    const path = parsedDoc.paths?.find((item) => item.id === id);
+    if (!path) return;
+    const edit: GeometryEdit = { options: updates.options, point: updates.point };
+    if ((updates.width !== undefined || updates.height !== undefined) && path.width > 0 && path.height > 0) {
+      let x = updates.width !== undefined ? updates.width / path.width : 1;
+      let y = updates.height !== undefined ? updates.height / path.height : 1;
+      if (path.geometry.radius) x = y = Math.abs(x - 1) >= Math.abs(y - 1) ? x : y;
+      edit.scale = { x, y, originX: path.x * 52, originY: -path.y * 52 };
+    }
+    const next = patchElementGeometry(tikzCode, path.geometry, edit);
+    if (next === tikzCode) return;
+    get().setTikzCode(next, recordUndo);
+    get().setSelectedIds(get().selectedIds);
   },
 
   updateNodeLabelById: (id, label, sublabel) => {
@@ -543,6 +584,15 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         },
       });
     }
+  },
+
+  updateMacroArgumentById: (id, index, value) => {
+    const { tikzCode, parsedDoc } = get();
+    const node = parsedDoc.nodes.find((item) => item.id === id);
+    const argument = node?.macroSource?.args[index];
+    if (!argument) return;
+    get().setTikzCode(tikzCode.slice(0, argument.start) + value + tikzCode.slice(argument.end), true);
+    get().setSelectedIds([id]);
   },
 
   updateNodeOptionsById: (id, optionPatches, recordUndo = true) => {
@@ -795,6 +845,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     if (selectedIds.length === 0) return;
     const toDup = [
       ...parsedDoc.nodes.filter((n) => selectedIds.includes(n.id)),
+      ...(parsedDoc.paths || []).filter((p) => selectedIds.includes(p.id)),
       ...parsedDoc.charts.filter((c) => selectedIds.includes(c.id)),
     ];
     if (toDup.length === 0) return;
@@ -805,7 +856,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       seed
     );
     get().setTikzCode(nextSource, true);
-    get().setSelectedIds(newIds);
+    const created = get().parsedDoc.elements;
+    get().setSelectedIds(newIds.every((id) => created.some((element) => element.id === id))
+      ? newIds : created.slice(-toDup.length).map((element) => element.id));
   },
 
   nudgeSelectedElements: (dxCm, dyCm) => {
@@ -817,6 +870,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       if (n) moves.push({ id: n.id, x: n.x + dxCm, y: n.y + dyCm });
       const c = parsedDoc.charts.find((item) => item.id === id);
       if (c) moves.push({ id: c.id, x: c.x + dxCm, y: c.y + dyCm });
+      const p = parsedDoc.paths?.find((item) => item.id === id);
+      if (p) moves.push({ id: p.id, x: p.x + dxCm, y: p.y + dyCm });
     }
     if (moves.length > 0) {
       get().moveElementsByPosition(moves, true);
@@ -831,7 +886,13 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     const count = parsedDoc.nodes.length + parsedDoc.charts.length + 1;
     const defaultX = x !== undefined ? x : 5.2;
     const defaultY = y !== undefined ? y : 4.5;
-    const snippet = prim.generateSnippet(count, defaultX, defaultY);
+    let snippet = prim.generateSnippet(count, defaultX, defaultY);
+    if (parsedDoc.coordinateScene) {
+      // Tool placement is already in physical cm; do not reinterpret it using
+      // an imported picture's x=... / y=... basis.
+      snippet = snippet.replace(/\bat\s*\(\s*([-+\d.]+)\s*,\s*([-+\d.]+)\s*\)/g, 'at ($1cm, $2cm)')
+        .replace(/\bshift\s*=\s*\{\(\s*([-+\d.]+)\s*,\s*([-+\d.]+)\s*\)\}/g, 'shift={($1cm, $2cm)}');
+    }
     const nextCode = insertTikzStatement(tikzCode, snippet);
     get().setTikzCode(nextCode, true);
 
@@ -955,7 +1016,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
   addEdgeBetweenNodes: (fromId, toId, routeType = 'direct') => {
     if (fromId === toId) return;
-    const { tikzCode } = get();
+    const { tikzCode, parsedDoc } = get();
     let stmt = '';
     if (routeType === 'residual_right') {
       stmt = `  \\draw[-Stealth, line width=0.7pt, draw=nips_sage!85!black] (${fromId}.east) -- ++(1.3, 0) |- node[midway, fill=white, inner sep=1.5pt, font=\\scriptsize] {Residual} (${toId}.east);`;
@@ -964,7 +1025,23 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     } else {
       stmt = `  \\draw[-Stealth, line width=0.7pt, draw=nips_slate!85!black] (${fromId}) -- (${toId});`;
     }
-    const nextCode = insertTikzStatement(tikzCode, stmt);
+    if (parsedDoc.coordinateScene) stmt = stmt.replace(/\+\+\(\s*([-+\d.]+)\s*,\s*([-+\d.]+)\s*\)/g, '++($1cm, $2cm)');
+    if (parsedDoc.coordinateScene) {
+      const hex = resolveTikzColor(routeType === 'residual_right' ? 'nips_sage!85!black' : 'nips_slate!85!black', 'stroke', get().activeThemeId);
+      const rgb = `{rgb,255:red,${parseInt(hex.slice(1, 3), 16)};green,${parseInt(hex.slice(3, 5), 16)};blue,${parseInt(hex.slice(5, 7), 16)}}`;
+      stmt = stmt.replace('-Stealth', '->').replace(/draw=nips_(?:sage|slate)!85!black/, `draw=${rgb}`);
+    }
+    let namedSource = tikzCode;
+    const endpoints = parsedDoc.nodes.filter((node) => [fromId, toId].includes(node.id) && !node.namedInSource)
+      .sort((a, b) => b.span.start - a.span.start);
+    for (const node of endpoints) {
+      if (node.macroSource) namedSource = patchMacroGeometry(namedSource, node, {});
+      else {
+        const at = node.optionsSpan ? node.optionsSpan.end + 1 : node.span.start + '\\node'.length;
+        namedSource = namedSource.slice(0, at) + ` (${node.id})` + namedSource.slice(at);
+      }
+    }
+    const nextCode = insertTikzStatement(namedSource, stmt);
     get().setTikzCode(nextCode, true);
   },
 
@@ -993,7 +1070,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
   alignSelectedNodes: (mode) => {
     const { parsedDoc, selectedIds } = get();
-    const selectedNodes = parsedDoc.nodes.filter((n) =>
+    const selectedNodes = [...parsedDoc.nodes, ...(parsedDoc.paths || [])].filter((n) =>
       selectedIds.includes(n.id)
     );
     if (selectedNodes.length < 2) return;
