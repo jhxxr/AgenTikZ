@@ -156,6 +156,8 @@ export interface AgentChatMessage {
     toolName: string;
     argsSummary: string;
     status: 'running' | 'completed' | 'failed';
+    /** Whitelisted skill-read label. Absent for ordinary tools and old transcripts. */
+    skillRead?: { label: string; error?: string };
   }>;
 }
 

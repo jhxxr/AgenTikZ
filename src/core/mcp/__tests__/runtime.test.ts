@@ -102,6 +102,79 @@ describe('actual canvas MCP handlers', () => {
     expect(await call('get_diagram_design_skill')).toMatchObject({ error: { code: 'request_ended' } });
   });
 
+  it('discovers metadata without importing bodies and reads only an adapted skill or requested reference', async () => {
+    const catalog = await call('get_diagram_design_skill', { action: 'list' });
+    expect(catalog.contentKind).toBe('catalog');
+    expect(catalog.skills).toHaveLength(4);
+    expect(JSON.stringify(catalog)).not.toContain('\\node');
+    const overfilled = { action: 'list', lineCount: 80, reference: 'catalog',
+      skillId: 'scientific-diagram-design', startLine: 1, topic: 'design' };
+    expect(await call('get_diagram_design_skill', overfilled)).toMatchObject({ contentKind: 'catalog' });
+    const normalized = await call('get_diagram_design_skill', { ...overfilled, action: 'read' });
+    expect(normalized).toMatchObject({ skillId: 'scientific-diagram-design', reference: null, contentKind: 'adapted-skill' });
+    expect(normalized.text).toContain('name: scientific-diagram-design');
+    const workflow = await call('get_diagram_design_skill', { skillId: 'canvas-editing' });
+    expect(workflow).toMatchObject({ skillId: 'canvas-editing', contentKind: 'adapted-skill', version: '1.0.0',
+      nextStartLine: null, reference: null });
+    expect(workflow.text).toContain('pending draft is NOT the live canvas');
+    const layout = await call('get_diagram_design_skill', { skillId: 'canvas-editing', reference: 'layout', lineCount: 5 });
+    expect(layout).toMatchObject({ skillId: 'canvas-editing', reference: 'layout', endLine: 5, nextStartLine: 6 });
+    for (const args of [{ action: 'install' }, { action: 'list', path: 'private' },
+      { reference: 'layout' }, { skillId: 'canvas-editing', reference: '../private' }]) {
+      expect(await call('get_diagram_design_skill', args)).toMatchObject({ error: { code: 'invalid_arguments' } });
+    }
+    const legacy = await call('get_diagram_design_skill');
+    expect(legacy).toMatchObject({ skill: 'tikz-diagram-reproduction', topic: 'design', contentKind: 'reference' });
+    expect(legacy.text).toContain('Semantic Color System');
+  });
+
+  it('replays the repeated reproduction reads without returning the same page or stalling a new page', async () => {
+    const args = { action: 'read', skillId: 'reference-reproduction', reference: 'coordinate-mapping',
+      startLine: 1, lineCount: 140, topic: 'reproduction' };
+    const first = await call('get_diagram_design_skill', args);
+    expect(first).toMatchObject({ delivery: 'new', nextAction: 'draft', reference: 'coordinate-mapping' });
+    expect(first.workflow.text).toContain('Reference-image reproduction');
+    expect(first.text).toContain('Coordinate mapping');
+    const repeated = await call('get_diagram_design_skill', { ...args, lineCount: 160 });
+    expect(repeated).toMatchObject({ delivery: 'already-read', text: '' });
+    expect(repeated.text).not.toContain('Coordinate mapping');
+    await call('get_diagram_design_skill', args);
+    await call('get_diagram_design_skill', args);
+    expect(await call('get_diagram_design_skill', args)).toMatchObject({ error: { code: 'skill_read_stalled' } });
+    const layout = await call('get_diagram_design_skill', { ...args, reference: 'layout', lineCount: 160 });
+    expect(layout.delivery).toBe('new');
+    expect(layout.workflow).toBeUndefined();
+    const shared = await call('get_diagram_design_skill', { skillId: 'canvas-editing', reference: 'layout' });
+    expect(shared).toMatchObject({ delivery: 'already-read', documentId: 'shared:layout', text: '' });
+    expect(shared.workflow.text).toContain('Local canvas editing');
+    expect((await call('get_diagram_design_skill', { action: 'reload', skillId: 'reference-reproduction', reference: 'workflow' })).text)
+      .toContain('Reference-image reproduction');
+  });
+
+  it('drops a skill page when its request ends while the lazy document is loading', async () => {
+    const running = call('get_diagram_design_skill', { skillId: 'scientific-diagram-design' });
+    release();
+    expect(await running).toMatchObject({ error: { code: 'request_ended' } });
+  });
+
+  it('filters component examples by exact ID without changing legacy category reads', async () => {
+    const one = await call('get_component_library', { componentId: 'prim_math' });
+    expect(one.components).toHaveLength(1);
+    expect(one.components[0]).toMatchObject({ id: 'prim_math', category: 'dl' });
+    expect(one.usage).toContain('not user measurements');
+    expect((await call('get_component_library', { category: 'chart' })).components).toHaveLength(4);
+    expect((await call('get_component_library')).components).toHaveLength(13);
+    expect((await call('get_component_library', { componentId: 'stage_box' })).components[0].id).toBe('prim_container');
+    expect((await call('get_component_library', { componentId: 'mha_block' })).components[0].id).toBe('prim_mha');
+    expect((await call('get_component_library', { componentId: 'dl_block' })).components[0].id).toBe('prim_ffn');
+    const unknown = await call('get_component_library', { componentId: 'not-a-component' });
+    expect(unknown.error).toBeUndefined();
+    expect(unknown.components).toEqual([]);
+    expect(unknown.available.map((item: { id: string }) => item.id)).toContain('prim_mha');
+    expect(await call('get_component_library', { componentId: 'prim_math', category: 'chart' }))
+      .toMatchObject({ error: { code: 'invalid_arguments' } });
+  });
+
   it('records reproduction intent on tool proposals and keeps reference geometry unchanged during layout repair', async () => {
     getMcpRequest('request')!.diagramMode = 'reproduction';
     const proposal = await call('propose_tikz_patch', { ...await base(), newTikzCode: replacement });

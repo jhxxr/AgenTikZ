@@ -140,20 +140,21 @@ describe('Surgical SEARCH/REPLACE Diff Engine', () => {
   });
 });
 
-describe('Agent Knowledge & Component Library Context Builder', () => {
-  it('serializes Component Library, Journal Theme Palette, Geometric Rules, and Live AST Diagnostics', () => {
+describe('Agent metadata and on-demand knowledge entry', () => {
+  it('provides discovery and essential editing rules without serializing components or live AST twice', () => {
     const context = buildAgentSkillAndLibraryContext(
       'neurips',
       BROKEN_TRANSFORMER_FROM_SCREENSHOT,
       ['enc_mha']
     );
-    expect(context).toContain('AGENTIKZ COMPONENT LIBRARY');
-    expect(context).toContain('feature_cube');
-    expect(context).toContain('mha_block');
-    expect(context).toContain('stage_box');
-    expect(context).toContain('SURGICAL DIFF PROTOCOL');
-    expect(context).toContain('<<<<<<< SEARCH');
-    expect(context).toContain('LIVE CANVAS AST & GEOMETRIC DIAGNOSTICS');
-    expect(context).toContain('Currently Selected Element IDs on Canvas: enc_mha');
+    expect(context).toContain('get_component_library');
+    expect(context).toContain('get_diagram_design_skill');
+    expect(context).toContain('canvas-editing');
+    expect(context).toContain('unique IDs and explicit cm coordinates');
+    expect(context).toContain('live source, not a pending draft');
+    expect(context).not.toContain('<<<<<<< SEARCH');
+    expect(context).not.toContain('LIVE CANVAS AST');
+    expect(context).not.toContain('enc_mha');
+    expect(context).not.toContain('\\node[');
   });
 });

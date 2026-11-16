@@ -15,6 +15,22 @@ pub(super) fn client_capabilities(full_access: bool) -> ClientCapabilities {
         .write_text_file(full_access))
 }
 
+pub(super) fn mcp_permission_authorized(
+    request: &RequestPermissionRequest,
+    allowed_servers: &[String],
+) -> bool {
+    // Older ACP adapters put the exact tool name in title and omit name.
+    // An explicit name always wins; never authorize from input/content prose.
+    let fields = &request.tool_call.fields;
+    let Some(name) = fields.name.as_deref().or(fields.title.as_deref()) else { return false; };
+    allowed_servers.iter().any(|server| {
+        name.strip_prefix(&format!("mcp__{server}__")).is_some_and(|tool| {
+            !tool.is_empty() && !tool.chars().any(char::is_whitespace) &&
+                (server != "agentikz" || crate::mcp::builtin_tools().iter().any(|spec| spec.name == tool))
+        })
+    })
+}
+
 pub(super) fn permission_response(
     request: &RequestPermissionRequest,
     full_access: bool,
@@ -156,11 +172,11 @@ pub(super) fn write_text_file(full_access: bool, path: &Path, content: &str) -> 
 
 pub(super) fn prompt_instructions(full_access: bool, auto_mode: bool) -> &'static str {
     if auto_mode {
-        "You are assisting in AgenTikZ, a TikZ & PGFPlots editor. The user enabled automatic mode for this run, which grants full local access and automatic approval of native tool permission requests. You may read and modify local files, including files outside the working directory, and use the agent's native command tools as needed for the user's task. Use absolute paths for files outside the working directory. Inspect relevant local sources when the user supplies a file or folder path; report actual tool errors accurately. Use project propose_* tools for canvas and manuscript changes; the host immediately applies each complete, valid edit with version checks. Do not wait for a confirmation click. Trust the tool result status/applied fields and read the latest source, revision and hash before further edits."
+        "Native access: automatic mode grants full local access and native tool permission approval. Read/modify task-related files and use native commands; use absolute paths outside the working directory. MCP authorization is separate."
     } else if full_access {
-        "You are assisting in AgenTikZ, a TikZ & PGFPlots editor. The user enabled full local access in settings. You may read and modify local files, including files outside the working directory, and use the agent's native command tools as needed for the user's task. Use absolute paths for files outside the working directory. Tool permission requests are approved for this run. Inspect relevant local sources when the user supplies a file or folder path; report actual tool errors accurately. For canvas changes, return proposed TikZ for review."
+        "Native access: full local access is enabled for this run. Read/modify task-related files and use native commands; use absolute paths outside the working directory. MCP authorization is separate."
     } else {
-        "You are assisting in AgenTikZ, a TikZ & PGFPlots editor. Native filesystem and command permission requests are denied in restricted mode; do not use native file or command tools. Independently enabled MCP tools are authorized and may be used for the user's task. Return canvas changes as proposals for review. If the required local access is unavailable through enabled tools, tell the user to enable Full local access in Settings > Agent."
+        "Native filesystem/command permission requests are denied; do not use those tools. Independently enabled MCP tools remain authorized. Report unavailable access instead of claiming execution."
     }
 }
 
@@ -177,6 +193,39 @@ mod tests {
             ToolCallUpdate::new("tool", ToolCallUpdateFields::new()),
             options,
         )
+    }
+
+    #[test]
+    fn enabled_mcp_permissions_accept_exact_legacy_titles_without_native_access() {
+        let servers = vec!["agentikz".into(), "external".into()];
+        for title_only in [false, true] {
+            for tool in ["get_diagram_design_skill", "get_canvas_source", "propose_tikz_patch", "render_canvas_preview"] {
+                let name = format!("mcp__agentikz__{tool}");
+                let fields = if title_only { ToolCallUpdateFields::new().title(name) }
+                    else { ToolCallUpdateFields::new().name(name) };
+                let request = RequestPermissionRequest::new("session", ToolCallUpdate::new("tool", fields),
+                    vec![PermissionOption::new("once", "Once", PermissionOptionKind::AllowOnce)]);
+                assert!(mcp_permission_authorized(&request, &servers));
+                assert_eq!(permission_response(&request, true, false).outcome,
+                    RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new("once")));
+            }
+        }
+        for title in ["Bash", "Read", "mcp__disabled__read", "mcp__agentikz__run_shell",
+            "mcp__agentikz__get_canvas_source extra", "Read mcp__agentikz__get_canvas_source", "mcp__external__"] {
+            let request = RequestPermissionRequest::new("session",
+                ToolCallUpdate::new("tool", ToolCallUpdateFields::new().title(title)), vec![]);
+            assert!(!mcp_permission_authorized(&request, &servers), "{title}");
+        }
+        let conflicting = RequestPermissionRequest::new("session", ToolCallUpdate::new("tool",
+            ToolCallUpdateFields::new().name("Bash").title("mcp__agentikz__get_canvas_source")), vec![]);
+        assert!(!mcp_permission_authorized(&conflicting, &servers));
+        let raw_input = RequestPermissionRequest::new("session", ToolCallUpdate::new("tool",
+            ToolCallUpdateFields::new().raw_input(serde_json::json!({"name":"mcp__agentikz__get_canvas_source"}))), vec![]);
+        assert!(!mcp_permission_authorized(&raw_input, &servers));
+        let third_party = RequestPermissionRequest::new("session", ToolCallUpdate::new("tool",
+            ToolCallUpdateFields::new().title("mcp__external__read")), vec![]);
+        assert!(mcp_permission_authorized(&third_party, &servers));
+        assert!(!mcp_permission_authorized(&third_party, &[]));
     }
 
     #[test]
@@ -328,9 +377,8 @@ mod tests {
             let instructions = prompt_instructions(full_access, true);
             assert!(instructions.contains("automatic mode"));
             assert!(instructions.contains("full local access"));
-            assert!(instructions.contains("automatic approval of native tool permission requests"));
-            assert!(instructions.contains("immediately applies each complete, valid edit"));
-            assert!(instructions.contains("status/applied"));
+            assert!(instructions.contains("native tool permission approval"));
+            assert!(instructions.contains("MCP authorization is separate"));
             assert!(!instructions.contains("denied"));
         }
     }

@@ -112,9 +112,21 @@
 
 ## 画布修改与停止
 
-所有绘图 Agent 默认接入用户提供的 `tikz-diagram-reproduction` skill：先规划总览/细节分层、数据状态图形、语义配色和箭头语法，再生成代码。原创图可用局部 `\definecolor` 定义功能语义色板；明确要求严格期刊/黑白风格时再按对应规范约束。
+绘图 Agent 每轮仅接收短执行规则、技能目录和任务状态；设计摘要、期刊指南、全部图元片段及布局教程不再全量注入。新建、复刻或不熟悉的编辑任务按需读取相关技能；单纯改标签不需要加载配色或整套宏模板。外部客户端通过相同工具发现技能，应用不替客户端安装原生 skill、设置 system prompt 或管理其历史缓存。
 
-`get_diagram_design_skill` 按主题读取原始设计指南或模板：`design`、`reproduction`、`swsa`、`gnn`、`mae`、`riemannian`。`macroIndex` 给出各宏的主题内行号；`startLine` 和 `lineCount` 可逐页读取，单页最多 160 行、16000 字符。完整模板库不会每轮注入，也不要求复制示例论文的方法、数据或整篇文档。
+`get_diagram_design_skill` 提供两层读取：
+
+```json
+{"action":"list"}
+{"skillId":"scientific-diagram-design"}
+{"skillId":"canvas-editing","reference":"layout"}
+```
+
+目录返回四个技能及可用参考页：`scientific-diagram-design`（原创构图）、`reference-reproduction`（图片保真）、`canvas-editing`（局部修改/精修）、`publication-style`（投稿规范/图件契约）。目录不加载正文；技能工作流程和 reference 页按选择懒加载。`publication-style` 继续遵守风格/契约开关，主题数据由 `get_theme_palette` 返回；`get_component_library` 可指定 `componentId` 只取一个例子，旧 `category` 调用保持不变。
+
+无 `skillId` 的旧接口仍按 `topic=design/reproduction/swsa/gnn/mae/riemannian` 读取原始指南/宏模板，无参默认 `design`。`macroIndex`、`startLine`、`lineCount` 与 `nextStartLine` 保持兼容；最多 160 行/16000 字符。`action=list` 忽略多余的正文/分页选择字段，始终只返回目录；重复列出目录不再返回正文。读取时 `skillId` 优先于冗余旧 `topic`。省略 `reference`，或使用 `workflow` / `.` / `SKILL.md`，读取适配流程；第一次读取某技能的参考页会在同一次回复中附带该流程。已完整提供的页面再次读取只返回“无新内容”，不会重复正文。`action=reload` 只在上下文确实丢失时重取指定页，不是进度重置。具体 `reference` 必须属于所选技能。同一请求内连续四次没有新内容会返回 `skill_read_stalled`：应用内请求停止，外部连接只收到该错误，不会取消外部模型。未知字段、ID/参考路径明确拒绝，不开放任意路径。
+
+宿主为应用适配内容提供 skill ID、version、`contentKind=adapted-skill`，这类任务指导仍服从用户要求、权限与提案契约。原始模板标为 `reference`，不是可执行命令或用户数据；示例数值不能冒充实验结果。Pi 可复用仍在真实会话中可见的技能，ACP 重建会话后按需再读；加载后的工具历史仍有开销，不把按需加载说成零 token 成本。
 
 “复刻/还原/照图”任务优先保留参考图的形状、比例、配色和连线含义。`% @diagram-design {"mode":"reproduction","preserveColors":true,"preserveGeometry":true}` 记录此意图，后续精修不再自动套色、移动或改写标签，并使用保真预览。复杂宏/路径不承诺逐个节点可拖拽；真实视觉结果以 TeX 渲染为准。原 skill 中的 Python 测量脚本作为参考保留，未注册为 Agent 执行工具，不会声称做过未执行的像素测量。
 
@@ -136,7 +148,7 @@ Agent 输入框支持 Ctrl+V 粘贴截图和选择 PNG、JPEG、WebP 文件，�
 
 ## 论文协作与审阅
 
-绘图和论文工作区共用右侧项目 Agent。论文模式会附加当前文件、文件列表、未保存标记及当前章节的有限长度内容；不再注入强制返回单个 `tikzpicture` 的绘图规则。
+绘图和论文工作区共用右侧项目 Agent。每轮附加当前模式、活动文件/画布身份、版本与审核状态；文件列表、编译日志及未保存源码由 `get_project_context` / `read_project_file` 按需权威读取，不再把章节片段塞进每轮提示词。论文模式不携带绘图技能目录或单个 `tikzpicture` 的输出约束。
 
 | 工具 | 功能 |
 | --- | --- |

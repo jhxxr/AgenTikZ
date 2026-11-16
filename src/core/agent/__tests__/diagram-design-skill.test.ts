@@ -10,19 +10,19 @@ import { getExactPreviewReasons } from '../../tex/source';
 const source = '\\begin{tikzpicture}\n\\node[fill=white,minimum width=2cm] (a) at (0,0) {resnet};\n\\node[fill=white] (b) at (0,0.5) {Output};\n\\draw[dashed] (a)--(b);\n\\end{tikzpicture}';
 
 describe('built-in user drawing skill', () => {
-  it('reaches both prompt entry points even when journal style enforcement is disabled', () => {
+  it('advertises skill workflows without injecting their details, even when journal style is disabled', () => {
     const context = buildAgentSkillAndLibraryContext('neurips', '', [], {
       taskPrompt: 'Design a masked autoencoder with momentum alignment', enforcePublicationStyleGuide: false,
     });
-    expect(context).toContain('BUILT-IN DRAWING SKILL: tikz-diagram-reproduction');
-    expect(context).toContain('exact complements');
-    expect(context).toContain('Selected reference (mae)');
-    expect(context).toContain('FBE5D7');
-    expect(context).toContain('waveform/window snapshots');
+    expect(context).toContain('scientific-diagram-design');
     expect(context).toContain('get_diagram_design_skill');
+    expect(context).toContain('"enforcePublicationStyleGuide":false');
+    expect(context).not.toContain('exact complements');
+    expect(context).not.toContain('FBE5D7');
+    expect(context).not.toContain('waveform/window snapshots');
     expect(context).not.toContain('\\newcommand{\\StripeToken}');
     expect(compileAgentPrompt({ userPrompt: 'Draw a GNN', themeId: 'cvpr', enforcePublicationStyle: false }))
-      .toContain('Selected reference (gnn)');
+      .toContain('scientific-diagram-design');
   });
 
   it('selects bounded relevant references without imposing any example architecture', () => {
@@ -32,7 +32,7 @@ describe('built-in user drawing skill', () => {
     expect(selectDiagramRecipes('Riemannian manifold and LSTM EEG')).toEqual(['riemannian']);
     expect(selectDiagramRecipes('SWSA GNN MAE EEG')).toHaveLength(2);
     expect(selectDiagramRecipes('画一个业务审批流程')).toEqual([]);
-    expect(buildDiagramDesignContext('画一个业务审批流程', 'nature')).toContain('only for real decisions');
+    expect(buildDiagramDesignContext('画一个业务审批流程', 'nature')).toContain('scientific-diagram-design');
   });
 
   it('distinguishes reference reproduction from redesign and retains intent for follow-up edits', () => {
@@ -51,10 +51,10 @@ describe('built-in user drawing skill', () => {
     const options = { diagramMode: 'reproduction' as const };
     expect(buildPublicationStyleSystemPrompt('nature', options)).not.toContain('仅允许使用');
     const userPrompt = compileUserPromptWithStyleGuide('照图还原所有颜色', 'nature', options);
-    expect(userPrompt).toContain('保留原图的配色');
+    expect(userPrompt).toBe('照图还原所有颜色');
     expect(userPrompt).not.toContain('Signal=');
     const context = buildAgentSkillAndLibraryContext('nature', source, [], options);
-    expect(context).toContain('REFERENCE FIDELITY');
+    expect(context).toContain('reproduction keeps colors, geometry and topology');
     expect(context).not.toContain('NEVER output monochrome');
     expect(context).not.toContain('ZERO OVERLAP GUARANTEE');
   });

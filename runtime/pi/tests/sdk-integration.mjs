@@ -122,6 +122,72 @@ test('real pinned SDK performs tool calls and reuses their history through a loo
   assert.equal(engine.sessions.size, 0);
 });
 
+test('real SDK progressively reads a catalog/skill and reuses genuine skill history on the next turn', { timeout: 30000 }, async (t) => {
+  const requests = [];
+  const calls = [];
+  const server = createServer(async (req, res) => {
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    const input = JSON.parse(body);
+    if (req.url === '/call') {
+      calls.push(input.arguments);
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify(input.arguments.action === 'list'
+        ? { contentKind: 'catalog', version: '1.0.0', skills: [{ id: 'canvas-editing' }] }
+        : { skillId: 'canvas-editing', version: '1.0.0', contentKind: 'adapted-skill',
+            text: 'Fixture adapted editing workflow; preserve original comments.', nextStartLine: null }));
+      return;
+    }
+    requests.push(input);
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    const chunk = (delta, finish_reason = null) => res.write(`data: ${JSON.stringify({
+      id: 'skill-fixture', object: 'chat.completion.chunk', model: 'fixture', created: 0,
+      choices: [{ index: 0, delta, finish_reason }],
+    })}\n\n`);
+    chunk({ role: 'assistant' });
+    if (requests.length <= 2) {
+      const args = requests.length === 1 ? { action: 'list' } : { skillId: 'canvas-editing' };
+      chunk({ tool_calls: [{ index: 0, id: `skill-call-${requests.length}`, type: 'function',
+        function: { name: 'get_diagram_design_skill', arguments: JSON.stringify(args) } }] });
+      chunk({}, 'tool_calls');
+    } else {
+      chunk({ content: 'Used the requested editing workflow.' });
+      chunk({}, 'stop');
+    }
+    res.end('data: [DONE]\n\n');
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const engine = new PiEngine({ createExtensionRuntime, SessionManager, SettingsManager,
+    createModelRuntime: async () => {
+      const runtime = await ModelRuntime.create({ credentials: new InMemoryCredentialStore(),
+        modelsPath: null, refreshOnCreate: false, allowModelNetwork: false });
+      runtime.registerProvider('agentikz-test', { baseUrl: base + '/v1', api: 'openai-completions', apiKey: 'fixture-only',
+        models: [{ id: 'fixture', name: 'Local skill fixture', reasoning: false, input: ['text'],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 16384, maxTokens: 1024 }] });
+      return runtime;
+    }, createAgentSession,
+  }, { providers: ['agentikz-test'] });
+  t.after(() => engine.dispose());
+  const request = { requestId: 'skill-one', conversationId: 'skill-chat', projectId: 'project', provider: 'agentikz-test',
+    model: 'fixture', apiKey: 'fixture-only', prompt: 'Read the applicable on-demand editing skill.', history: [],
+    tools: [{ name: 'get_diagram_design_skill', description: 'List metadata or read a skillId',
+      inputSchema: { type: 'object', properties: { action: { type: 'string' }, skillId: { type: 'string' } }, additionalProperties: false } }],
+    bridge: { endpoint: base + '/call', token: 's'.repeat(64) } };
+  assert.equal((await engine.prompt(request, () => {})).resumed, false);
+  assert.deepEqual(calls, [{ action: 'list' }, { skillId: 'canvas-editing' }]);
+  assert.ok(!JSON.stringify(requests[0]).includes('Fixture adapted editing workflow'));
+  assert.ok(JSON.stringify(requests[2].messages).includes('Fixture adapted editing workflow'));
+  const followup = 'Rename another label using the visible workflow.';
+  assert.equal((await engine.prompt({ ...request, requestId: 'skill-two', prompt: followup }, () => {})).resumed, true);
+  assert.equal(calls.length, 2, 'the fixture needs no repeated skill read on the resumed turn');
+  assert.ok(requests.at(-1).messages.some((message) => message.role === 'tool' &&
+    JSON.stringify(message.content).includes('Fixture adapted editing workflow')));
+  assert.ok(JSON.stringify(requests.at(-1).messages.at(-1)).includes(followup));
+});
+
 test('actual worker imports the pinned SDK and exposes a catalog without credentials or a model call', { timeout: 30000 }, async () => {
   const child = spawn(process.execPath, [fileURLToPath(new URL('../worker.mjs', import.meta.url))], {
     windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],

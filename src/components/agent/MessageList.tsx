@@ -72,14 +72,15 @@ type ToolCall = NonNullable<AgentChatMessage['mcpToolCalls']>[number];
 const ToolRow: React.FC<{ call: ToolCall }> = ({ call }) => {
   const { label, raw } = describeTool(call.toolName);
   return (
-    <li className="flex items-center gap-2 text-[11.5px]" title={raw}>
+    <li className="flex items-center gap-2 text-[11.5px]" title={call.skillRead?.error ?? raw}>
       <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
         {call.status === 'completed' ? <Check className="h-3 w-3 text-emerald-600" />
           : call.status === 'failed' ? <X className="h-3 w-3 text-rose-600" />
           : <Loader2 className="h-3 w-3 animate-spin text-blue-600" />}
       </span>
-      <span className={`min-w-0 flex-1 truncate ${call.status === 'failed' ? 'text-rose-700' : 'text-slate-700'}`}>
-        {label}{call.status === 'failed' && ' · 失败'}
+      <span className={`min-w-0 flex-1 truncate ${call.status === 'failed' ? 'text-rose-700' : 'text-slate-700'}`}
+        title={call.skillRead?.error}>
+        {call.skillRead?.label ?? label}{call.status === 'failed' && !call.skillRead && ' · 失败'}
       </span>
       {call.durationMs !== undefined && (
         <span className="shrink-0 font-mono text-[10.5px] tabular-nums text-slate-400">{formatDuration(call.durationMs)}</span>

@@ -531,8 +531,8 @@ export const SettingsModal: React.FC = () => {
                   </SettingsRow>
 
                   <SettingsRow
-                    label="强制注入顶刊投稿级常驻风格规范 (Nature Skills)"
-                    description="在发给 ACP Agent 的每条提示词最前部自动注入当前主题的色彩显著度预算 (1 Neutral + 1 Signal + 1 Hero)、线型单一语义与反垃圾装饰约束"
+                    label="按需使用投稿级风格技能"
+                    description="Agent 按需读取当前期刊的风格规则与色板，不再每轮注入完整指南；关闭后仍可使用通用设计、复刻与编辑技能"
                   >
                     <SettingsToggle
                       checked={enforcePublicationStyleGuide}

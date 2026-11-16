@@ -3,6 +3,7 @@ import { useWorkspaceStore } from '../../store/useWorkspaceStore';
 import type { AcpAgentId, TikzPatchProposal } from '../../types/acp';
 import type { CanvasTarget, ExternalMcpAccess } from '../../types/mcp';
 import type { DiagramDesignMode } from '../agent/diagram-design-policy';
+import type { SkillCoverage } from '../agent/skill-delivery';
 
 export interface McpRequestContext {
   target: CanvasTarget;
@@ -17,6 +18,8 @@ export interface McpRequestContext {
   diagramMode?: DiagramDesignMode;
   previewAttempts?: number;
   previewCache?: Map<string, Promise<{ image: { data: string; mimeType: 'image/png' }; message: string }>>;
+  /** Adapted-skill pages returned during this request. Discarded with the request. */
+  skillReads?: SkillCoverage;
 }
 
 const requests = new Map<string, McpRequestContext>();

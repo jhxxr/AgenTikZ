@@ -27,6 +27,14 @@ async function fixture(t, scope) {
       ? { projectId: 'fixture-project', workbenchMode: 'paper', paperRevision: 9 }
       : call.toolName === 'read_project_file'
       ? { relativePath: call.arguments.relativePath, source: 'Unsaved manuscript', sourceHash: 'paper-fixture', paperRevision: 9 }
+      : call.toolName === 'get_diagram_design_skill'
+      ? call.arguments.action === 'list'
+        ? { version: '1.0.0', contentKind: 'catalog', skills: [{ id: 'canvas-editing', references: ['layout'] }] }
+        : call.arguments.skillId
+          ? { skillId: call.arguments.skillId, version: '1.0.0', contentKind: 'adapted-skill', reference: call.arguments.reference ?? null,
+              text: 'Fixture packaged editing workflow.', startLine: 1, endLine: 1, totalLines: 1, nextStartLine: null }
+          : { skill: 'tikz-diagram-reproduction', topic: call.arguments.topic ?? 'design', contentKind: 'reference',
+              text: 'Original reference fixture', macroIndex: [], nextStartLine: null }
       : call.toolName === 'render_canvas_preview'
       ? { renderer: 'tex', image: { mimeType: 'image/png', data: 'cGl4ZWxz' }, applied: false }
       : { error: { code: 'source_changed', message: 'Source changed' } }));
@@ -115,6 +123,13 @@ for (const version of ['2024-11-05', '2025-11-25']) {
     const listed = await client.request('tools/list');
     assert.equal(listed.result.tools.length, 15);
     assert.ok(listed.result.tools.some((tool) => tool.name === 'get_diagram_design_skill'));
+    const skillTool = listed.result.tools.find((tool) => tool.name === 'get_diagram_design_skill');
+    assert.deepEqual(skillTool.inputSchema.properties.action.enum, ['list', 'read']);
+    assert.deepEqual(skillTool.inputSchema.properties.skillId.enum, [
+      'scientific-diagram-design', 'reference-reproduction', 'canvas-editing', 'publication-style',
+    ]);
+    assert.deepEqual(skillTool.inputSchema.properties.topic.enum, ['design', 'reproduction', 'swsa', 'gnn', 'mae', 'riemannian']);
+    assert.ok(listed.result.tools.find((tool) => tool.name === 'get_component_library').inputSchema.properties.componentId);
     assert.ok(listed.result.tools.some((tool) => tool.name === 'propose_tikz_patch'));
     for (const name of ['get_project_context', 'read_project_file', 'propose_project_patch', 'get_paper_diagnostics']) {
       assert.ok(listed.result.tools.some((tool) => tool.name === name));
@@ -135,6 +150,17 @@ for (const version of ['2024-11-05', '2025-11-25']) {
     const proposal = await client.request('tools/call', { name: 'propose_tikz_patch', arguments: { baseRevision: 1 } });
     assert.equal(proposal.result.isError, true);
     assert.equal(JSON.parse(proposal.result.content[0].text).error.code, 'source_changed');
+    const catalog = await client.request('tools/call', { name: 'get_diagram_design_skill', arguments: { action: 'list' } });
+    assert.equal(catalog.result.structuredContent.contentKind, 'catalog');
+    assert.ok(!catalog.result.content[0].text.includes('Fixture packaged editing workflow'));
+    const skill = await client.request('tools/call', { name: 'get_diagram_design_skill',
+      arguments: { skillId: 'canvas-editing', reference: 'layout' } });
+    assert.equal(skill.result.structuredContent.contentKind, 'adapted-skill');
+    assert.equal(skill.result.structuredContent.skillId, 'canvas-editing');
+    assert.equal(client.calls.at(-1).arguments.reference, 'layout');
+    const originalSkill = await client.request('tools/call', { name: 'get_diagram_design_skill', arguments: { topic: 'mae' } });
+    assert.equal(originalSkill.result.structuredContent.contentKind, 'reference');
+    assert.equal(originalSkill.result.structuredContent.topic, 'mae');
     const unknown = await client.request('tools/call', { name: 'run_shell', arguments: {} });
     assert.equal(unknown.error.code, -32602);
   });

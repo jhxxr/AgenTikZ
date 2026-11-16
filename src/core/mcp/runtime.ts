@@ -18,11 +18,23 @@ import { imageDataUrl } from '../agent/image-attachments';
 import { preserveReproductionIntent } from '../agent/diagram-design-policy';
 import { maskLatexComments } from '../tex/source';
 import { getExternalProposal, publishExternalProposal } from './external';
+import { listAgentSkills, validateDiagramSkillRequest, type DiagramSkillRequest } from '../agent/skill-registry';
+import {
+  SkillReadStalled, createSkillCoverage, deliverSkillRead, noteRepeatedSkillCatalog,
+  noteSkillProgress, noteUnknownSkillReference, skillStallMessage,
+} from '../agent/skill-delivery';
+import type { McpRequestContext } from './context';
 
 class ToolError extends Error {
   constructor(public code: string, message: string) { super(message); }
 }
 const fail = (code: string, message: string): never => { throw new ToolError(code, message); };
+function componentMatches(item: { id: string; name: string; subtype?: string }, query: string): boolean {
+  const needle = query.trim().toLowerCase();
+  if (item.id.toLowerCase() === needle || item.subtype?.toLowerCase() === needle || item.name.toLowerCase() === needle) return true;
+  const snippet = PRIMITIVE_LIBRARY.find((candidate) => candidate.id === item.id)?.generateSnippet(1, 0, 0).toLowerCase() ?? '';
+  return snippet.split(/[^a-z0-9_]+/).includes(needle);
+}
 const stringArg = (args: Record<string, unknown>, key: string): string =>
   typeof args[key] === 'string' ? args[key] as string : fail('invalid_arguments', `${key} 必须是字符串。`);
 
@@ -100,8 +112,8 @@ function validateProposedTikzSource(nextSource: string) {
 
 const allowedKeys: Record<string, string[]> = {
   get_canvas_source: [], get_canvas_ast: [], get_selected_elements: [],
-  get_component_library: ['category'], get_theme_palette: ['themeId'],
-  get_diagram_design_skill: ['topic', 'startLine', 'lineCount'],
+  get_component_library: ['category', 'componentId'], get_theme_palette: ['themeId'],
+  get_diagram_design_skill: ['action', 'skillId', 'reference', 'topic', 'startLine', 'lineCount'],
   inspect_layout_diagnostics: ['proposalId', 'themeId'],
   render_canvas_preview: ['proposalId'],
   propose_tikz_patch: ['baseRevision', 'baseSourceHash', 'summary', 'rationale', 'newTikzCode'],
@@ -114,7 +126,7 @@ function validateArguments(name: string, args: Record<string, unknown>) {
   if (!args || Array.isArray(args) || typeof args !== 'object' || Object.keys(args).some((key) => !keys.includes(key))) {
     fail('invalid_arguments', '工具参数包含未知字段。');
   }
-  for (const key of ['proposalId', 'category', 'themeId', 'rationale']) {
+  for (const key of ['proposalId', 'category', 'componentId', 'themeId', 'rationale']) {
     if (args[key] !== undefined) stringArg(args, key);
   }
   if (args.category !== undefined && !['all', 'dl', 'chart'].includes(String(args.category))) {
@@ -124,6 +136,63 @@ function validateArguments(name: string, args: Record<string, unknown>) {
     if (!Number.isSafeInteger(args.baseRevision) || Number(args.baseRevision) < 0) fail('invalid_arguments', 'baseRevision 必须是非负整数。');
     if (!stringArg(args, 'baseSourceHash')) fail('invalid_arguments', '缺少源码 hash。');
     if (!stringArg(args, 'summary').trim()) fail('invalid_arguments', '请填写修改摘要。');
+  }
+}
+
+function skillReadsOf(context: McpRequestContext) {
+  return context.skillReads ??= createSkillCoverage();
+}
+
+function stopIfSkillStalled(kind: 'correct' | 'stall' | 'stop' | 'first', coverage: ReturnType<typeof skillReadsOf>): void {
+  if (kind === 'stop') fail('skill_read_stalled', skillStallMessage(coverage));
+}
+
+async function readDiagramSkill(requestId: string, context: McpRequestContext, args: Record<string, unknown>) {
+  const request = (() => {
+    try { return validateDiagramSkillRequest(args); }
+    catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.startsWith('未知的 skill 参考页')) {
+        stopIfSkillStalled(noteUnknownSkillReference(skillReadsOf(context)), skillReadsOf(context));
+      }
+      return fail('invalid_arguments', message);
+    }
+  })();
+  const coverage = skillReadsOf(context);
+  if (request.action === 'list') {
+    const catalogState = noteRepeatedSkillCatalog(coverage);
+    stopIfSkillStalled(catalogState, coverage);
+    return catalogState === 'first' ? listAgentSkills() : {
+      contentKind: 'catalog', delivery: 'already-read', nextAction: 'draft',
+      notice: '目录已提供。读取一个技能，或开始提案；不要重复列出目录。',
+    };
+  }
+  const assertSkillRequestActive = () => {
+    if (getMcpRequest(requestId) !== context || !useMcpStore.getState().config.builtinEnabled) {
+      fail('request_ended', 'MCP 请求已结束或工具授权已关闭。');
+    }
+  };
+  try {
+    if (!('skillId' in request)) {
+      const { readDiagramSkillPage } = await import('../agent/diagram-skill-library');
+      assertSkillRequestActive();
+      const legacy = readDiagramSkillPage(request);
+      assertSkillRequestActive();
+      return legacy;
+    }
+    const { readAgentSkillPage } = await import('../agent/skill-library');
+    assertSkillRequestActive();
+    const page = await readAgentSkillPage(request);
+    assertSkillRequestActive();
+    const delivered = await deliverSkillRead(coverage, page, {
+      reload: request.action === 'reload',
+      workflow: () => readAgentSkillPage({ skillId: request.skillId, startLine: 1, lineCount: 160 }),
+    });
+    assertSkillRequestActive();
+    return delivered;
+  } catch (error) {
+    if (error instanceof ToolError || error instanceof SkillReadStalled) throw error;
+    fail('invalid_arguments', error instanceof Error ? error.message : String(error));
   }
 }
 
@@ -141,12 +210,7 @@ export async function executeMcpTool(event: McpToolRequest): Promise<unknown> {
     }
     validateArguments(event.toolName, event.arguments);
     const args = event.arguments;
-    if (event.toolName === 'get_diagram_design_skill') {
-      const { readDiagramSkillPage } = await import('../agent/diagram-skill-library');
-      if (getMcpRequest(event.requestId) !== context) fail('request_ended', 'MCP 请求已结束。');
-      try { return readDiagramSkillPage(args); }
-      catch (error) { fail('invalid_arguments', error instanceof Error ? error.message : String(error)); }
-    }
+    if (event.toolName === 'get_diagram_design_skill') return await readDiagramSkill(event.requestId, context, args);
     const independent = event.toolName === 'get_component_library' || (event.toolName === 'get_theme_palette' && args.themeId);
     if (!independent && !sameCanvas(context.target)) fail('target_inactive', '请切回原画布后继续调用工具。');
     const workspace = useWorkspaceStore.getState();
@@ -154,10 +218,28 @@ export async function executeMcpTool(event: McpToolRequest): Promise<unknown> {
     const revision = workspace.sourceRevision ?? 0;
     const themeId = (args.themeId ?? workspace.activeThemeId ?? 'neurips') as JournalThemeId;
     if (!Object.hasOwn(JOURNAL_THEMES, themeId)) fail('invalid_arguments', '未知的期刊主题。');
-    if (event.toolName === 'get_component_library') return {
-      components: PRIMITIVE_LIBRARY.filter((item) => !args.category || args.category === 'all' || item.category === args.category)
-        .map(({ generateSnippet, ...item }) => ({ ...item, snippet: generateSnippet(1, 0, 0) })),
-    };
+    if (event.toolName === 'get_component_library') {
+      const requestedId = typeof args.componentId === 'string' ? args.componentId.trim() : undefined;
+      const inCategory = PRIMITIVE_LIBRARY.filter((item) =>
+        !args.category || args.category === 'all' || item.category === args.category);
+      const components = requestedId === undefined ? inCategory : inCategory.filter((item) => componentMatches(item, requestedId));
+      if (requestedId && !components.length && PRIMITIVE_LIBRARY.some((item) => componentMatches(item, requestedId))) {
+        fail('invalid_arguments', `组件 ${requestedId} 存在，但与分类 ${String(args.category)} 不匹配。`);
+      }
+      const usage = 'Illustrative editable snippets, not user measurements or mandatory architectures. Replace example values/dimensions with actual supplied data and adapt hard-coded colors/grid settings to the task/theme. componentId accepts a library id or the TikZ style inside its snippet.';
+      if (requestedId && !components.length) {
+        return {
+          components: [], matched: false, requestedId,
+          available: PRIMITIVE_LIBRARY.map(({ id, name, category }) => ({ id, name, category })),
+          usage: `${usage} ${requestedId} 不是已知组件或样式。请改用 available[].id，或 category=dl|chart，不要自造 ID。`,
+        };
+      }
+      return {
+        components: components.map(({ generateSnippet, ...item }) => ({ ...item, snippet: generateSnippet(1, 0, 0) })),
+        ...(requestedId ? { matched: true, requestedId } : {}),
+        usage,
+      };
+    }
     if (event.toolName === 'get_theme_palette') return JOURNAL_THEMES[themeId];
     const hash = await sourceHash(source);
     // Read-only responses must also remain bound across asynchronous hashing.
@@ -234,6 +316,7 @@ export async function executeMcpTool(event: McpToolRequest): Promise<unknown> {
           ? { ...s, messages: s.messages.map((message) => message.id === context.messageId
             ? { ...message, patchProposal: renderedProposal } : message) } : s) }));
       }
+      if (!cached) noteSkillProgress(context.skillReads);
       return { ...version, previewSourceHash, proposalId: args.proposalId,
         applied: Boolean(args.proposalId && currentProposal?.status === 'applied'), cached,
         rendersRemaining: 3 - (context.previewAttempts ?? 0), renderer: 'tex', message: rendered.message,
@@ -327,14 +410,43 @@ export async function executeMcpTool(event: McpToolRequest): Promise<unknown> {
     const published = context.external ? getExternalProposal(event.requestId)
       : useAgentStore.getState().sessions.find((s) => s.id === context.target.conversationId)
         ?.messages.find((message) => message.id === context.messageId)?.patchProposal;
+    noteSkillProgress(context.skillReads);
     const applied = published?.status === 'applied';
     const liveSource = useWorkspaceStore.getState().tikzCode;
     return { proposalId: proposal.id, status: published?.status ?? 'pending', applied,
       ...version, revision: useWorkspaceStore.getState().sourceRevision ?? 0,
       sourceHash: applied ? await sourceHash(liveSource) : hash, report: analyzeTikzLayout(nextSource, themeId) };
   } catch (error) {
-    return { error: { code: error instanceof ToolError ? error.code : 'tool_failed', message: error instanceof Error ? error.message : String(error) } };
+    const code = error instanceof SkillReadStalled ? error.code : error instanceof ToolError ? error.code : 'tool_failed';
+    return { error: { code, message: error instanceof Error ? error.message : String(error) } };
   }
+}
+
+const SKILL_LABELS: Record<string, string> = {
+  'scientific-diagram-design': '设计', 'reference-reproduction': '复刻',
+  'canvas-editing': '编辑', 'publication-style': '投稿',
+};
+const REFERENCE_LABELS: Record<string, string> = {
+  composition: '构图', 'coordinate-mapping': '坐标映射', layout: '布局', renderer: '渲染适配',
+  review: '审核', 'surgical-diff': '局部补丁', 'figure-contract': '图件契约',
+  charts: '图表', illustrations: '插图',
+};
+
+function skillActivity(result: unknown): { label: string; error?: string } | undefined {
+  if (!result || typeof result !== 'object') return undefined;
+  const body = result as Record<string, unknown>;
+  const error = body.error as { code?: string; message?: string } | undefined;
+  if (error?.code === 'skill_read_stalled') return { label: '技能读取无进展', error: error.message };
+  if (error || body.contentKind === 'reference') return undefined;
+  if (body.contentKind === 'catalog') {
+    return { label: body.delivery === 'already-read' ? '技能目录 · 无新内容' : '技能目录' };
+  }
+  if (body.contentKind !== 'adapted-skill') return undefined;
+  const skill = SKILL_LABELS[String(body.skillId)] ?? String(body.skillId);
+  const reference = body.reference == null ? '工作流程' : REFERENCE_LABELS[String(body.reference)] ?? String(body.reference);
+  const range = typeof body.startLine === 'number' && typeof body.endLine === 'number' ? ` ${body.startLine}–${body.endLine}` : '';
+  const state = body.delivery === 'already-read' ? ' · 无新内容' : body.nextStartLine == null ? ' · 已完整' : ' · 未完';
+  return { label: `${skill} · ${reference}${range}${state}` };
 }
 
 let listening: Promise<void> | undefined;
@@ -351,14 +463,15 @@ export function ensureMcpRuntime(): Promise<void> {
         return;
       }
       const started = performance.now();
-      const update = (status: 'running' | 'completed' | 'failed') => {
+      const update = (status: 'running' | 'completed' | 'failed', skillRead?: { label: string; error?: string }) => {
         if (!context.messageId) return;
         useAgentStore.setState((state) => ({ sessions: state.sessions.map((s) => s.id === context.target.conversationId
           ? { ...s, messages: s.messages.map((message) => message.id === context.messageId ? {
               ...message, mcpToolCalls: [
                 ...(message.mcpToolCalls || []).filter((call) => call.callId !== event.toolRequestId),
                 { callId: event.toolRequestId, toolName: `mcp__agentikz__${event.toolName}`, argsSummary: isProjectTool(event.toolName) ? '内置论文工具' : '内置画布工具',
-                  status, source: 'mcp' as const, durationMs: status === 'running' ? undefined : Math.round(performance.now() - started) },
+                  status, source: 'mcp' as const, durationMs: status === 'running' ? undefined : Math.round(performance.now() - started),
+                  ...(skillRead ? { skillRead } : {}) },
               ],
             } : message) } : s) }));
       };
@@ -370,7 +483,10 @@ export function ensureMcpRuntime(): Promise<void> {
         await invoke('mcp_tool_result', { requestId: event.requestId, toolRequestId: event.toolRequestId, result });
         const failed = !!(result && typeof result === 'object' && 'error' in result);
         const elapsedMs = Math.round(performance.now() - started);
-        update(failed ? 'failed' : 'completed');
+        update(failed ? 'failed' : 'completed', skillActivity(result));
+        const stalled = result && typeof result === 'object' && 'error' in result
+          && (result as { error?: { code?: string } }).error?.code === 'skill_read_stalled';
+        if (stalled && !context.external) void useAgentStore.getState().stopSkillReadLoop(event.requestId);
         if (context.external) {
           if (useMcpStore.getState().external?.requestId === event.requestId) {
             useMcpStore.setState({ externalLastCall: `${event.toolName} · ${failed ? '失败' : '成功'} · ${elapsedMs} ms` });

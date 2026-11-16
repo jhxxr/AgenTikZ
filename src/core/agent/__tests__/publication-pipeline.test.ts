@@ -109,7 +109,7 @@ describe('Publication Style Guides & Figure Contract System (Stage 1 & 2)', () =
     ).toBe(false);
   });
 
-  it('compiles structured Agent prompt with style guide and figure contract', () => {
+  it('compiles a skill directory and task flags instead of injecting publication protocols', () => {
     const compiled = compileAgentPrompt({
       userPrompt: 'Draw a Nature style dual-panel architecture figure',
       themeId: 'nature',
@@ -117,9 +117,11 @@ describe('Publication Style Guides & Figure Contract System (Stage 1 & 2)', () =
       requireFigureContract: true,
       allowAiCutoutIllustrations: true,
     });
-    expect(compiled).toContain('Nature / Science Minimal');
-    expect(compiled).toContain('@figure-contract');
-    expect(compiled).toContain('@agent-image');
+    expect(compiled).toContain('publication-style');
+    expect(compiled).toContain('"themeId":"nature"');
+    expect(compiled).toContain('"requireFigureContract":true');
+    expect(compiled).not.toContain('% @figure-contract');
+    expect(compiled).not.toContain('@agent-image');
   });
 
   it('formats and parses figure contracts accurately', () => {

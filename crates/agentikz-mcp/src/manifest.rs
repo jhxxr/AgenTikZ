@@ -23,7 +23,10 @@ pub fn builtin_tools() -> Vec<ToolSpec> {
         });
     };
     add("get_canvas_source", "Read the target canvas source, identity, revision, sourceHash and active theme. Read this before proposing changes.", json!({}), vec![]);
-    add("get_diagram_design_skill", "Read the built-in user-provided tikz-diagram-reproduction skill. Choose design for composition/shape/color rules, reproduction for fidelity guidance, or swsa/gnn/mae/riemannian for paged original macro templates. Use macroIndex to jump to needed definitions. Learn visual patterns; do not copy unrelated architectures or full document preambles.", json!({
+    add("get_diagram_design_skill", "Discover on-demand drawing skills with action=list (metadata only), then action=read with skillId and optional reference. List ignores body/page fields; skillId takes precedence over legacy topic. Omit reference or pass workflow/. for the workflow; the first reference read also returns it once. Repeated complete pages return no new body. action=reload refetches one page after genuine context loss. Use only catalog-listed references. Legacy topics/macros are reference examples.", json!({
+        "action": {"type": "string", "enum": ["list", "read", "reload"]},
+        "skillId": {"type": "string", "enum": ["scientific-diagram-design", "reference-reproduction", "canvas-editing", "publication-style"]},
+        "reference": {"type": "string", "minLength": 1},
         "topic": {"type": "string", "enum": ["design", "reproduction", "swsa", "gnn", "mae", "riemannian"]},
         "startLine": {"type": "integer", "minimum": 1},
         "lineCount": {"type": "integer", "minimum": 1, "maximum": 160}
@@ -44,15 +47,16 @@ pub fn builtin_tools() -> Vec<ToolSpec> {
     }), vec![]);
     add(
         "get_component_library",
-        "Read AgenTikZ component descriptions and editable example snippets.",
+        "Read one component example by library id or the TikZ style used in its snippet (for example prim_mha or mha_block), or by category. Unknown ids return the available ids instead of failing. Example data and colors are not measurements or task requirements.",
         json!({
-            "category": {"type": "string", "enum": ["all", "dl", "chart"]}
+            "category": {"type": "string", "enum": ["all", "dl", "chart"]},
+            "componentId": {"type": "string", "minLength": 1}
         }),
         vec![],
     );
     add(
         "get_theme_palette",
-        "Read the semantic palette of the active or specified journal theme.",
+        "Read the active/specified journal palette, styleRules, column sizes and chart defaults when relevant.",
         json!({
             "themeId": {"type": "string", "enum": ["neurips", "cvpr", "nature", "ieee"]}
         }),
@@ -130,5 +134,32 @@ impl ToolSpec {
             self.description,
             self.input_schema.as_object().unwrap().clone(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn progressive_skill_schema_preserves_names_scope_and_legacy_topics() {
+        let tools = builtin_tools();
+        assert_eq!(tools.len(), 15);
+        assert_eq!(canvas_tools().len(), 11);
+        let skill = tools.iter().find(|tool| tool.name == "get_diagram_design_skill").unwrap();
+        let properties = &skill.input_schema["properties"];
+        assert_eq!(properties["action"]["enum"], json!(["list", "read", "reload"]));
+        assert_eq!(properties["skillId"]["enum"], json!([
+            "scientific-diagram-design", "reference-reproduction", "canvas-editing", "publication-style",
+        ]));
+        assert_eq!(properties["topic"]["enum"], json!([
+            "design", "reproduction", "swsa", "gnn", "mae", "riemannian",
+        ]));
+        assert_eq!(properties["lineCount"]["maximum"], 160);
+        assert_eq!(skill.input_schema["required"], json!([]));
+        assert_eq!(skill.input_schema["additionalProperties"], false);
+        let components = tools.iter().find(|tool| tool.name == "get_component_library").unwrap();
+        assert_eq!(components.input_schema["properties"]["componentId"]["type"], "string");
+        assert_eq!(components.input_schema["properties"]["category"]["enum"], json!(["all", "dl", "chart"]));
     }
 }

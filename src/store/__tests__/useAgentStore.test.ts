@@ -188,7 +188,7 @@ describe('automatic mode', () => {
     await store.getState().sendPromptToAgent('Read');
     expect(bridge.invoke).toHaveBeenLastCalledWith('acp_send_prompt', expect.objectContaining({
       fullAccess: true, autoMode: true, workingDirectory: 'E:\\Notes',
-      agentContext: expect.stringContaining('Automatic mode is enabled'),
+      agentContext: expect.stringContaining('"autoMode":true'),
     }));
     expect(useSettingsStore.getState().agentFullAccess).toBe(false);
     useSettingsStore.getState().updateSettings({ agentAutoMode: false });
@@ -215,7 +215,7 @@ describe('automatic mode', () => {
       store.getState().createNewSession();
       if (agentId === 'pi') {
         expect(args.request).not.toHaveProperty('fullAccess');
-        expect(args.request.prompt).toContain('Automatic mode is enabled');
+        expect(args.request.prompt).toContain('"autoMode":true');
         return { runtimeStarted: true, reply: 'Done', resumed: false };
       }
       return { usedNativeCli: true, reply: 'Done', proposedTikz: '% duplicate fallback' };
@@ -353,15 +353,53 @@ describe('real ACP frontend contract', () => {
     expect(bridge.invoke).toHaveBeenCalledTimes(32);
   });
 
+  it.each(['claude-code', 'pi'] as const)('sends only skill metadata and task state to %s on both initial and continued turns', async (agentId) => {
+    const store = await freshStore();
+    store.getState().setActiveAgentId(agentId);
+    useSettingsStore.getState().updateSettings({ piModel: 'fixture', enforcePublicationStyleGuide: false });
+    store.setState({ attachCanvasContext: false, attachSelectionContext: false });
+    bridge.invoke.mockResolvedValue(agentId === 'pi'
+      ? { runtimeStarted: true, reply: 'Done', resumed: false }
+      : { usedNativeCli: true, reply: 'Done' });
+    for (const request of ['Draw a new figure', 'Only rename one label']) {
+      await store.getState().sendPromptToAgent(request);
+      const args = bridge.invoke.mock.calls.at(-1)![1];
+      const text = agentId === 'pi' ? args.request.prompt : args.agentContext;
+      expect(text).toContain('On-demand skills v1.0.0');
+      expect(text).toContain('get_diagram_design_skill');
+      expect(text).toContain('"enforcePublicationStyleGuide":false');
+      expect(text).not.toContain('Registered Primitive Library Snippets');
+      expect(text).not.toContain('FBE5D7');
+      expect(text).not.toContain('\\newcommand');
+      expect(text).not.toContain('<<<<<<< SEARCH');
+      expect(text).not.toContain(bridge.canvasCode);
+      expect(text.length).toBeLessThan(4000);
+      if (agentId !== 'pi') expect(args.prompt).toBe(request);
+    }
+    const args = bridge.invoke.mock.calls.at(-1)![1];
+    const history = agentId === 'pi' ? args.request.history : args.history;
+    expect(history.some((message: { content: string }) => message.content === 'Draw a new figure')).toBe(true);
+    expect(JSON.stringify(history)).not.toContain('On-demand skills');
+  });
+
+  it('does not advertise a skill loader when built-in MCP is disabled', async () => {
+    const store = await freshStore();
+    useMcpStore.setState((state) => ({ config: { ...state.config, builtinEnabled: false } }));
+    await store.getState().sendPromptToAgent('Explain the canvas');
+    const args = bridge.invoke.mock.calls.at(-1)![1];
+    expect(args.agentContext).toContain('tools/skills are disabled');
+    expect(args.agentContext).not.toContain('get_diagram_design_skill');
+  });
+
   it('injects the user drawing skill and reproduction intent without silently recoloring fallback source', async () => {
     const store = await freshStore();
     bridge.canvasCode = '\\begin{tikzpicture}\\node[fill=white] (a) at (0,0) {resnet};\\end{tikzpicture}';
     bridge.invoke.mockResolvedValue({ usedNativeCli: true, reply: `\`\`\`tikz\n${bridge.canvasCode}\n\`\`\`` });
     await store.getState().sendPromptToAgent('请复刻这张图，保留原配色');
     const args = bridge.invoke.mock.calls.at(-1)![1];
-    expect(args.agentContext).toContain('BUILT-IN DRAWING SKILL: tikz-diagram-reproduction');
-    expect(args.agentContext).toContain('Task mode: reproduction');
-    expect(args.prompt).toContain('保留原图的配色');
+    expect(args.agentContext).toContain('reference-reproduction');
+    expect(args.agentContext).toContain('"mode":"reproduction"');
+    expect(args.prompt).toBe('请复刻这张图，保留原配色');
     const proposal = store.getState().sessions[0].messages.at(-1)?.patchProposal;
     expect(proposal?.newTikzCode).toContain('fill=white');
     expect(proposal?.newTikzCode).toContain('{resnet}');
@@ -374,7 +412,7 @@ describe('real ACP frontend contract', () => {
     const image = { id: 'ref', name: 'diagram.png', mimeType: 'image/png' as const, data: 'cGl4ZWxz' };
     await store.getState().sendPromptToAgent('', [image]);
     expect(bridge.invoke).toHaveBeenCalledWith('acp_send_prompt', expect.objectContaining({
-      images: [image], agentContext: expect.stringContaining('BOUNDED VISUAL REVIEW'),
+      images: [image], agentContext: expect.stringContaining('Visual review: render the exact proposalId'),
     }));
     expect(store.getState().sessions[0].messages[0].images).toEqual([image]);
     expect(store.getState().sessions[0].messages[0].content).toContain('所附图片');
@@ -384,7 +422,7 @@ describe('real ACP frontend contract', () => {
     expect(JSON.stringify(args.history)).not.toContain(image.data);
     store.getState().setVisualReviewEnabled(false);
     await store.getState().sendPromptToAgent('Text diagnostics only');
-    expect(bridge.invoke.mock.calls.at(-1)![1].agentContext).not.toContain('BOUNDED VISUAL REVIEW');
+    expect(bridge.invoke.mock.calls.at(-1)![1].agentContext).not.toContain('Visual review: render the exact proposalId');
   });
 
   it('routes Pi to its own long-lived backend without forwarding secrets or native access flags', async () => {
@@ -402,7 +440,9 @@ describe('real ACP frontend contract', () => {
     const args = bridge.invoke.mock.calls[0][1].request;
     expect(args).not.toHaveProperty('apiKey');
     expect(args).not.toHaveProperty('fullAccess');
-    expect(args.prompt).toContain('Unsaved manuscript');
+    expect(args.prompt).toContain('"activePaperFile":"main.tex"');
+    expect(args.prompt).not.toContain('Unsaved manuscript');
+    expect(args.prompt).not.toContain('scientific-diagram-design');
     expect(store.getState().sessions[0].messages.at(-1)?.content).toBe('Pi response');
 
     useSettingsStore.getState().updateSettings({ piThinkingLevel: 'xhigh', acpThoughtSelections: { 'codex-cli': 'high' } });
@@ -494,7 +534,8 @@ describe('real ACP frontend contract', () => {
     await store.getState().sendPromptToAgent('Polish my manuscript');
     const args = bridge.invoke.mock.calls[0][1];
     expect(args).toMatchObject({ workbenchMode: 'paper', canvasTikz: '', selectedIds: [], prompt: 'Polish my manuscript' });
-    expect(args.agentContext).toContain('Unsaved manuscript');
+    expect(args.agentContext).toContain('"activePaperFile":"main.tex"');
+    expect(args.agentContext).not.toContain('Unsaved manuscript');
     expect(args.agentContext).toContain('propose_project_patch');
     expect(args.agentContext).not.toContain('REGISTERED PRIMITIVE');
     expect(store.getState().sessions[0].messages.some((m) => m.patchProposal)).toBe(false);
@@ -825,8 +866,8 @@ describe('real ACP frontend contract', () => {
       userAgent: 'AgenTikZ-Pi/1.0',
       channel: expect.objectContaining({ baseUrl: 'https://share.example.test/v1' }),
     });
-    expect(call[1].request.prompt).toContain('TEXTUAL LAYOUT VERIFICATION (NON-VISION MODEL)');
-    expect(call[1].request.prompt).not.toContain('BOUNDED VISUAL REVIEW');
+    expect(call[1].request.prompt).toContain('Selected model cannot inspect images');
+    expect(call[1].request.prompt).not.toContain('Visual review: render the exact proposalId');
     const lastMsg = store.getState().sessions[0].messages.at(-1);
     expect(lastMsg?.thoughtProcess).toBe('Thinking step 1. ');
     expect(lastMsg?.content).toBe('Final answer.');
