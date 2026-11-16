@@ -124,7 +124,7 @@ for (const version of ['2024-11-05', '2025-11-25']) {
     assert.equal(listed.result.tools.length, 15);
     assert.ok(listed.result.tools.some((tool) => tool.name === 'get_diagram_design_skill'));
     const skillTool = listed.result.tools.find((tool) => tool.name === 'get_diagram_design_skill');
-    assert.deepEqual(skillTool.inputSchema.properties.action.enum, ['list', 'read']);
+    assert.deepEqual(skillTool.inputSchema.properties.action.enum, ['list', 'read', 'reload']);
     assert.deepEqual(skillTool.inputSchema.properties.skillId.enum, [
       'scientific-diagram-design', 'reference-reproduction', 'canvas-editing', 'publication-style',
     ]);
@@ -158,6 +158,15 @@ for (const version of ['2024-11-05', '2025-11-25']) {
     assert.equal(skill.result.structuredContent.contentKind, 'adapted-skill');
     assert.equal(skill.result.structuredContent.skillId, 'canvas-editing');
     assert.equal(client.calls.at(-1).arguments.reference, 'layout');
+    const reloadArgs = { action: 'reload', skillId: 'canvas-editing', reference: 'layout', startLine: 1, lineCount: 5 };
+    const reloaded = await client.request('tools/call', { name: 'get_diagram_design_skill', arguments: reloadArgs });
+    assert.equal(reloaded.error, undefined);
+    assert.equal(reloaded.result.isError, false);
+    assert.equal(reloaded.result.structuredContent.contentKind, 'adapted-skill');
+    assert.equal(reloaded.result.structuredContent.skillId, 'canvas-editing');
+    assert.equal(reloaded.result.structuredContent.reference, 'layout');
+    assert.equal(JSON.parse(reloaded.result.content[0].text).text, 'Fixture packaged editing workflow.');
+    assert.deepEqual(client.calls.at(-1), { toolName: 'get_diagram_design_skill', arguments: reloadArgs });
     const originalSkill = await client.request('tools/call', { name: 'get_diagram_design_skill', arguments: { topic: 'mae' } });
     assert.equal(originalSkill.result.structuredContent.contentKind, 'reference');
     assert.equal(originalSkill.result.structuredContent.topic, 'mae');
