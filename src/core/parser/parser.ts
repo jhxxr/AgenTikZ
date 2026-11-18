@@ -1,5 +1,6 @@
 import { parseTikzOptionString, formatTikzOptions } from './options';
 import { parseCoordinateGeometry } from './path-geometry';
+import { indexTikzEnvironments, scanTikzStatements } from './syntax';
 export { parseTikzOptionString, formatTikzOptions } from './options';
 import {
   BoxplotStat,
@@ -1051,20 +1052,13 @@ export function parseTikzDocument(
   const edges: TikzEdgeElement[] = [];
   const charts: TikzChartElement[] = [];
   const diagnostics: ParsedTikzDocument['diagnostics'] = [];
-  const exactPreviewReasons = getExactPreviewReasons(source);
-  if (exactPreviewReasons.length) {
-    diagnostics.push({
-      line: 1,
-      severity: 'warning',
-      message: `包含${exactPreviewReasons.join('、')}，需要 TeX 精确预览；交互画布仅支持部分语法。`,
-    });
-  }
   // Macro bodies in the preamble are definitions, not nodes on the canvas.
   const visibleCode = maskLatexComments(source);
-  const pictureRanges = Array.from(
-    visibleCode.matchAll(/\\begin\{tikzpicture\}[\s\S]*?(?:\\end\{tikzpicture\}|$)/g),
-    (match) => ({ start: match.index!, end: match.index! + match[0].length })
-  );
+  const statements = scanTikzStatements(source);
+  const closes = indexTikzEnvironments(statements);
+  const pictureRanges = statements
+    .filter((item) => item.command === 'begin' && item.environment === 'tikzpicture')
+    .map((item) => ({ start: item.start, end: closes.get(item.start)?.end ?? source.length }));
 
   // Extract overall Figure Caption (% \caption{...} or \caption{...}) and \label{...}
   let figureCaption = '';
@@ -1086,13 +1080,22 @@ export function parseTikzDocument(
 
   // First locate any PGFPlots scope/axis blocks so we don't double-parse inside them
   const axisRanges: Array<{ start: number; end: number }> = [];
-  const scopeAxisRegex =
-    /\\begin\{scope\}\s*\[[^\]]*shift\s*=[^\]]*\][\s\S]*?\\begin\{axis\}[\s\S]*?\\end\{axis\}\s*\\end\{scope\}|\\begin\{axis\}[\s\S]*?\\end\{axis\}/g;
-  let aMatch: RegExpExecArray | null;
   let chartIdx = 1;
-  while ((aMatch = scopeAxisRegex.exec(source)) !== null) {
-    const start = aMatch.index;
-    const end = start + aMatch[0].length;
+  for (let i = 0; i < statements.length; i++) {
+    const axis = statements[i];
+    if (axis.command !== 'begin' || axis.environment !== 'axis') continue;
+    const axisClose = closes.get(axis.start);
+    if (!axisClose) continue;
+    const scope = statements[i - 1];
+    const scopeClose = scope && closes.get(scope.start);
+    // Keep the chart editor's shifted wrapper only when it owns exactly this axis.
+    const wrapped = scope?.environment === 'scope' && scopeClose &&
+      /\bshift\s*=/.test(visibleCode.slice(scope.start, scope.end)) &&
+      !visibleCode.slice(scope.end, axis.start).trim() &&
+      !visibleCode.slice(axisClose.end, scopeClose.start).trim() &&
+      scopeClose.start >= axisClose.end;
+    const start = wrapped ? scope.start : axis.start;
+    const end = wrapped ? scopeClose.end : axisClose.end;
     axisRanges.push({ start, end });
     const chartEl = parsePgfAxisBlock(source, start, end, chartIdx++, makeSpan);
     elements.push(chartEl);
@@ -1102,27 +1105,18 @@ export function parseTikzDocument(
   const isInsideAxis = (offset: number) =>
     axisRanges.some((r) => offset >= r.start && offset < r.end);
 
-  // Scan top-level `\node ...;` and `\draw ...;` statements using depth-aware
-  // semicolon detection so that `;` inside brace groups (e.g. $p(x;\theta)$)
-  // does not truncate the match.
-  const stmtStartRegex = /\\(node|draw)\b/g;
-  let sMatch: RegExpExecArray | null;
+  // Share lossless statement boundaries with the geometry parser. Definitions,
+  // comments and commands inside labels must never become separate elements.
   let nodeIdx = 1;
   let edgeIdx = 1;
 
-  while ((sMatch = stmtStartRegex.exec(source)) !== null) {
-    const start = sMatch.index;
+  for (const statement of statements) {
+    const { start, end, command: cmd } = statement;
+    if (cmd !== 'node' && cmd !== 'draw') continue;
     if (isInsideAxis(start)) continue;
     if (pictureRanges.length && !pictureRanges.some((r) => start >= r.start && start < r.end)) continue;
-    const end = findStatementEnd(source, start);
-    if (end === -1) continue;
+    if (visibleCode[end - 1] !== ';') continue;
 
-    // Check if commented out on its starting line
-    const lineStart = source.lastIndexOf('\n', start) + 1;
-    const prefixOnLine = source.slice(lineStart, start);
-    if (prefixOnLine.includes('%')) continue;
-
-    const cmd = sMatch[1];
     if (cmd === 'node') {
       const node = parseSingleNodeStatement(
         source,
@@ -1153,8 +1147,27 @@ export function parseTikzDocument(
   }
 
   const paths: TikzPathElement[] = [];
-  const coordinateScene = exactPreviewReasons.length ? parseCoordinateGeometry(source, undefined, preambleStyles) : null;
+  let geometryFailure: unknown;
+  const coordinateScene = pictureRanges.length ? parseCoordinateGeometry(source, (error) => {
+    geometryFailure = error;
+  }, getThemeDefaultPreambleStyles(activeThemeId)) : null;
   if (coordinateScene) {
+    diagnostics.push(...(coordinateScene.diagnostics || []).map((item) => ({
+      line: makeSpan(item.span.start, item.span.end).startLine, severity: 'warning' as const,
+      message: item.command ? `\\${item.command}：${item.message}` : item.message,
+    })));
+    // Keep unsupported statements explicit in the AST. In particular, children
+    // of a skipped scope must not reappear with guessed, untransformed positions.
+    for (const issue of coordinateScene.diagnostics || []) {
+      for (const collection of [elements, nodes, edges, charts]) {
+        for (let index = collection.length - 1; index >= 0; index--) {
+          const item = collection[index];
+          if (item.span.start >= issue.span.start && item.span.end <= issue.span.end) collection.splice(index, 1);
+        }
+      }
+      elements.push({ kind: 'raw', id: `raw_${issue.span.start}`, content: source.slice(issue.span.start, issue.span.end),
+        span: makeSpan(issue.span.start, issue.span.end) });
+    }
     const macroGroups = new Map<number, { source: NonNullable<typeof coordinateScene.elements[0]['macro']>; elements: typeof coordinateScene.elements }>();
     for (let index = 0; index < coordinateScene.elements.length; index++) {
       const geometry = coordinateScene.elements[index];
@@ -1172,11 +1185,12 @@ export function parseTikzDocument(
         const edge = edges.find((edge) => edge.span.start === binding.span.start);
         if (edge) {
           edge.geometry = geometry;
-          edge.coordinateScaleX = coordinateScene.coordinateScale[0] / 52;
+          const scale = coordinateScene.coordinateScale[0] * (binding.transform?.xScale ?? 1) / 52;
+          edge.coordinateScaleX = scale === 1 ? undefined : scale;
           if (edge.residualOffset !== undefined) {
             const offset = /\+\+\(\s*([-+\d.]+)\s*(cm|mm|pt|in)?/.exec(source.slice(edge.span.start, edge.span.end));
             if (offset) edge.residualOffset = Math.abs(parseFloat(offset[1])) * (offset[2]
-              ? ({ cm: 1, mm: 0.1, pt: 1 / 28.45274, in: 2.54 }[offset[2]]!) : Math.abs(edge.coordinateScaleX));
+              ? ({ cm: 1, mm: 0.1, pt: 1 / 28.45274, in: 2.54 }[offset[2]]!) : Math.abs(scale));
           }
           continue;
         }
@@ -1200,16 +1214,20 @@ export function parseTikzDocument(
         node.coordinateGeometry = geometry;
         node.x = x; node.y = y;
         node.labelSpan = binding.labelSpan ? makeSpan(binding.labelSpan.start, binding.labelSpan.end) : node.labelSpan;
-        const merged = Object.entries(binding.rawOptions).reduce<Record<string, string>>((options, [key, value]) =>
+        const merged = binding.resolvedOptions || Object.entries(binding.rawOptions).reduce<Record<string, string>>((options, [key, value]) =>
           ({ ...options, ...(value === 'true' ? preambleStyles[key] : {}), [key]: value }), {});
         const hasShape = ['draw', 'fill'].some((key) => merged[key] && merged[key] !== 'none') ||
           ['circle', 'ellipse', 'rectangle', 'shape'].some((key) => merged[key] && merged[key] !== 'false') ||
           node.subtype === 'image' || node.subtype === 'cuboid';
-        if (!hasShape) {
+        const nativeNode = node.subtype !== 'image' && node.subtype !== 'cuboid' &&
+          !merged.subtype && !BUILTIN_BLOCK_STYLES.has(node.styleClass || '');
+        if (!hasShape || nativeNode) {
           node.geometry = geometry;
-          node.subtype = 'math';
-          node.label = node.labelSpan ? source.slice(node.labelSpan.start, node.labelSpan.end) : geometry.lines.join('\\\\');
-          node.sublabel = undefined;
+          if (!hasShape) {
+            if (node.subtype !== 'caption') node.subtype = 'math';
+            node.label = node.labelSpan ? source.slice(node.labelSpan.start, node.labelSpan.end) : geometry.lines.join('\\\\');
+            node.sublabel = undefined;
+          }
           node.width = width / 52; node.height = height / 52;
           node.textColor = geometry.color;
         }
@@ -1251,11 +1269,16 @@ export function parseTikzDocument(
       nodes.push(node); elements.push(node);
     }
     elements.sort((a, b) => a.span.start - b.span.start);
-    if (coordinateScene.elements.every((element) => element.source || element.macro)) {
-      const index = diagnostics.findIndex((item) => item.message.startsWith('包含'));
-      if (index >= 0) diagnostics.splice(index, 1);
+  }
+  if (geometryFailure && !coordinateScene) {
+    diagnostics.push({ line: 1, severity: 'warning', message: geometryFailure instanceof Error ? geometryFailure.message : String(geometryFailure) });
+  } else if (!diagnostics.length && (!coordinateScene || coordinateScene.elements.some((element) => !element.source && !element.macro))) {
+    const reasons = getExactPreviewReasons(source).filter((reason) => reason !== '参考图保真预览');
+    if (reasons.length) {
+      diagnostics.push({ line: 1, severity: 'warning', message: `包含${reasons.join('、')}，完整效果以 TeX 预览为准。` });
     }
   }
+  diagnostics.sort((a, b) => a.line - b.line);
   return {
     fullSource: source,
     figureCaption,

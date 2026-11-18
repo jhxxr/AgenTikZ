@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import fixture from '../../tex/__tests__/fixtures/complex-cjk-diagram.tex?raw';
 import macroFixture from '../../tex/__tests__/fixtures/swsa-nested.tex?raw';
+import transformerFixture from './fixtures/transformer-reproduction.tikz?raw';
 import { parseCoordinateGeometry } from '../path-geometry';
 import { patchGeometryElements } from '../path-patcher';
+import { parseTikzDocument } from '../parser';
 import { buildStandaloneLatexDocument } from '../../tex/document';
 
 const sceneFor = (source = fixture) => {
@@ -125,4 +127,99 @@ describe('coordinate path editing with source spans', () => {
     expect(sceneFor(next).elements[1].bounds[0]).toBeCloseTo(scene.elements[1].bounds[0] + 13);
   });
 
+});
+
+describe('canvas parser recovery', () => {
+  it('maps the complete Transformer reproduction without flattening its styles', () => {
+    const doc = parseTikzDocument(transformerFixture);
+    expect(doc.diagnostics).toEqual([]);
+    expect(doc.nodes).toHaveLength(40);
+    expect(doc.paths).toHaveLength(54);
+    expect(doc.nodes.find((node) => node.id === 'enc-ffn')?.geometry?.shape).toMatchObject({
+      fill: '#fbf0c0', stroke: '#e7c45e',
+    });
+    expect(doc.paths?.[0].geometry).toMatchObject({ dash: '5.5 5.5', strokeWidth: 0.8 * 52 / 28.45274 });
+    const halo = doc.paths?.find((path) => path.geometry.preaction);
+    expect(halo?.geometry).toMatchObject({ arrow: true, preaction: { stroke: '#FFFFFF' } });
+    expect(halo?.geometry.renderD).not.toBe(halo?.geometry.d);
+    expect(doc.paths?.some((path) => path.geometry.arrow && path.geometry.source?.coordinates.length === 4)).toBe(true);
+    expect(doc.paths?.slice(-2).map((path) => path.geometry.stroke)).toEqual(['#e6a037', '#7cb468']);
+    expect(doc.elements.slice(-2)).toEqual(doc.paths?.slice(-2));
+  });
+
+  it.each(['\n', '\r\n'])('isolates bad options, missing semicolons and broken delimiters with %j line endings', (ending) => {
+    const source = String.raw`\begin {tikzpicture}
+\draw[thick] (0,0) -- (1,0);
+\draw[unknown style] (0,1) -- (1,1);
+\draw (0,2) -- (1,2)
+\tikzset{broken/.style={draw=red
+\draw[dashed,thick] (0,3) -- (1,3);
+\draw[draw=blue (0,4) -- (1,4);
+\node (kept) at (1,5) {Kept};
+\draw[red] (0,6) -- (1,6);
+\end{tikzpicture}`.replace(/\n/g, ending);
+    const doc = parseTikzDocument(source);
+    expect(doc.diagnostics.map((item) => item.line)).toEqual([3, 4, 5, 7]);
+    expect(doc.paths).toHaveLength(3);
+    expect(doc.nodes.map((node) => node.id)).toEqual(['kept']);
+    expect(doc.elements.filter((element) => element.kind === 'raw').map((element) => element.content))
+      .toEqual([2, 3, 4, 6].map((line) => source.split(ending)[line]));
+    const scene = doc.coordinateScene!;
+    expect(patchGeometryElements(source, scene, [2], { label: 'Edited' }))
+      .toBe(source.replace('{Kept}', '{Edited}'));
+  });
+
+  it('applies repeat and nested styles in order and restores declarations when leaving a scope', () => {
+    const source = String.raw`\definecolor{accent}{HTML}{010203}
+\tikzset{wire/.style={draw=accent,thin}, wire/.append style={dashed},
+  wire/.append style={very thick}, alias/.style={wire}, base/.style={x=0.5cm}}
+\begin{tikzpicture}[base]
+\draw[alias] (0,0) -- (2,0);
+\begin{scope}[shift={(1,0)}]
+\definecolor{accent}{rgb}{0,1,0}
+\tikzset{wire/.style={draw=accent,line width=2pt}}
+\draw[alias,thin,alias] (0,1) -- (2,1);
+\end{scope}
+\draw[alias,line width=1pt,thick] (0,2) -- (2,2);
+\end{tikzpicture}`;
+    const scene = sceneFor(source);
+    expect(scene.elements.map((path) => path.bounds)).toEqual([[0, 0, 52, 0], [26, -52, 52, 0], [0, -104, 52, 0]]);
+    expect(scene.elements[0]).toMatchObject({ stroke: '#010203', dash: '5.5 5.5', strokeWidth: 1.2 * 52 / 28.45274 });
+    expect(scene.elements[1]).toMatchObject({ stroke: '#00ff00', strokeWidth: 2 * 52 / 28.45274 });
+    expect(scene.elements[2]).toMatchObject({ stroke: '#010203', dash: '5.5 5.5', strokeWidth: 0.8 * 52 / 28.45274 });
+  });
+
+  it('contains an unsupported scope without discarding the following sibling and does not leak a failed clip or style', () => {
+    const source = String.raw`\begin{tikzpicture}
+\draw (0,0) -- (1,0);
+\begin{scope}[rotate=45]
+\node (hidden) at (1,1) {Do not guess my transform};
+\begin{scope}
+\draw (0,1) -- (1,1);
+\end{scope}
+\end{scope}
+\tikzset{circular/.style={circular}}
+\draw[circular] (0,2) -- (1,2);
+\clip (0,0) plot coordinates {(1,1) (0,2)};
+\draw[blue] (0,3) -- (1,3);
+\end{tikzpicture}`;
+    const doc = parseTikzDocument(source);
+    expect(doc.paths).toHaveLength(2);
+    expect(doc.nodes).toHaveLength(0);
+    expect(doc.diagnostics.map((item) => item.line)).toEqual([3, 10, 11]);
+    expect(doc.paths?.[1].geometry).toMatchObject({ stroke: '#0000FF', clips: [], d: 'M 0 -156 L 52 -156' });
+  });
+
+  it('keeps drawable content around a PGFPlots axis inside a mixed scope', () => {
+    const doc = parseTikzDocument(String.raw`\begin{tikzpicture}
+\begin{scope}[shift={(1cm,0cm)}]
+\draw (0,0) -- (1,0);
+\begin{axis}\addplot coordinates {(0,0) (1,1)};\end{axis}
+\draw (0,1) -- (1,1);
+\end{scope}
+\end{tikzpicture}`);
+    expect(doc.charts).toHaveLength(1);
+    expect(doc.paths?.map((path) => path.geometry.d)).toEqual(['M 52 0 L 104 0', 'M 52 -52 L 104 -52']);
+    expect(doc.diagnostics).toEqual([]);
+  });
 });

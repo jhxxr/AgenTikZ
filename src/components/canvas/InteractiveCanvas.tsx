@@ -9,7 +9,6 @@ import {
   ptToPx,
   resolveTikzColor,
 } from '../../core/themes/journal-presets';
-import { getExactPreviewReasons } from '../../core/tex/source';
 import { compileWorkspaceTexPreview } from '../../core/tex/preview';
 import { buildVectorPreview } from '../../core/tex/vector-preview';
 import { VectorPathPreview } from './VectorPathPreview';
@@ -219,11 +218,9 @@ export const InteractiveCanvas: React.FC = () => {
   const spacePressedRef = useRef(false);
   const centeredDocuments = useRef(new Set<string>());
   const contentBounds = useMemo(() => getCanvasContentBounds(parsedDoc), [parsedDoc]);
-  const exactPreviewReasons = useMemo(() => getExactPreviewReasons(tikzCode), [tikzCode]);
-  const requiresExactPreview = exactPreviewReasons.length > 0 &&
-    (!parsedDoc.coordinateScene || parsedDoc.coordinateScene.elements.some((element) => !element.source && !element.macro));
+  const requiresExactPreview = parsedDoc.diagnostics.length > 0;
   const hasNativeGeometry = !!parsedDoc.coordinateScene &&
-    (parsedDoc.coordinateScene.transformed || !!parsedDoc.paths?.length || parsedDoc.nodes.some((node) => node.macroSource));
+    (parsedDoc.coordinateScene.transformed || !!parsedDoc.paths?.length || parsedDoc.nodes.some((node) => node.geometry || node.macroSource));
   const vectorPreview = useMemo(() => requiresExactPreview ? buildVectorPreview(tikzCode) : null, [tikzCode, requiresExactPreview]);
   const { texEngine, openSettings } = useSettingsStore(useShallow((s) => ({
     texEngine: s.texEngine,
@@ -1057,6 +1054,7 @@ export const InteractiveCanvas: React.FC = () => {
         {node.geometryGroup && <g transform={`translate(${originX} ${originY})`} style={{ fontFamily: parsedDoc.coordinateScene?.fontFamily }}>
           {node.geometryGroup.map((geometry, index) => <CanvasGeometry key={index} geometry={geometry} id={`${node.id}-${index}`} />)}
         </g>}
+        {!node.geometry && !node.geometryGroup && <>
         {/* 1. CONTAINER / STAGE DASHED BOX */}
         {node.subtype === 'container' && (
           <g>
@@ -1436,6 +1434,7 @@ export const InteractiveCanvas: React.FC = () => {
             );
           })()}
 
+        </>}
         {/* Selection Bounding Frame + 8-Way Resize Handles */}
         {isSelected && (
           <g data-export-ignore="true">
@@ -1637,9 +1636,13 @@ export const InteractiveCanvas: React.FC = () => {
     >
       {requiresExactPreview && (
         <div className="flex shrink-0 items-center gap-3 border-b border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-900" role="note">
-          <span className="flex-1">
-            交互画布仅显示可解析图元；宏、复杂路径等完整细节以 TeX 精确预览为准。编辑不会移除未解析源码。
-          </span>
+          <span className="min-w-0 flex-1">部分语法需 TeX 预览，源码已保留。</span>
+          <details className="relative shrink-0">
+            <summary className="cursor-pointer">查看原因</summary>
+            <ul className="absolute right-0 top-6 z-50 w-72 max-w-[45vw] max-h-60 overflow-auto break-words rounded-lg border border-amber-200 bg-white p-3 shadow-lg space-y-2 sm:w-96">
+              {parsedDoc.diagnostics.map((item, index) => <li key={index}>第 {item.line} 行：{item.message}</li>)}
+            </ul>
+          </details>
           <button type="button" onClick={() => setLeftTab('code')} className="shrink-0 text-blue-700 cursor-pointer">编辑源码</button>
           {previewMode === 'interactive' && (
             <button type="button" onClick={() => setPreviewMode('tex_split')} className="shrink-0 text-blue-700 cursor-pointer">精确对照</button>
@@ -1987,7 +1990,7 @@ export const InteractiveCanvas: React.FC = () => {
               </div>
             ) : (
               <div className="text-xs text-slate-600 text-center max-w-md bg-white border border-slate-200 rounded-lg p-5">
-                <p>{requiresExactPreview ? `此图包含${exactPreviewReasons.join('、')}，将通过 TeX 编译显示完整图形。` : '通过内置 TeX 引擎编译显示精确图形。'}</p>
+                <p>{requiresExactPreview ? '等待 TeX 编译，交互画布仍可编辑已解析的图元。' : '尚无 TeX 编译结果。'}</p>
                 {!isCompilingTex && (
                   <div className="mt-4 flex justify-center gap-3">
                     <button onClick={() => void compileWorkspaceTexPreview()} className="text-blue-600 cursor-pointer">重新编译</button>
@@ -2418,11 +2421,11 @@ export const InteractiveCanvas: React.FC = () => {
           )}
         </div>
 
-        <div className="hidden xl:flex bg-white/95 border border-slate-200/90 shadow-xs rounded-lg px-2.5 py-1 text-[11px] text-slate-500 items-center gap-3 pointer-events-auto">
-          <span>拖拽空白处平移 · 空格/中键拖拽 · 滚轮缩放</span>
-          <span className="text-emerald-600 font-medium flex items-center gap-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-            AST 无损同步
+        <div className="hidden min-w-0 xl:flex bg-white/95 border border-slate-200/90 shadow-xs rounded-lg px-2.5 py-1 text-[11px] text-slate-500 items-center gap-3 pointer-events-auto">
+          <span className="truncate" title="拖拽空白处平移 · 空格/中键拖拽 · 滚轮缩放">拖拽空白处平移 · 空格/中键拖拽 · 滚轮缩放</span>
+          <span className={`${requiresExactPreview ? 'text-amber-700' : 'text-emerald-600'} shrink-0 whitespace-nowrap font-medium flex items-center gap-1`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${requiresExactPreview ? 'bg-amber-500' : 'bg-emerald-500'}`} />
+            {requiresExactPreview ? '部分解析 · 源码保留' : '源码同步'}
           </span>
         </div>
       </div>

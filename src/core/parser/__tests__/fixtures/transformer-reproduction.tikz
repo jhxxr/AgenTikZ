@@ -1,0 +1,170 @@
+\begin{tikzpicture}[>=Stealth, font=\small\sffamily]
+% @diagram-design {"mode":"reproduction","preserveColors":true,"preserveGeometry":true}
+  % @figure-contract {"claim":"Encoder-decoder Transformer stack: masked self-attention, encoder-decoder cross-attention and feed-forward sublayers, each wrapped in a residual Add+Norm path","archetype":"schematic_led_composite","columnMode":"double","heroIds":["dec-cross-attn"]}
+  % Colours are visual estimates sampled from the supplied reference image.
+  \definecolor{refNormFill}{RGB}{205,228,197}
+  \definecolor{refNormLine}{RGB}{124,179,86}
+  \definecolor{refFfnFill}{RGB}{251,240,192}
+  \definecolor{refFfnLine}{RGB}{231,196,94}
+  \definecolor{refAttnFill}{RGB}{199,216,240}
+  \definecolor{refAttnLine}{RGB}{104,141,200}
+  \definecolor{refMhFill}{RGB}{244,199,198}
+  \definecolor{refMhLine}{RGB}{205,101,101}
+  \definecolor{refEncFrame}{RGB}{230,160,55}
+  \definecolor{refDecFrame}{RGB}{124,180,104}
+  \tikzset{
+    normbox/.style={draw=refNormLine, fill=refNormFill, thick, rounded corners=2pt,
+      minimum width=2.90cm, minimum height=0.55cm, inner sep=1pt, align=center, font=\small\sffamily\bfseries},
+    ffnbox/.style={draw=refFfnLine, fill=refFfnFill, thick, rounded corners=2pt,
+      minimum width=2.90cm, minimum height=1.00cm, inner sep=1pt, align=center, font=\small\sffamily\bfseries},
+    attnbox/.style={draw=refAttnLine, fill=refAttnFill, thick, rounded corners=2pt,
+      minimum width=2.90cm, minimum height=1.00cm, inner sep=1pt, align=center, font=\small\sffamily\bfseries},
+    mhbox/.style={draw=refMhLine, fill=refMhFill, thick, rounded corners=2pt,
+      minimum width=2.90cm, minimum height=1.30cm, inner sep=1pt, align=center, font=\small\sffamily\bfseries},
+    iobox/.style={draw=black, fill=white, thick, rounded corners=4pt,
+      minimum width=2.90cm, minimum height=0.85cm, inner sep=1pt, align=center, font=\small\sffamily\bfseries},
+    addcirc/.style={circle, draw=black, thick, fill=white, minimum size=0.56cm, inner sep=0pt, font=\small\sffamily\bfseries},
+    pecirc/.style={circle, draw=black, thick, fill=white, minimum size=0.56cm, inner sep=0pt},
+    sublayer/.style={draw=black, dashed, thick, rounded corners=10pt},
+    frame/.style={line width=1.1pt, rounded corners=14pt},
+    wire/.style={thick},
+    arrow/.style={->, thick},
+    harrow/.style={->, thick, shorten >=1pt, shorten <=1pt, preaction={draw=white, line width=4pt}},
+    lbl/.style={align=center, font=\small\sffamily\bfseries},
+  }
+
+  % ================= encoder frame (left column) =================
+  % The coloured outer frames are stroked at the very END of the picture so that the
+  % white arrow halos can no longer cut holes into them: in the reference the orange /
+  % green rounded frames read as one continuous unbroken outline.
+  \draw[sublayer] (-4.50,1.90) rectangle (-1.00,-5.55);
+  \draw[dashed, thick] (-4.50,-0.75) -- (-1.00,-0.75);
+
+  % ================= decoder frame (right column) ================
+  \draw[sublayer] (0.80,7.15) rectangle (4.30,-5.55);
+  \draw[dashed, thick] (0.80,3.45) -- (4.30,3.45);
+  \draw[dashed, thick] (0.80,-1.15) -- (4.30,-1.15);
+
+  % ================= encoder modules =============================
+  \node[normbox] (enc-norm-out)  at (-2.90,3.45) {Norm};
+  \node[addcirc] (enc-add-ffn)   at (-2.90,1.50) {$+$};
+  \node[ffnbox]  (enc-ffn)       at (-2.90,0.62) {Feed-Forward\\Network};
+  \node[normbox] (enc-norm-ffn)  at (-2.90,-0.32) {Norm};
+  \node[addcirc] (enc-add-attn)  at (-2.90,-1.70) {$+$};
+  \node[attnbox] (enc-mha)       at (-2.90,-2.85) {Multi-Headed\\Self-Attention};
+  \node[normbox] (enc-norm-attn) at (-2.90,-4.80) {Norm};
+  \node[addcirc] (enc-add-pe)    at (-2.90,-6.25) {$+$};
+  \node[pecirc]  (enc-pe)        at (-4.13,-6.25) {};
+  \node[iobox]   (enc-emb)       at (-2.90,-7.42) {Embeddings/\\Projections};
+
+  % ================= decoder modules =============================
+  \node[lbl]     (dec-pred)      at (2.40,9.90) {Predictions};
+  \node[iobox, minimum height=0.62cm] (dec-linear) at (2.40,8.95) {Linear};
+  \node[normbox] (dec-norm-out)  at (2.40,7.95) {Norm};
+  \node[addcirc] (dec-add-ffn)   at (2.40,6.40) {$+$};
+  \node[ffnbox]  (dec-ffn)       at (2.40,5.30) {Feed-Forward\\Network};
+  \node[normbox] (dec-norm-ffn)  at (2.40,4.15) {Norm};
+  \node[addcirc] (dec-add-cross) at (2.40,2.90) {$+$};
+  \node[attnbox] (dec-cross-attn) at (2.40,1.55) {Multi-Headed\\Cross-Attention};
+  \node[normbox] (dec-norm-cross) at (2.40,0.10) {Norm};
+  \node[addcirc] (dec-add-masked) at (2.40,-1.70) {$+$};
+  \node[mhbox]   (dec-masked)    at (2.40,-2.90) {Masked\\Multi-Headed\\Self-Attention};
+  \node[normbox] (dec-norm-masked) at (2.40,-4.70) {Norm};
+  \node[addcirc] (dec-add-pe)    at (2.40,-6.25) {$+$};
+  \node[pecirc]  (dec-pe)        at (3.36,-6.25) {};
+  \node[iobox]   (dec-emb)       at (2.40,-7.42) {Embeddings/\\Projections};
+
+  % ================= encoder data flow ===========================
+  \draw[arrow] (-2.90,-6.995) -- (-2.90,-6.53);
+  \draw[harrow] (-2.90,-5.97) -- (-2.90,-5.075);
+  \draw[arrow] (-2.90,-4.525) -- (-2.90,-3.35);
+  \draw[arrow] (-2.90,-2.35) -- (-2.90,-1.98);
+  \draw[harrow] (-2.90,-1.42) -- (-2.90,-0.595);
+  \draw[arrow] (-2.90,-0.045) -- (-2.90,0.12);
+  \draw[arrow] (-2.90,1.12) -- (-2.90,1.22);
+  \draw[harrow] (-2.90,1.78) -- (-2.90,3.175);
+  % residual Add+Norm loops
+  \draw[arrow] (-2.90,-0.85) -- (-1.35,-0.85) -- (-1.35,1.50) -- (-2.62,1.50);
+  \draw[arrow] (-2.90,-5.65) -- (-1.35,-5.65) -- (-1.35,-1.70) -- (-2.62,-1.70);
+  % V / K / Q bank of encoder self-attention
+  \draw[wire]  (-3.65,-3.95) -- (-2.20,-3.95);
+  \draw[arrow] (-3.65,-3.95) -- (-3.65,-3.35);
+  \draw[arrow] (-2.90,-3.95) -- (-2.90,-3.35);
+  \draw[arrow] (-2.20,-3.95) -- (-2.20,-3.35);
+  \draw[wire]  (-2.90,-4.525) -- (-2.90,-3.95);
+  \node[font=\small\sffamily\bfseries, inner sep=0pt, minimum width=0.36cm, minimum height=0.32cm]
+    (enc-tag-v) at (-3.92,-3.66) {V};
+  \node[font=\small\sffamily\bfseries, inner sep=0pt, minimum width=0.36cm, minimum height=0.32cm]
+    (enc-tag-k) at (-3.17,-3.66) {K};
+  \node[font=\small\sffamily\bfseries, inner sep=0pt, minimum width=0.36cm, minimum height=0.32cm]
+    (enc-tag-q) at (-2.47,-3.66) {Q};
+  % positional encoding adder
+  \draw[arrow] (-3.85,-6.25) -- (-3.18,-6.25);
+  \draw[thick] (-4.13,-6.45) -- (-4.13,-6.05);
+  \draw[thick] (-4.32,-6.25) .. controls (-4.26,-6.11) and (-4.19,-6.11) .. (-4.13,-6.25) .. controls (-4.07,-6.39) and (-4.00,-6.39) .. (-3.94,-6.25);
+  \node[lbl, minimum width=1.60cm, minimum height=0.80cm]
+    (enc-pe-lbl) at (-5.60,-6.25) {Positional\\Encoding};
+  \node[lbl, minimum width=3.03cm, minimum height=0.8cm]
+    (enc-src-lbl) at (-2.90,-8.78) {Source Sequence};
+  \node[lbl, minimum width=1.60cm, minimum height=0.80cm]
+    (enc-nx-lbl) at (-5.75,-1.70) {Nx\\``Layers''};
+
+  % ================= decoder data flow ===========================
+  \draw[arrow] (2.40,-6.995) -- (2.40,-6.53);
+  \draw[harrow] (2.40,-5.97) -- (2.40,-4.975);
+  \draw[arrow] (2.40,-4.425) -- (2.40,-3.55);
+  \draw[arrow] (2.40,-2.25) -- (2.40,-1.98);
+  \draw[harrow] (2.40,-1.42) -- (2.40,-0.175);
+  \draw[arrow] (2.40,0.375) -- (2.40,0.60);
+  \draw[arrow] (2.40,2.05) -- (2.40,2.62);
+  \draw[harrow] (2.40,3.18) -- (2.40,3.875);
+  \draw[arrow] (2.40,4.425) -- (2.40,4.80);
+  \draw[arrow] (2.40,5.80) -- (2.40,6.12);
+  \draw[harrow] (2.40,6.68) -- (2.40,7.675);
+  \draw[arrow] (2.40,8.225) -- (2.40,8.64);
+  \draw[arrow] (2.40,9.26) -- (2.40,9.66);
+  % residual Add+Norm loops
+  \draw[arrow] (2.40,3.35) -- (3.95,3.35) -- (3.95,6.40) -- (2.68,6.40);
+  \draw[arrow] (2.40,-1.25) -- (3.95,-1.25) -- (3.95,2.90) -- (2.68,2.90);
+  \draw[arrow] (2.40,-5.65) -- (3.95,-5.65) -- (3.95,-1.70) -- (2.68,-1.70);
+  % V / K / Q bank of cross-attention, fed by the encoder output
+  \draw[wire]  (1.65,0.60) -- (3.10,0.60);
+  \draw[arrow] (1.65,0.60) -- (1.65,1.05);
+  \draw[arrow] (2.40,0.60) -- (2.40,1.05);
+  \draw[arrow] (3.10,0.60) -- (3.10,1.05);
+  \node[font=\small\sffamily\bfseries, inner sep=0pt, minimum width=0.36cm, minimum height=0.32cm]
+    (dec-tag-v-cross) at (1.40,0.82) {V};
+  \node[font=\small\sffamily\bfseries, inner sep=0pt, minimum width=0.36cm, minimum height=0.32cm]
+    (dec-tag-k-cross) at (2.15,0.82) {K};
+  \node[font=\small\sffamily\bfseries, inner sep=0pt, minimum width=0.36cm, minimum height=0.32cm]
+    (dec-tag-q-cross) at (2.85,0.82) {Q};
+  % V / K / Q bank of masked self-attention
+  \draw[wire]  (1.65,-3.95) -- (3.10,-3.95);
+  \draw[arrow] (1.65,-3.95) -- (1.65,-3.55);
+  \draw[arrow] (2.40,-3.95) -- (2.40,-3.55);
+  \draw[arrow] (3.10,-3.95) -- (3.10,-3.55);
+  \draw[wire]  (2.40,-4.425) -- (2.40,-3.95);
+  \node[font=\small\sffamily\bfseries, inner sep=0pt, minimum width=0.36cm, minimum height=0.32cm]
+    (dec-tag-v-masked) at (1.40,-3.78) {V};
+  \node[font=\small\sffamily\bfseries, inner sep=0pt, minimum width=0.36cm, minimum height=0.32cm]
+    (dec-tag-k-masked) at (2.15,-3.78) {K};
+  \node[font=\small\sffamily\bfseries, inner sep=0pt, minimum width=0.36cm, minimum height=0.32cm]
+    (dec-tag-q-masked) at (2.85,-3.78) {Q};
+  % positional encoding adder
+  \draw[arrow] (3.08,-6.25) -- (2.68,-6.25);
+  \draw[thick] (3.36,-6.45) -- (3.36,-6.05);
+  \draw[thick] (3.17,-6.25) .. controls (3.23,-6.11) and (3.30,-6.11) .. (3.36,-6.25) .. controls (3.42,-6.39) and (3.49,-6.39) .. (3.55,-6.25);
+  \node[lbl, minimum width=1.60cm, minimum height=0.80cm]
+    (dec-pe-lbl) at (5.32,-6.25) {Positional\\Encoding};
+  \node[lbl, minimum width=1.60cm, minimum height=0.80cm]
+    (dec-tgt-lbl) at (2.40,-8.88) {Shifted\\Target Sequence};
+  \node[lbl, minimum width=1.60cm, minimum height=0.80cm]
+    (dec-nx-lbl) at (5.5, 6.9) {Nx\\``Layers''};
+
+  % ============ encoder output -> decoder cross-attention K/V =====
+  \draw[harrow] (-2.90,3.725) -- (-2.90,4.13) -- (-0.14,4.13) -- (-0.14,0.60) -- (1.95,0.60);
+
+  % ============ coloured outer frames: stroked last, kept unbroken ============
+  \draw[frame, refEncFrame] (-4.90,2.15) rectangle (-0.90,-5.90);
+  \draw[frame, refDecFrame] (0.40,7.35) rectangle (4.40,-5.80);
+\end{tikzpicture}

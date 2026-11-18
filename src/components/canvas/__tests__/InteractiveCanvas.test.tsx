@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useWorkspaceStore } from '../../../store/useWorkspaceStore';
 import { InteractiveCanvas } from '../InteractiveCanvas';
 import coordinateDiagram from '../../../core/tex/__tests__/fixtures/complex-cjk-diagram.tex?raw';
+import transformerDiagram from '../../../core/parser/__tests__/fixtures/transformer-reproduction.tikz?raw';
 
 // Render chosen live Zustand state, not the fixed server initial snapshot.
 vi.mock('../../../store/useWorkspaceStore', async (importOriginal) => {
@@ -81,5 +82,24 @@ describe('editing and TeX preview coexist', () => {
     expect(html).toContain('旋转标签');
     expect(html).not.toContain('aria-label="TeX 精确对照预览"');
     expect(html).not.toContain('交互画布仅显示可解析图元');
+  });
+
+  it('renders the Transformer paths and only warns when a statement actually fails', () => {
+    useWorkspaceStore.getState().setTikzCode(transformerDiagram);
+    const html = renderToStaticMarkup(<InteractiveCanvas />);
+    expect(html).toContain('stroke="#e6a037"');
+    expect(html).toContain('stroke="#7cb468"');
+    expect(html).toContain('stroke-dasharray="5.5 5.5"');
+    expect(html).toContain('marker-end="url(#canvas-arrow-');
+    expect(html).not.toContain('部分解析 · 源码保留');
+
+    const broken = transformerDiagram.replace('\\draw[dashed, thick]', '\\draw[unknown style]');
+    useWorkspaceStore.getState().setTikzCode(broken);
+    const partial = renderToStaticMarkup(<InteractiveCanvas />);
+    const line = broken.slice(0, broken.indexOf('\\draw[unknown style]')).split('\n').length;
+    expect(partial).toContain(`第 ${line} 行：`);
+    expect(partial).toContain('部分解析 · 源码保留');
+    expect(partial).toContain('stroke="#e6a037"');
+    expect(partial).toContain('stroke="#7cb468"');
   });
 });

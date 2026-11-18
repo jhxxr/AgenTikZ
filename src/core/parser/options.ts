@@ -1,6 +1,6 @@
-/** Split TikZ options at top-level commas, retaining nested values. */
-export function parseTikzOptionString(optStr: string): Record<string, string> {
-  const result: Record<string, string> = {};
+/** Split TikZ options at top-level commas, retaining nested values and repeated keys. */
+export function parseTikzOptionEntries(optStr: string): Array<[string, string]> {
+  const result: Array<[string, string]> = [];
   let depth = 0;
   let current = '';
 
@@ -9,21 +9,25 @@ export function parseTikzOptionString(optStr: string): Record<string, string> {
     if (!trimmed) return;
     const eqIdx = trimmed.indexOf('=');
     if (eqIdx === -1) {
-      result[trimmed] = 'true';
+      result.push([trimmed, 'true']);
     } else {
       const k = trimmed.slice(0, eqIdx).trim();
       let v = trimmed.slice(eqIdx + 1).trim();
       if (v.startsWith('{') && v.endsWith('}')) {
         v = v.slice(1, -1).trim();
       }
-      result[k] = v;
+      result.push([k, v]);
     }
   };
 
   for (let i = 0; i < optStr.length; i++) {
     const ch = optStr[i];
-    if (ch === '{' || ch === '(') depth++;
-    else if (ch === '}' || ch === ')') depth = Math.max(0, depth - 1);
+    if (ch === '\\' && /[{}\[\]()%\\]/.test(optStr[i + 1] || '')) {
+      current += ch + optStr[++i];
+      continue;
+    }
+    if (ch === '{' || ch === '(' || ch === '[') depth++;
+    else if (ch === '}' || ch === ')' || ch === ']') depth = Math.max(0, depth - 1);
 
     if (ch === ',' && depth === 0) {
       commit(current);
@@ -33,6 +37,15 @@ export function parseTikzOptionString(optStr: string): Record<string, string> {
     }
   }
   commit(current);
+  return result;
+}
+
+export function parseTikzOptionString(optStr: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const [key, value] of parseTikzOptionEntries(optStr)) {
+    delete result[key];
+    Object.defineProperty(result, key, { value, enumerable: true, writable: true, configurable: true });
+  }
   return result;
 }
 

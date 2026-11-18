@@ -286,7 +286,7 @@ describe('automatic mode', () => {
 
   it('auto-applies a local repair but never reapplies it on undo', async () => {
     const store = await freshStore();
-    bridge.canvasCode = '\\begin{tikzpicture}\\node (a) at (0,0) {A};\\node (b) at (0,0) {B};\\end{tikzpicture}';
+    bridge.canvasCode = '\\begin{tikzpicture}\\node[dl_block] (a) at (0,0) {A};\\node[dl_block] (b) at (0,0) {B};\\end{tikzpicture}';
     useSettingsStore.getState().updateSettings({ agentAutoMode: true });
     store.getState().runLocalAgentSkill('full_optimize');
     expect(assistant().patchProposal).toMatchObject({ status: 'applied', autoApplied: true });
