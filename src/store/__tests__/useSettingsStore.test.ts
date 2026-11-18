@@ -72,6 +72,24 @@ describe('agent access preferences', () => {
     expect(reloaded.getState()).toMatchObject({ defaultAgentId: 'claude-code', piModel: '', piThinkingLevel: 'auto', acpThoughtSelections: {} });
   });
 
+  it('migrates the previous Pi thinking preference and keeps model preferences independent', async () => {
+    storage.set(STORAGE_KEY, JSON.stringify({
+      piThinkingLevel: 'high',
+      piChannels: [{ id: 'gateway', name: 'Gateway', provider: 'openai', api: 'openai-completions',
+        baseUrl: 'https://gateway.example.test/v1', models: ['reasoner', 'fast'].map((id) => ({ id, name: id,
+          reasoning: false, supportsImages: false, contextWindow: 128000, maxTokens: 32768 })) }],
+    }));
+    const { useSettingsStore } = await import('../useSettingsStore');
+    const channel = useSettingsStore.getState().piChannels[0];
+    expect(channel.models.map((model) => model.thinkingLevel)).toEqual(['high', 'high']);
+
+    useSettingsStore.getState().updateSettings({ piChannels: [{ ...channel, models: channel.models.map((model, index) =>
+      index === 0 ? { ...model, thinkingLevel: 'xhigh' } : { ...model, thinkingLevel: 'low' }) }] });
+    vi.resetModules();
+    const { useSettingsStore: reloaded } = await import('../useSettingsStore');
+    expect(reloaded.getState().piChannels[0].models.map((model) => model.thinkingLevel)).toEqual(['xhigh', 'low']);
+  });
+
   it('defaults to automatic mode, persists an explicit opt-out, and restores it on reset', async () => {
     const { useSettingsStore, agentHasFullAccess } = await import('../useSettingsStore');
     expect(useSettingsStore.getState().agentAutoMode).toBe(true);

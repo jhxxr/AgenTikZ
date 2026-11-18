@@ -83,6 +83,12 @@ pub struct PiChannelModel {
     supports_images: bool,
     context_window: u32,
     max_tokens: u32,
+    #[serde(default = "default_pi_thinking_level")]
+    thinking_level: String,
+}
+
+fn default_pi_thinking_level() -> String {
+    "auto".into()
 }
 
 impl PiChannel {
@@ -104,6 +110,7 @@ impl PiChannel {
             if model.id.trim().is_empty() || model.id.len() > 256 || model.name.len() > 1024
                 || !(1024..=10_000_000).contains(&model.context_window)
                 || model.max_tokens == 0 || model.max_tokens > model.context_window
+                || !matches!(model.thinking_level.as_str(), "auto" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max")
             {
                 return Err("Pi 渠道模型参数无效。".into());
             }
@@ -884,14 +891,22 @@ mod tests {
         let value = json!({"id":"channel-one","name":"Local gateway","provider":"openai",
             "api":"openai-completions","baseUrl":"https://example.test/proxy/v1","defaultModelId":"fixture",
             "models":[{"id":"fixture","name":"Fixture","reasoning":false,"supportsImages":false,
-                "contextWindow":32768,"maxTokens":4096}]});
+                "contextWindow":32768,"maxTokens":4096,"thinkingLevel":"high"}]});
         let mut channel: PiChannel = serde_json::from_value(value.clone()).unwrap();
         assert!(channel.validate().is_ok());
+        assert_eq!(channel.models[0].thinking_level, "high");
+        let mut legacy = value.clone();
+        legacy["models"][0].as_object_mut().unwrap().remove("thinkingLevel");
+        let legacy_channel: PiChannel = serde_json::from_value(legacy).unwrap();
+        assert_eq!(legacy_channel.models[0].thinking_level, "auto");
         channel.base_url = "https://example.test/v1?key=secret".into();
         assert!(channel.validate().is_err());
         channel.base_url = "https://user:secret@example.test/v1".into();
         assert!(channel.validate().is_err());
         channel.base_url = "file:///tmp/models".into();
+        assert!(channel.validate().is_err());
+        channel.base_url = "https://example.test/v1".into();
+        channel.models[0].thinking_level = "unexpected".into();
         assert!(channel.validate().is_err());
         let mut secret = value.clone();
         secret["apiKey"] = json!("must-not-accept");

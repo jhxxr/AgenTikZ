@@ -978,6 +978,8 @@ async function sendViaRealAcp(
         : undefined;
       const effectiveProvider = (channel?.provider || settings.piProvider).trim();
       const effectiveModel = (settings.piModel || channel?.defaultModelId || channel?.models[0]?.id || '').trim();
+      const effectiveThinkingLevel = channel?.models.find((model) => model.id === effectiveModel)?.thinkingLevel
+        ?? settings.piThinkingLevel;
       if (!effectiveProvider || !effectiveModel) {
         throw new Error('请先在设置 → Agent → 内置 Pi 中选择渠道、模型并保存该渠道的 API Key。');
       }
@@ -1000,7 +1002,7 @@ async function sendViaRealAcp(
           ...(channel ? { channel } : {}),
           ...(trimmedProxy ? { proxyUrl: trimmedProxy } : {}),
           ...(trimmedUserAgent ? { userAgent: trimmedUserAgent } : {}),
-          thinkingLevel: settings.piThinkingLevel, history,
+          thinkingLevel: effectiveThinkingLevel, history,
           images: newImages, referenceImages: images.filter((image) => !newImages.some((added) => added.id === image.id)),
           prompt: [
             `Response language: ${settings.responseLanguage}.`,

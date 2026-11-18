@@ -7,6 +7,7 @@ export interface PiChannelModel {
   supportsImages: boolean;
   contextWindow: number;
   maxTokens: number;
+  thinkingLevel: PiThinkingLevel;
 }
 
 /** Credentials are stored separately in the OS keychain, keyed by channel id. */
@@ -84,11 +85,12 @@ export function newPiModel(id: string, name = id): PiChannelModel {
     supportsImages: false,
     contextWindow: DEFAULT_PI_CONTEXT_WINDOW,
     maxTokens: DEFAULT_PI_MAX_TOKENS,
+    thinkingLevel: 'auto',
   };
 }
 
 /** Explicit allowlist: pasted/imported objects must never persist a nested API key. */
-export function sanitizePiChannels(value: unknown): PiChannel[] {
+export function sanitizePiChannels(value: unknown, legacyThinkingLevel: PiThinkingLevel = 'auto'): PiChannel[] {
   if (!Array.isArray(value)) return [];
   const ids = new Set<string>();
   return value.slice(0, 50).flatMap((item) => {
@@ -115,7 +117,8 @@ export function sanitizePiChannels(value: unknown): PiChannel[] {
         : Math.min(DEFAULT_PI_MAX_TOKENS, contextWindow);
       return [{ id, name: typeof model.name === 'string' ? model.name.slice(0, 256) : id,
         reasoning: model.reasoning === true || (isLegacyDefaultCap && inferPiModelReasoning(id)),
-        supportsImages: model.supportsImages === true, contextWindow, maxTokens }];
+        supportsImages: model.supportsImages === true, contextWindow, maxTokens,
+        thinkingLevel: sanitizePiThinkingLevel(model.thinkingLevel ?? legacyThinkingLevel) }];
     });
     return [{ id: item.id, name: typeof item.name === 'string' ? item.name.slice(0, 100) : item.id,
       provider: typeof item.provider === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(item.provider) ? item.provider : 'openai',

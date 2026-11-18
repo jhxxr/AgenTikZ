@@ -74,28 +74,45 @@ const PiQuickModelSelector: React.FC = () => {
   const streaming = useAgentStore((s) => s.isStreaming);
   const channel = channels.find((item) => item.id === channelId) ?? (!channelId ? channels[0] : undefined);
   const effectiveModelId = modelId || channel?.defaultModelId || channel?.models[0]?.id || '';
-  const className = 'min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs';
+  const effectiveThinkingLevel = channel?.models.find((model) => model.id === effectiveModelId)?.thinkingLevel ?? thinkingLevel;
+  const className = 'min-w-0 w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs';
   if (!channel) return <button type="button" onClick={() => useSettingsStore.getState().openSettings('agent')}
     className="text-left text-xs text-blue-600">配置 Pi 渠道与模型 →</button>;
-  return <div className="mt-2 flex flex-wrap gap-1.5">
-    <select aria-label="聊天 Pi 渠道" value={channel.id} disabled={streaming} className={className} onChange={(event) => {
-      const next = channels.find((item) => item.id === event.target.value)!;
-      useSettingsStore.getState().updateSettings({ piActiveChannelId: next.id, piProvider: next.provider,
-        piModel: next.defaultModelId ?? next.models[0]?.id ?? '' });
-    }}>{channels.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select>
-    <select aria-label="聊天 Pi 模型" value={effectiveModelId} disabled={streaming} className={className} onChange={(event) =>
-      useSettingsStore.getState().updateSettings({ piActiveChannelId: channel.id, piProvider: channel.provider, piModel: event.target.value,
-        piChannels: channels.map((item) => item.id === channel.id ? { ...item, defaultModelId: event.target.value } : item) })}>
-      <option value="">请选择模型</option>
-      {channel.models.map((model) => <option key={model.id} value={model.id}>{model.name || model.id}</option>)}
-    </select>
-    <select aria-label="聊天 Pi 推理强度" value={thinkingLevel} disabled={streaming}
-      title="思考强度：若网关或模型报参数错误，建议选「默认(不传)」"
-      className="shrink-0 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs"
-      onChange={(event) => useSettingsStore.getState().updateSettings({ piThinkingLevel: event.target.value as PiThinkingLevel })}>
+  return <div className="mt-2 grid w-full min-w-0 grid-cols-2 gap-1.5">
+    <label className="col-span-2 min-w-0"><span className="sr-only">聊天 Pi 渠道</span>
+      <select aria-label="聊天 Pi 渠道" value={channel.id} disabled={streaming} className={className} onChange={(event) => {
+        const next = channels.find((item) => item.id === event.target.value)!;
+        useSettingsStore.getState().updateSettings({ piActiveChannelId: next.id, piProvider: next.provider,
+          piModel: next.defaultModelId ?? next.models[0]?.id ?? '',
+          piThinkingLevel: next.models.find((model) => model.id === (next.defaultModelId ?? next.models[0]?.id))?.thinkingLevel ?? thinkingLevel });
+      }}>{channels.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select>
+    </label>
+    <label className="min-w-0"><span className="sr-only">聊天 Pi 模型</span>
+      <select aria-label="聊天 Pi 模型" value={effectiveModelId} disabled={streaming} className={className} onChange={(event) => {
+        const nextModel = channel.models.find((model) => model.id === event.target.value);
+        useSettingsStore.getState().updateSettings({ piActiveChannelId: channel.id, piProvider: channel.provider,
+          piModel: event.target.value, piThinkingLevel: nextModel?.thinkingLevel ?? thinkingLevel,
+          piChannels: channels.map((item) => item.id === channel.id ? { ...item, defaultModelId: event.target.value } : item) });
+      }}>
+        <option value="">请选择模型</option>
+        {channel.models.map((model) => <option key={model.id} value={model.id}>{model.name || model.id}</option>)}
+      </select>
+    </label>
+    <label className="min-w-0"><span className="sr-only">聊天 Pi 思考强度</span>
+      <select aria-label="聊天 Pi 推理强度" value={effectiveThinkingLevel} disabled={streaming}
+        title="思考强度：若网关或模型报参数错误，建议选「默认（不传）」"
+        className={className}
+        onChange={(event) => {
+          const level = event.target.value as PiThinkingLevel;
+          useSettingsStore.getState().updateSettings({ piThinkingLevel: level,
+            piChannels: channels.map((item) => item.id === channel.id
+              ? { ...item, models: item.models.map((model) => model.id === effectiveModelId ? { ...model, thinkingLevel: level } : model) }
+              : item) });
+        }}>
       {PI_THINKING_LEVELS.map((level) => (
         <option key={level.id} value={level.id}>{level.shortName}</option>
       ))}
-    </select>
+      </select>
+    </label>
   </div>;
 };

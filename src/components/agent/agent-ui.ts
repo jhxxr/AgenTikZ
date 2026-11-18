@@ -1,5 +1,23 @@
 import { useEffect, useRef, useState } from 'react';
+import type { CSSProperties } from 'react';
 import type { AcpAgentProvider, AgentChatMessage } from '../../types/acp';
+
+export function getAgentPickerPopupPosition(
+  trigger: Pick<DOMRect, 'left' | 'top'>,
+  popupHeight: number,
+  viewportWidth: number,
+  viewportHeight: number,
+): Pick<CSSProperties, 'left' | 'top' | 'width' | 'maxHeight'> {
+  const margin = 8;
+  const width = Math.max(0, Math.min(312, viewportWidth - margin * 2));
+  const maxHeight = Math.max(0, Math.min(viewportHeight * 0.7, 544, viewportHeight - margin * 2));
+  return {
+    left: Math.max(margin, Math.min(trigger.left, viewportWidth - width - margin)),
+    top: Math.max(margin, trigger.top - Math.min(popupHeight, maxHeight) - margin),
+    width,
+    maxHeight,
+  };
+}
 
 export const isDesktop = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 

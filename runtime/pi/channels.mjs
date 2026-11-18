@@ -418,7 +418,8 @@ export async function fetchChannelModels(channel, apiKey, fetchImpl = fetch, use
         models.set(id, { id, name: String(item.display_name ?? item.displayName ?? item.name ?? id).slice(0, 256),
           reasoning: typeof item.reasoning === 'boolean' ? item.reasoning : inferModelReasoning(id),
           supportsImages: item.architecture?.input_modalities?.includes('image') === true,
-          contextWindow, maxTokens: Math.min(contextWindow, Number.isInteger(rawMaxOut) ? Math.max(1, rawMaxOut) : DEFAULT_CHANNEL_MAX_TOKENS) });
+          contextWindow, maxTokens: Math.min(contextWindow, Number.isInteger(rawMaxOut) ? Math.max(1, rawMaxOut) : DEFAULT_CHANNEL_MAX_TOKENS),
+          thinkingLevel: 'auto' });
       }
       return [...models.values()].sort((a, b) => a.id.localeCompare(b.id));
     }

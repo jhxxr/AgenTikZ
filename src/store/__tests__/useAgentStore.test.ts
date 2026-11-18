@@ -428,13 +428,17 @@ describe('real ACP frontend contract', () => {
   it('routes Pi to its own long-lived backend without forwarding secrets or native access flags', async () => {
     const store = await freshStore();
     const { useSettingsStore } = await import('../useSettingsStore');
-    useSettingsStore.getState().updateSettings({ piProvider: 'anthropic', piModel: 'fixture', agentFullAccess: true });
+    useSettingsStore.getState().updateSettings({ piProvider: 'anthropic', piModel: 'fixture', agentFullAccess: true,
+      piChannels: [{ id: 'anthropic', name: 'Anthropic', provider: 'anthropic', api: 'anthropic-messages',
+        baseUrl: 'https://api.anthropic.com', defaultModelId: 'fixture', models: [{
+          id: 'fixture', name: 'Fixture', reasoning: true, supportsImages: false, contextWindow: 32768, maxTokens: 4096, thinkingLevel: 'high',
+        }] }] });
     store.getState().setActiveAgentId('pi');
     bridge.workbenchMode = 'paper';
     bridge.invoke.mockResolvedValue({ runtimeStarted: true, reply: 'Pi response', resumed: true });
     await store.getState().sendPromptToAgent('Update the caption');
     expect(bridge.invoke).toHaveBeenCalledWith('pi_send_prompt', { request: expect.objectContaining({
-      conversationId: 'test-session', provider: 'anthropic', model: 'fixture', thinkingLevel: 'auto',
+      conversationId: 'test-session', provider: 'anthropic', model: 'fixture', thinkingLevel: 'high',
       target: expect.objectContaining({ projectId: bridge.projectDir }),
     }) });
     const args = bridge.invoke.mock.calls[0][1].request;
@@ -447,7 +451,7 @@ describe('real ACP frontend contract', () => {
 
     useSettingsStore.getState().updateSettings({ piThinkingLevel: 'xhigh', acpThoughtSelections: { 'codex-cli': 'high' } });
     await store.getState().sendPromptToAgent('Deep check');
-    expect(bridge.invoke.mock.calls.at(-1)![1].request.thinkingLevel).toBe('xhigh');
+    expect(bridge.invoke.mock.calls.at(-1)![1].request.thinkingLevel).toBe('high');
 
     store.getState().setActiveAgentId('codex-cli');
     bridge.invoke.mockResolvedValue({ usedNativeCli: true, reply: 'Codex response' });

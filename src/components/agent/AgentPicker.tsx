@@ -1,11 +1,11 @@
-import React, { useState } from 'react';
+import React, { useLayoutEffect, useState } from 'react';
 import { Check, ChevronDown, Plug, RefreshCw, Settings, ShieldAlert, ShieldCheck } from 'lucide-react';
 import { useAgentStore } from '../../store/useAgentStore';
 import { agentHasFullAccess, useSettingsStore } from '../../store/useSettingsStore';
 import { useProjectStore } from '../../store/useProjectStore';
 import type { AcpAgentProvider } from '../../types/acp';
 import { AgentModelSelector } from './AgentModelSelector';
-import { shortAgentName, useDismiss } from './agent-ui';
+import { getAgentPickerPopupPosition, shortAgentName, useDismiss } from './agent-ui';
 
 const Toggle: React.FC<{ checked: boolean; disabled?: boolean; label: string; hint: string; onChange: (next: boolean) => void }> = ({
   checked, disabled, label, hint, onChange,
@@ -35,6 +35,9 @@ interface Props {
 /** One chip in the composer that owns every "who answers, and how" choice. */
 export const AgentPicker: React.FC<Props> = ({ providers, activeProvider, modelLabel, paperMode, probing, onReprobe }) => {
   const [open, setOpen] = useState(false);
+  const [popupStyle, setPopupStyle] = useState<React.CSSProperties>();
+  const triggerRef = React.useRef<HTMLButtonElement>(null);
+  const popupRef = React.useRef<HTMLDivElement>(null);
   const ref = useDismiss<HTMLDivElement>(open, () => setOpen(false));
   const isStreaming = useAgentStore((s) => s.isStreaming);
   const setActiveAgentId = useAgentStore((s) => s.setActiveAgentId);
@@ -49,9 +52,28 @@ export const AgentPicker: React.FC<Props> = ({ providers, activeProvider, modelL
   const isPi = activeProvider.id === 'pi';
   const go = (section: 'agent' | 'mcp') => { setOpen(false); openSettings(section); };
 
+  useLayoutEffect(() => {
+    if (!open) { setPopupStyle(undefined); return; }
+    const positionPopup = () => {
+      const trigger = triggerRef.current?.getBoundingClientRect();
+      const popup = popupRef.current;
+      if (!trigger || !popup) return;
+      setPopupStyle({ position: 'fixed', ...getAgentPickerPopupPosition(
+        trigger, popup.offsetHeight, window.innerWidth, window.innerHeight,
+      ) });
+    };
+    positionPopup();
+    window.addEventListener('resize', positionPopup);
+    window.addEventListener('scroll', positionPopup, true);
+    return () => {
+      window.removeEventListener('resize', positionPopup);
+      window.removeEventListener('scroll', positionPopup, true);
+    };
+  }, [open, activeProvider.id, paperMode]);
+
   return (
     <div ref={ref} className="relative min-w-0">
-      <button type="button" aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(!open)}
+      <button ref={triggerRef} type="button" aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(!open)}
         title={`${activeProvider.name}${modelLabel ? ` · ${modelLabel}` : ''}`}
         className={`flex max-w-full items-center gap-1.5 rounded-lg px-2 py-1 text-[12px] transition-colors cursor-pointer ${
           open ? 'bg-slate-100 text-slate-900' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'}`}>
@@ -63,7 +85,8 @@ export const AgentPicker: React.FC<Props> = ({ providers, activeProvider, modelL
 
       {open && (
         <div role="dialog" aria-label="选择 Agent 与模型"
-          className="absolute bottom-full left-0 z-40 mb-2 flex max-h-[min(70vh,34rem)] w-[19.5rem] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl">
+          ref={popupRef} style={popupStyle}
+          className="fixed z-40 flex w-[min(19.5rem,calc(100vw-1rem))] max-w-[calc(100vw-1rem)] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl">
           <div className="min-h-0 flex-1 overflow-y-auto">
             <div className="flex items-center justify-between px-3 pb-1 pt-2.5">
               <span className="text-[11px] font-medium text-slate-400">Agent</span>

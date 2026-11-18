@@ -96,7 +96,8 @@ export class PiEngine {
     const runtime = await this.sdk.createModelRuntime();
     return runtime.getModels().filter((model) => this.providers.has(model.provider))
       .map(({ provider, id, name, reasoning, input, contextWindow, maxTokens }) =>
-        ({ provider, id, name, reasoning, supportsImages: input?.includes('image') === true, contextWindow, maxTokens }));
+        ({ provider, id, name, reasoning, supportsImages: input?.includes('image') === true, contextWindow, maxTokens,
+          thinkingLevel: 'auto' }));
   }
 
   async prompt(input, emit) {

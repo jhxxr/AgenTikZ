@@ -147,7 +147,7 @@ function loadInitialSettings(): PersistedSettings {
       texEngine: sanitizeTexEngine(parsed.texEngine),
       agentAutoMode: typeof parsed.agentAutoMode === 'boolean' ? parsed.agentAutoMode : DEFAULT_SETTINGS.agentAutoMode,
       piThinkingLevel: sanitizePiThinkingLevel(parsed.piThinkingLevel),
-      piChannels: sanitizePiChannels(parsed.piChannels),
+      piChannels: sanitizePiChannels(parsed.piChannels, sanitizePiThinkingLevel(parsed.piThinkingLevel)),
       acpModelSelections: sanitizeAcpSelections(parsed.acpModelSelections),
       acpThoughtSelections: sanitizeAcpSelections(parsed.acpThoughtSelections),
     };

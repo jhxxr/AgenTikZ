@@ -217,7 +217,8 @@ export const PiSettingsPane: React.FC = () => {
       const res = await invoke<{ ok: boolean; message?: string; latencyMs?: number; model?: string }>('pi_test_channel', {
         channel: effectiveChannel,
         model: modelId,
-        thinkingLevel: useSettingsStore.getState().piThinkingLevel,
+        thinkingLevel: effectiveChannel.models.find((model) => model.id === modelId)?.thinkingLevel
+          ?? useSettingsStore.getState().piThinkingLevel,
         ...(effectiveProxy ? { proxyUrl: effectiveProxy } : {}),
         ...(effectiveUa ? { userAgent: effectiveUa } : {}),
       });
@@ -393,6 +394,16 @@ export const PiSettingsPane: React.FC = () => {
         </div>
         {selectedModel && <div className="space-y-2 rounded-lg bg-white/70 p-2">
           <p className="text-[11px] text-slate-500">模型列表通常不包含完整能力，请按渠道实际规格核对。支持自动识别常见推理模型与 32K 输出上限。</p>
+          <label className="block text-xs">思考强度（推理档位）
+            <select aria-label="Pi 模型思考强度" value={selectedModel.thinkingLevel} disabled={disabled} className={inputClass}
+              onChange={(event) => {
+                const thinkingLevel = event.target.value as PiThinkingLevel;
+                updateModel({ thinkingLevel });
+                updateSettings({ piThinkingLevel: thinkingLevel });
+              }}>
+              {PI_THINKING_LEVELS.map((level) => <option key={level.id} value={level.id}>{level.name}</option>)}
+            </select>
+          </label>
           <div className="flex flex-wrap items-center gap-4 text-xs">
             <label className="flex items-center gap-1"><input type="checkbox" checked={selectedModel.supportsImages} disabled={disabled} onChange={(event) => updateModel({ supportsImages: event.target.checked })} />图片输入</label>
             <label className="flex items-center gap-1"><input type="checkbox" checked={selectedModel.reasoning} disabled={disabled} onChange={(event) => updateModel({ reasoning: event.target.checked })} />推理模型</label>
@@ -405,19 +416,7 @@ export const PiSettingsPane: React.FC = () => {
           </div>
         </div>}
       </>}
-      <div className="space-y-1">
-        <label className="flex items-center justify-between gap-2 text-xs">
-          <span>思考强度（推理档位）</span>
-          <select aria-label="Pi 推理强度" value={piThinkingLevel} disabled={disabled}
-            onChange={(event) => updateSettings({ piThinkingLevel: event.target.value as PiThinkingLevel })}
-            className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs">
-            {PI_THINKING_LEVELS.map((level) => (
-              <option key={level.id} value={level.id}>{level.name}</option>
-            ))}
-          </select>
-        </label>
-        <p className="text-[11px] text-slate-500">若所选模型或中转网关不支持特定推理参数（报 HTTP 400），请选择「默认（不传参数）」。右侧聊天栏也可随时快捷切换。</p>
-      </div>
+      {selectedModel && <p className="text-[11px] text-slate-500">思考强度按模型单独保存。若模型或网关不支持特定参数（报 HTTP 400），请选择「默认（不传参数）」。</p>}
       <div className="flex flex-wrap gap-2">
         <button type="button" disabled={!desktop || disabled || !canUseKey || !hasPendingOrSelectedModel || !normalizedDraft} onClick={async () => {
           setBusy(true); setNotice('');
