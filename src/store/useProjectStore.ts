@@ -293,7 +293,7 @@ interface ProjectState {
   setAutoOpenLastProject: (autoOpen: boolean) => void;
   setAutoSyncTikz: (autoSync: boolean) => void;
   pickAndOpenDirectory: () => Promise<boolean>;
-  openProjectDirectory: (dirPath: string) => Promise<boolean>;
+  openProjectDirectory: (dirPath: string, options?: { workbenchMode?: WorkbenchMode }) => Promise<boolean>;
   initPaperWorkspace: (
     dirPath: string,
     templateId: PaperVenueTemplateId,
@@ -496,7 +496,8 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       set({ initialized: true });
       const { autoOpenLastProject, lastProjectDir } = get();
       if (autoOpenLastProject && lastProjectDir) {
-        const ok = await get().openProjectDirectory(lastProjectDir);
+        // Restore the last project while keeping drawing as the startup workspace.
+        const ok = await get().openProjectDirectory(lastProjectDir, { workbenchMode: 'figure' });
         if (ok) return;
       }
       // If no last project or failed to open, show the Project Picker welcome modal
@@ -558,7 +559,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       }
     },
 
-    openProjectDirectory: async (dirPath: string) => {
+    openProjectDirectory: async (dirPath, options) => {
       const trimmed = dirPath.trim();
       if (!trimmed) return false;
 
@@ -725,8 +726,10 @@ export const useProjectStore = create<ProjectState>((set, get) => {
 
           await get().refreshPaperFiles();
           get().setWorkbenchMode(
-            get().paperFiles.some((f) => f.category === 'main' || f.category === 'section')
-              ? 'paper' : 'figure'
+            options?.workbenchMode ?? (
+              get().paperFiles.some((f) => f.category === 'main' || f.category === 'section')
+                ? 'paper' : 'figure'
+            )
           );
           set({ isPickerOpen: false });
           return true;
@@ -840,8 +843,10 @@ export const useProjectStore = create<ProjectState>((set, get) => {
 
       await get().refreshPaperFiles();
       get().setWorkbenchMode(
-        get().paperFiles.some((f) => f.category === 'main' || f.category === 'section')
-          ? 'paper' : 'figure'
+        options?.workbenchMode ?? (
+          get().paperFiles.some((f) => f.category === 'main' || f.category === 'section')
+            ? 'paper' : 'figure'
+        )
       );
       set({ isPickerOpen: false });
       return true;

@@ -503,6 +503,54 @@ describe('useProjectStore', () => {
       expect(useProjectStore.getState().workbenchMode).toBe('paper');
     });
 
+    it.each(['browser', 'desktop'] as const)('restores the last project without switching away from drawing on %s startup', async (runtime) => {
+      const path = 'E:/Papers/StartupPaper';
+      const canvas = makeCanvasDoc('last-drawing.canvas.json', 'Last drawing', CODE_B);
+      const paperSource = '\\documentclass{article}\n\\begin{document}Saved paper\\end{document}';
+      if (runtime === 'desktop') {
+        enableTauriRuntime();
+        mockInvoke.mockImplementation(async (command: string) => {
+          if (command === 'project_open_workspace') return {
+            projectDir: path, projectName: 'StartupPaper', storageDir: `${path}/agentikzfile`, exportDir: `${path}/agentikzfile/export`,
+            meta: { lastActiveCanvas: canvas.fileName, autoSyncTikz: true },
+            canvases: [{ fileName: canvas.fileName, name: canvas.name, sizeBytes: 1, updatedAt: 1 }], assets: [],
+          };
+          if (command === 'project_load_canvas') return JSON.stringify(canvas);
+          if (command === 'project_list_paper_files') return [{
+            relativePath: 'main.tex', fileName: 'main.tex', category: 'main', sizeBytes: paperSource.length, modifiedAt: 0,
+          }];
+          if (command === 'project_read_text_file') return paperSource;
+          throw new Error(`Unexpected startup command: ${command}`);
+        });
+      } else {
+        mockStorage.setItem(`agentikz-vfs-v1:${path}`, JSON.stringify({
+          lastActiveCanvas: canvas.fileName, canvases: { [canvas.fileName]: canvas },
+          assets: [], assetDataUrls: {}, paperFiles: { 'main.tex': paperSource },
+        }));
+      }
+      useProjectStore.setState({ initialized: false, lastProjectDir: path });
+      const modes: string[] = [];
+      const unsubscribe = useProjectStore.subscribe((state) => modes.push(state.workbenchMode));
+      try {
+        await useProjectStore.getState().initOnStartup();
+      } finally {
+        unsubscribe();
+      }
+
+      const state = useProjectStore.getState();
+      expect(state.projectDir).toBe(path);
+      expect(state.activeCanvasFileName).toBe(canvas.fileName);
+      expect(useWorkspaceStore.getState().tikzCode).toBe(CODE_B);
+      expect(state.paperFileContents['main.tex']).toBe(paperSource);
+      expect(state.workbenchMode).toBe('figure');
+      expect(state.isPickerOpen).toBe(false);
+      expect(modes).not.toContain('paper');
+
+      state.setWorkbenchMode('paper');
+      await state.initOnStartup();
+      expect(useProjectStore.getState().workbenchMode).toBe('paper');
+    });
+
     it('does not create a manuscript just because a drawing project was opened', async () => {
       expect(await useProjectStore.getState().openProjectDirectory('E:/Figures/OnlyDrawings')).toBe(true);
       expect(useProjectStore.getState().workbenchMode).toBe('figure');
