@@ -1,7 +1,8 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ArrowUp, ImagePlus, Loader2, Square, X } from 'lucide-react';
+import { ArrowUp, ImagePlus, Loader2, PenLine, Square, X } from 'lucide-react';
 import type { AgentImageAttachment } from '../../types/acp';
 import { clipboardImages, imageDataUrl, MAX_AGENT_IMAGES, prepareAgentImage } from '../../core/agent/image-attachments';
+import { SketchPadModal } from './SketchPadModal';
 
 export interface ComposerDraft { text: string; images: AgentImageAttachment[] }
 export const EMPTY_DRAFT: ComposerDraft = { text: '', images: [] };
@@ -25,25 +26,34 @@ interface Props {
   context?: React.ReactNode;
   /** Controls on the left of the action row (skills, agent picker). */
   actions?: React.ReactNode;
+  /** Figure-workspace identity. Omitted where sketching is unavailable. */
+  sketchScope?: string;
 }
 
 const MAX_HEIGHT = 220;
 
 export function AgentComposer({
   draft, onDraftChange, onSend, onStop, running, canStop, blockedReason, placeholder, lastPrompt,
-  onSlash, textareaRef, context, actions,
+  onSlash, textareaRef, context, actions, sketchScope,
 }: Props) {
   const [preparing, setPreparing] = useState(false);
   const [error, setError] = useState('');
   const [dragging, setDragging] = useState(false);
+  const [openSketchScope, setOpenSketchScope] = useState<string>();
+  const sketchOpen = openSketchScope !== undefined && openSketchScope === sketchScope;
   const fileInput = useRef<HTMLInputElement>(null);
   const busy = useRef(false);
   const sending = useRef(false);
   const mounted = useRef(true);
+  const latestSketchScope = useRef(sketchScope);
   // The latest draft, for async handlers that resolve after further typing.
   const latest = useRef(draft);
   latest.current = draft;
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  useLayoutEffect(() => {
+    latestSketchScope.current = sketchScope;
+    setOpenSketchScope(undefined);
+  }, [sketchScope]);
 
   useLayoutEffect(() => {
     const element = textareaRef.current;
@@ -54,7 +64,7 @@ export function AgentComposer({
   }, [draft.text, textareaRef]);
 
   const addFiles = async (files: File[]) => {
-    if (!files.length || busy.current) return;
+    if (!files.length || busy.current || sketchOpen) return;
     setError('');
     if (latest.current.images.length + files.length > MAX_AGENT_IMAGES) {
       setError(`每条消息最多 ${MAX_AGENT_IMAGES} 张图片，请先移除多余图片。`);
@@ -74,7 +84,7 @@ export function AgentComposer({
   };
 
   const empty = !draft.text.trim() && !draft.images.length;
-  const canSend = !running && !blockedReason && !preparing && !empty;
+  const canSend = !running && !blockedReason && !preparing && !sketchOpen && !empty;
 
   const send = async () => {
     if (!canSend || sending.current || busy.current) return;
@@ -175,6 +185,15 @@ export function AgentComposer({
           className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-800 disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed">
           <ImagePlus className="h-4 w-4" />
         </button>
+        {sketchScope !== undefined && (
+          <button type="button" aria-label="绘制草图" aria-haspopup="dialog"
+            title={draft.images.length >= MAX_AGENT_IMAGES ? `每条消息最多 ${MAX_AGENT_IMAGES} 张图片` : '绘制草图参考'}
+            disabled={preparing || draft.images.length >= MAX_AGENT_IMAGES}
+            onClick={() => { setDragging(false); setOpenSketchScope(sketchScope); }}
+            className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-800 disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed">
+            <PenLine className="h-4 w-4" />
+          </button>
+        )}
         <div className="flex min-w-0 flex-1 items-center gap-1">{actions}</div>
         {running ? (
           <button type="button" onClick={onStop} disabled={!canStop} aria-label="停止"
@@ -190,6 +209,17 @@ export function AgentComposer({
           </button>
         )}
       </div>
+      {sketchOpen && (
+        <SketchPadModal onClose={() => setOpenSketchScope(undefined)} onComplete={(image) => {
+          if (!mounted.current || latestSketchScope.current !== openSketchScope) return;
+          const current = latest.current;
+          if (current.images.length >= MAX_AGENT_IMAGES) throw new Error(`每条消息最多 ${MAX_AGENT_IMAGES} 张图片，请先移除多余图片。`);
+          onDraftChange({ ...current, images: [...current.images, image] });
+          setError('');
+          setOpenSketchScope(undefined);
+          requestAnimationFrame(() => { if (mounted.current) textareaRef.current?.focus(); });
+        }} />
+      )}
     </div>
   );
 }

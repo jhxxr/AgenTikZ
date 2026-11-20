@@ -49,6 +49,8 @@ An optional **embedded Pi SDK backend** now shares the same project tools and pr
 
 **Image references and visual review:** paste screenshots into Agent chat, inspect removable thumbnails, or send an image without text. Pi and ACP receive actual image blocks. The `render_canvas_preview` tool returns a real TeX rendering of a pending or automatically applied figure proposal so a vision-capable agent can inspect and refine it. Manual mode requires review; automatic mode applies each valid tool edit immediately. Each request allows up to three distinct renders and caches identical inputs. The desktop app is required (built-in TeX engine, no TeX Live installation); a successful compile or layout score is not visual verification.
 
+**Sketch references:** draw a quick layout from scratch or annotate the current exact TeX preview directly in the Agent composer. Pen, eraser, undo, and clear export to the existing image-attachment workflow; sketches are not saved as project assets or edits to the TikZ canvas.
+
 **Built-in scientific drawing skill:** `tikz-diagram-reproduction` guides composition, data-state shapes, semantic colors and faithful reference reproduction. Its four reference families (SWSA, multi-stream GNN, masked autoencoders, and Riemannian/temporal pipelines) are available through paged `get_diagram_design_skill` calls. Complete templates are not injected into every prompt. Reference colors/layouts are protected from automatic repair, and complex shapes/macros use exact TeX preview. See [v0.6.0 release notes](docs/releases/v0.6.0.md).
 
 ## Interface & Workflow Tour
@@ -120,7 +122,7 @@ flowchart TB
 - **Infinite Canvas**: The editing area has no fixed paper boundary. New content opens centered at its original scale; later edits preserve the camera. Drag empty space, hold Space or use the middle mouse button to pan, and scroll to zoom around the cursor. Fit frames the drawing without moving elements, rewriting source coordinates or changing undo history.
 - **Editing and Exact Rendering**: The interactive canvas supports nodes, edges, charts, coordinate paths, labels and bounded macro groups. Arbitrary TeX programs still require source editing, with unsupported source preserved. Exact TeX preview stays beside the editor. Desktop SVG/PNG exports use the same real TeX SVG and never silently substitute an approximation after compilation or missing-glyph failures. Full documents containing CJK text receive bundled fonts in the compilation copy only when CJK fonts were not already configured; drawing commands remain unchanged.
 - **Official ACP v1 Transport**: Located in `src-tauri/src/acp/mod.rs`, the desktop backend launches locally installed ACP adapters over `stdio` with bounded initialization (`20s`), session creation (`20s`), prompt execution (`180s`), and transport shutdown timeouts.
-- **Release Scope**: **v0.9.6** supports more in-picture TikZ styles and colors, and keeps supported paths editable when a statement fails. Canvas diagnostics identify the affected source lines; TeX remains the exact preview. See [v0.9.6 release notes](docs/releases/v0.9.6.md).
+- **Release Scope**: **v0.10.0** adds hand-drawn sketch references and annotations to Agent chat. See [v0.10.0 release notes](docs/releases/v0.10.0.md).
 
 ## Paper Templates & Themes
 

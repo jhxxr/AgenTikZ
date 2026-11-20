@@ -94,9 +94,9 @@ export const RightAgentPanel: React.FC = () => {
     activeThemeId: s.activeThemeId, collapsed: s.isAgentPanelCollapsed, togglePanel: s.toggleAgentPanel,
     setCollapsed: s.setAgentPanelCollapsed,
   })));
-  const { projectDir, paperMode, activePaperFilePath, paperDirty } = useProjectStore(useShallow((s) => ({
+  const { projectDir, activeCanvasFileName, paperMode, activePaperFilePath, paperDirty } = useProjectStore(useShallow((s) => ({
     projectDir: s.projectDir, paperMode: s.workbenchMode === 'paper', activePaperFilePath: s.activePaperFilePath,
-    paperDirty: !!s.paperDirtyFiles[s.activePaperFilePath],
+    activeCanvasFileName: s.activeCanvasFileName, paperDirty: !!s.paperDirtyFiles[s.activePaperFilePath],
   })));
   const { piChannels, piActiveChannelId, piModel, acpModelSelections, openSettings, autoMode, updateSettings } = useSettingsStore(useShallow((s) => ({
     piChannels: s.piChannels, piActiveChannelId: s.piActiveChannelId, piModel: s.piModel,
@@ -203,7 +203,7 @@ export const RightAgentPanel: React.FC = () => {
   const greeting = paperMode
     ? { title: '一起打磨这篇论文', detail: '我可以读取当前章节、图注和编译诊断，并把修改整理成可审核的修改集。' }
     : isEmptyCanvas
-      ? { title: '想画一张什么图？', detail: '描述你的方法或粘贴一张参考图，我会生成可编辑的 TikZ 图。' }
+      ? { title: '想画一张什么图？', detail: '描述你的方法、粘贴参考图，或画几笔草图，我会生成可编辑的 TikZ 图。' }
       : { title: '需要怎么调整这张图？', detail: '我能看到当前画布和你选中的元素，可以精修布局、配色，或添加新模块。' };
 
   const skills = useMemo<SkillItem[]>(() => paperMode
@@ -319,6 +319,7 @@ export const RightAgentPanel: React.FC = () => {
           blockedReason={runningElsewhere ? '另一个对话正在运行，结束后才能发送' : undefined}
           placeholder={paperMode ? '描述论文任务，Enter 发送，Shift+Enter 换行' : '描述绘图需求，Enter 发送，Shift+Enter 换行'}
           lastPrompt={lastPrompt} onSlash={() => setSkillsOpen(true)}
+          sketchScope={paperMode ? undefined : JSON.stringify([projectDir, activeCanvasFileName])}
           context={paperMode ? (
             <ContextChip active icon={<FileText className="h-3 w-3 shrink-0" />}
               label={`${activePaperFilePath || '未打开文件'}${paperDirty ? ' · 未保存' : ''}`}
